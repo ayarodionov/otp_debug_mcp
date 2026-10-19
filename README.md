@@ -1,5 +1,9 @@
 # otp_debug_mcp
 
+> **Status: early skeleton.** The diagnostic logic is tested against live
+> nodes, but the MCP layer hasn't been exercised through a real client yet
+> and there's no release packaging. See the TODO list below.
+
 An MCP server that lets AI agents (Claude Code, Claude Desktop, Cursor, …)
 connect to a **running** Erlang/Elixir/OTP node and debug it: not just raw
 introspection primitives, but an encoded diagnostic playbook in the spirit of
