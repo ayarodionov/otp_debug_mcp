@@ -20,7 +20,8 @@ defmodule OtpDebugMcp.Tools do
   end
 
   def error_response(frame, reason) do
-    {:reply, Response.error(Response.tool(), inspect(reason)), frame}
+    message = if is_binary(reason), do: reason, else: inspect(reason)
+    {:reply, Response.error(Response.tool(), message), frame}
   end
 
   defmodule Connect do
@@ -49,7 +50,7 @@ defmodule OtpDebugMcp.Tools do
           })
 
         {:error, reason} ->
-          Tools.error_response(frame, {reason, connect_hints()})
+          Tools.error_response(frame, "#{inspect(reason)}. " <> connect_hints())
       end
     end
 
@@ -209,31 +210,36 @@ defmodule OtpDebugMcp.Tools do
       end
     end
 
-    defp tree(_pid, 0), do: "..."
+    @max_children 50
 
-    defp tree(pid, depth) when is_pid(pid) do
-      case Target.rpc(:supervisor, :which_children, [pid], 3_000) do
-        {:ok, children} when is_list(children) ->
-          %{
-            supervisor: inspect(pid),
-            children:
-              for {id, child, type, _mods} <- children do
-                base = %{id: inspect(id), pid: inspect(child), type: type}
-
-                if type == :supervisor and is_pid(child) do
-                  Map.put(base, :children, tree(child, depth - 1)[:children])
-                else
-                  base
-                end
-              end
-          }
-
-        _ ->
-          %{worker: inspect(pid)}
-      end
+    defp tree(pid, depth) do
+      Map.merge(%{supervisor: inspect(pid)}, children(pid, depth))
     end
 
-    defp tree(other, _), do: %{child: inspect(other)}
+    defp children(_pid, 0), do: %{children: "not expanded: depth limit reached"}
+
+    defp children(pid, depth) do
+      case Target.rpc(:supervisor, :which_children, [pid], 3_000) do
+        {:ok, children} when is_list(children) ->
+          shown =
+            for {id, child, type, _mods} <- Enum.take(children, @max_children) do
+              base = %{id: inspect(id), pid: inspect(child), type: type}
+
+              if type == :supervisor and is_pid(child),
+                do: Map.merge(base, children(child, depth - 1)),
+                else: base
+            end
+
+          result = %{child_count: length(children), children: shown}
+
+          if length(children) > @max_children,
+            do: Map.put(result, :note, "only the first #{@max_children} children are listed"),
+            else: result
+
+        other ->
+          %{children: "unavailable: #{inspect(other)}"}
+      end
+    end
   end
 
   defmodule TraceCalls do
@@ -327,11 +333,8 @@ defmodule OtpDebugMcp.Tools do
     def execute(%{code: code}, frame) do
       if System.get_env("OTP_DEBUG_MCP_ALLOW_EVAL") == "true" do
         case Checks.remote_eval(code) do
-          {:ok, value} ->
-            Tools.json_response(frame, %{value: inspect(value, pretty: true, limit: 200)})
-
-          err ->
-            Tools.error_response(frame, err)
+          {:ok, value} -> Tools.json_response(frame, %{value: erlang_term(value)})
+          {:error, reason} -> Tools.error_response(frame, describe_error(reason))
         end
       else
         Tools.error_response(
@@ -340,5 +343,20 @@ defmodule OtpDebugMcp.Tools do
         )
       end
     end
+
+    # The input is Erlang, so answer in Erlang syntax too (depth-limited).
+    defp erlang_term(term), do: IO.chardata_to_string(:io_lib.format(~c"~tP", [term, 40]))
+
+    defp describe_error({_loc, mod, desc}) when is_atom(mod),
+      do: "syntax error: #{mod.format_error(desc)}"
+
+    defp describe_error({:error, {_loc, mod, desc}, _end_loc}) when is_atom(mod),
+      do: "syntax error: #{mod.format_error(desc)}"
+
+    defp describe_error({:badrpc, {:EXIT, {reason, _stack}}}),
+      do: "evaluation raised: #{erlang_term(reason)}"
+
+    defp describe_error({:badrpc, :timeout}), do: "evaluation timed out after 15s"
+    defp describe_error(other), do: inspect(other)
   end
 end

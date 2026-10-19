@@ -37,7 +37,7 @@ defmodule OtpDebugMcp.Tracer do
     fun = if function_str, do: String.to_atom(function_str), else: :_
 
     with {:ok, true} <- Target.rpc(:code, :is_loaded, [mod]) |> loaded?(module_str),
-         target when not is_nil(target) <- Target.target_node() || {:error, :not_connected} do
+         {:ok, target} <- Target.target() do
       owner = self()
       collector = spawn(fn -> collector_loop(owner, max_events, []) end)
 

@@ -31,9 +31,12 @@ defmodule OtpDebugMcp.Target do
   @spec connect(String.t(), String.t() | nil) :: :ok | {:error, term()}
   def connect(node, cookie \\ nil), do: GenServer.call(__MODULE__, {:connect, node, cookie})
 
-  @doc "The currently connected target node, or nil."
-  @spec target_node() :: node() | nil
-  def target_node, do: GenServer.call(__MODULE__, :node)
+  @doc """
+  The connected target node. If the connection dropped (e.g. the target
+  restarted), one reconnect is attempted, re-injecting recon on success.
+  """
+  @spec target() :: {:ok, node()} | {:error, :not_connected | {:connection_lost, node()}}
+  def target, do: GenServer.call(__MODULE__, :target)
 
   @doc """
   Run `mod.fun(args)` on the target node with a bounded timeout.
@@ -41,11 +44,11 @@ defmodule OtpDebugMcp.Target do
   """
   @spec rpc(module(), atom(), [term()], timeout()) :: {:ok, term()} | {:error, term()}
   def rpc(mod, fun, args, timeout \\ @rpc_timeout) do
-    case target_node() do
-      nil ->
-        {:error, :not_connected}
+    case target() do
+      {:error, _} = err ->
+        err
 
-      target ->
+      {:ok, target} ->
         case with_stderr_group_leader(fn -> :rpc.call(target, mod, fun, args, timeout) end) do
           {:badrpc, reason} -> {:error, {:badrpc, reason}}
           result -> {:ok, result}
@@ -87,13 +90,29 @@ defmodule OtpDebugMcp.Target do
       Logger.info("connected to #{target} (hidden)")
       {:reply, :ok, %{state | node: target, connected: true}}
     else
-      {:error, _} = err -> {:reply, err, state}
+      # Keep the previous target only if a mode switch didn't drop it.
+      {:error, _} = err ->
+        state = if state.node in Node.list(:hidden), do: state, else: %__MODULE__{}
+        {:reply, err, state}
     end
   end
 
-  def handle_call(:node, _from, state) do
-    node = if state.connected and state.node in Node.list(:hidden), do: state.node
-    {:reply, node, state}
+  def handle_call(:target, _from, %{connected: false} = state),
+    do: {:reply, {:error, :not_connected}, state}
+
+  def handle_call(:target, _from, %{node: node} = state) do
+    cond do
+      node in Node.list(:hidden) ->
+        {:reply, {:ok, node}, state}
+
+      Node.connect(node) ->
+        inject_recon(node)
+        Logger.info("reconnected to #{node}")
+        {:reply, {:ok, node}, state}
+
+      true ->
+        {:reply, {:error, {:connection_lost, node}}, state}
+    end
   end
 
   # -- Internals ---------------------------------------------------------------
@@ -108,11 +127,14 @@ defmodule OtpDebugMcp.Target do
       Node.alive?() and current_name_domain() == want ->
         :ok
 
-      Node.alive?() and Node.list(:connected) != [] ->
-        {:error, {:name_mode_mismatch, "already connected using #{current_name_domain()}"}}
-
       true ->
-        if Node.alive?(), do: :net_kernel.stop()
+        # Switching modes: connect means "debug this target now", so dropping
+        # connections made in the other mode is the intended effect.
+        if Node.alive?() do
+          Enum.each(Node.list(:connected), &Node.disconnect/1)
+          :net_kernel.stop()
+        end
+
         start_distribution(target, want)
     end
   end

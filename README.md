@@ -82,7 +82,10 @@ Notes:
 
 - **Name mode is automatic.** `connect` starts distribution on demand in the
   mode the target uses: shortnames for `app@host` (the Mix release default),
-  longnames for `app@1.2.3.4` or `app@host.domain`.
+  longnames for `app@1.2.3.4` or `app@host.domain`. Connecting to a target
+  in the other mode switches modes, dropping the previous connection.
+- **Reconnects.** If the target restarts, the next tool call reconnects and
+  re-injects recon. If it's down, tools report `connection_lost`.
 - **Cookie.** Without a `cookie` argument, `~/.erlang.cookie` is used, which
   matches `iex --sname`/`erl -sname`. Mix releases generate their own cookie;
   pass the target's `RELEASE_COOKIE` (or `releases/COOKIE`).
@@ -120,6 +123,28 @@ It fails on any non-JSON line on stdout. The same demo node makes a good
 first prompt for Claude Code: *"shop@yourhost is getting slower and using
 more memory; find out why."*
 
+`scripts/mcp_call.py` runs an arbitrary sequence of tool calls, with shell
+steps in between (e.g. to restart the target). `scripts/demo_shop` is a
+small app with a nested supervision tree, built as a Mix release so it has
+its own cookie:
+
+```sh
+(cd scripts/demo_shop && MIX_ENV=prod mix release)
+REL=scripts/demo_shop/_build/prod/rel/demo_shop
+$REL/bin/demo_shop daemon
+python3 scripts/mcp_call.py _build/prod/rel/otp_debug_mcp/bin/otp_debug_mcp "[
+  [\"connect\", {\"node\": \"demo_shop@$(hostname -s)\", \"cookie\": \"$(cat $REL/releases/COOKIE)\"}],
+  [\"supervision_tree\", {\"app\": \"demo_shop\"}],
+  [\"shell\", \"$REL/bin/demo_shop stop; sleep 2; $REL/bin/demo_shop daemon; sleep 4\"],
+  [\"run_check\", {\"check\": \"top_reductions\"}]
+]"
+```
+
+Verified so far: every tool through MCP stdio; shortnames, longnames (IP and
+FQDN) and switching between them in one session; Mix release cookies;
+reconnect after a target restart. Not yet verified: a target on another
+machine.
+
 ## Status / TODO
 
 Open items:
@@ -131,4 +156,6 @@ Open items:
 - [ ] Print pids in the target's own `<0.x.y>` form in tool output
 - [ ] Exit with status 0 (not 1) when the client closes stdin
 - [ ] ExUnit tests against a disposable target node (`peer` module)
+- [ ] Verify against a target on another machine (firewalls, epmd port 4369,
+      the distribution port range)
 - [ ] TLS distribution + `inet_dist_use_interface` guidance for prod targets
