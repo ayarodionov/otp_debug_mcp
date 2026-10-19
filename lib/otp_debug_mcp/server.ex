@@ -8,7 +8,7 @@ defmodule OtpDebugMcp.Server do
   `diagnose` surfaces.
   """
 
-  use Hermes.Server,
+  use Anubis.Server,
     name: "otp-debug",
     version: "0.1.0",
     capabilities: [:tools]

@@ -96,14 +96,29 @@ defmodule OtpDebugMcp.Checks do
     with {:ok, mem} <- Target.rpc(:erlang, :memory, []) do
       total = mem[:total]
 
+      # erlang:memory/0 categories overlap (atom, binary, code and ets are
+      # all part of system; *_used are subsets), so report a partition.
+      parts = [
+        processes: mem[:processes],
+        binary: mem[:binary],
+        ets: mem[:ets],
+        code: mem[:code],
+        atom: mem[:atom],
+        other_system: mem[:system] - mem[:binary] - mem[:ets] - mem[:code] - mem[:atom]
+      ]
+
       breakdown =
-        for {k, v} <- mem, k != :total do
+        for {k, v} <- parts do
           %{category: k, bytes: v, percent: Float.round(100.0 * v / total, 1)}
         end
         |> Enum.sort_by(& &1.bytes, :desc)
 
-      result(:memory_breakdown, :ok, breakdown, """
-      erlang:memory/0 breakdown (informational). High `binary` share with
+      findings = %{total_bytes: total, breakdown: breakdown}
+
+      result(:memory_breakdown, :ok, findings, """
+      erlang:memory/0 as a partition summing to total (informational). High
+      `processes` share: find the process holding it (message_queues check,
+      process_info memory field). High `binary` share with
       modest `processes` share points to refc binaries (see binary_leak
       check); high `ets` means a table is growing (see ets_tables check).
       """)
@@ -258,7 +273,12 @@ defmodule OtpDebugMcp.Checks do
   defp format_proc_info(other), do: inspect(other)
 
   defp result(check, status, findings, interpretation) do
-    %{check: check, status: status, findings: findings, interpretation: String.trim(interpretation)}
+    %{
+      check: check,
+      status: status,
+      findings: findings,
+      interpretation: String.trim(interpretation)
+    }
   end
 
   defp error_result(check, err) do

@@ -5,7 +5,7 @@ defmodule OtpDebugMcp.Tools do
   `OtpDebugMcp.Tracer` and `OtpDebugMcp.Snapshot`.
   """
 
-  alias Hermes.Server.Response
+  alias Anubis.Server.Response
 
   @doc "Encode any term as a JSON tool response (falling back to inspect for non-JSON terms)."
   def json_response(frame, term) do
@@ -25,7 +25,7 @@ defmodule OtpDebugMcp.Tools do
 
   defmodule Connect do
     @moduledoc "Connect to a running OTP node as a hidden node. Call this first."
-    use Hermes.Server.Component, type: :tool
+    use Anubis.Server.Component, type: :tool
 
     alias OtpDebugMcp.{Target, Tools}
 
@@ -70,7 +70,7 @@ defmodule OtpDebugMcp.Tools do
     ranked worst-first, each with an interpretation and suggested next step.
     This should be the FIRST tool called after connect.
     """
-    use Hermes.Server.Component, type: :tool
+    use Anubis.Server.Component, type: :tool
 
     alias OtpDebugMcp.{Checks, Tools}
 
@@ -83,7 +83,7 @@ defmodule OtpDebugMcp.Tools do
 
   defmodule RunCheck do
     @moduledoc "Run a single named diagnostic check (cheaper than the full battery)."
-    use Hermes.Server.Component, type: :tool
+    use Anubis.Server.Component, type: :tool
 
     alias OtpDebugMcp.{Checks, Tools}
 
@@ -109,7 +109,7 @@ defmodule OtpDebugMcp.Tools do
     Deep-inspect one process: process_info, current stacktrace, and (for
     gen_* processes) its state via sys:get_state with a short timeout.
     """
-    use Hermes.Server.Component, type: :tool
+    use Anubis.Server.Component, type: :tool
 
     alias OtpDebugMcp.{Target, Tools}
 
@@ -132,8 +132,16 @@ defmodule OtpDebugMcp.Tools do
         state =
           if params[:include_state] do
             case Target.rpc(:sys, :get_state, [pid, 2_000], 3_000) do
-              {:ok, s} -> inspect(s, limit: 100, pretty: true)
-              {:error, e} -> "unavailable: #{inspect(e)}"
+              {:ok, s} ->
+                inspect(s, limit: 100, pretty: true)
+
+              {:error, {:badrpc, {:EXIT, {:timeout, _}}}} ->
+                "unavailable: the process did not answer sys:get_state within 2s. " <>
+                  "This is a symptom, not a tool failure: the process is blocked " <>
+                  "or its mailbox is backed up, so system messages wait in line too."
+
+              {:error, e} ->
+                "unavailable: #{inspect(e)}"
             end
           end
 
@@ -147,10 +155,20 @@ defmodule OtpDebugMcp.Tools do
       end
     end
 
-    # Resolve "<0.123.0>" via recon:pid/1-friendly parsing, otherwise treat as
-    # a registered name (tries both Elixir and plain atoms) on the target.
-    defp resolve("<" <> _ = pid_str) do
+    # Pids arrive in three shapes: "#PID<39943.107.0>" as printed in our own
+    # tool output (node index from *our* side), "<39943.107.0>", or
+    # "<0.107.0>" as the target itself prints it. Only the last form must be
+    # parsed on the target; the others are already valid locally.
+    defp resolve("#PID" <> rest), do: resolve(rest)
+
+    defp resolve("<0." <> _ = pid_str) do
       Target.rpc(:erlang, :list_to_pid, [String.to_charlist(pid_str)])
+    end
+
+    defp resolve("<" <> _ = pid_str) do
+      {:ok, :erlang.list_to_pid(String.to_charlist(pid_str))}
+    rescue
+      ArgumentError -> {:error, {:invalid_pid, pid_str}}
     end
 
     defp resolve(name) do
@@ -167,7 +185,7 @@ defmodule OtpDebugMcp.Tools do
 
   defmodule SupervisionTree do
     @moduledoc "Render the supervision tree of one application on the target node."
-    use Hermes.Server.Component, type: :tool
+    use Anubis.Server.Component, type: :tool
 
     alias OtpDebugMcp.{Target, Tools}
 
@@ -181,7 +199,8 @@ defmodule OtpDebugMcp.Tools do
     def execute(%{app: app} = params, frame) do
       depth = params[:depth] || 5
 
-      with {:ok, masters} <- Target.rpc(:application_controller, :get_master, [String.to_atom(app)]),
+      with {:ok, masters} <-
+             Target.rpc(:application_controller, :get_master, [String.to_atom(app)]),
            true <- is_pid(masters) || {:error, {:app_not_running, app}},
            {:ok, {root, _app}} <- Target.rpc(:application_master, :get_child, [masters]) do
         Tools.json_response(frame, tree(root, depth))
@@ -200,6 +219,7 @@ defmodule OtpDebugMcp.Tools do
             children:
               for {id, child, type, _mods} <- children do
                 base = %{id: inspect(id), pid: inspect(child), type: type}
+
                 if type == :supervisor and is_pid(child) do
                   Map.put(base, :children, tree(child, depth - 1)[:children])
                 else
@@ -222,7 +242,7 @@ defmodule OtpDebugMcp.Tools do
     enforces a hard cap on trace messages and auto-stops, so this cannot
     flood a production node.
     """
-    use Hermes.Server.Component, type: :tool
+    use Anubis.Server.Component, type: :tool
 
     alias OtpDebugMcp.{Tools, Tracer}
 
@@ -231,7 +251,9 @@ defmodule OtpDebugMcp.Tools do
 
       field(:function, :string, description: "Function name; omit for all functions")
 
-      field(:max_events, :integer, description: "Stop after this many calls (default 20, max 100)")
+      field(:max_events, :integer,
+        description: "Stop after this many calls (default 20, max 100)"
+      )
 
       field(:duration_ms, :integer,
         description: "Stop after this long regardless (default 10000, max 60000)"
@@ -258,7 +280,7 @@ defmodule OtpDebugMcp.Tools do
     time (memory, process count, queue lengths, ETS sizes) is far more
     diagnostic than any point-in-time number: take a snapshot, wait, diff.
     """
-    use Hermes.Server.Component, type: :tool
+    use Anubis.Server.Component, type: :tool
 
     alias OtpDebugMcp.{Snapshotter, Tools}
 
@@ -291,7 +313,7 @@ defmodule OtpDebugMcp.Tools do
     disabled unless the server was started with OTP_DEBUG_MCP_ALLOW_EVAL=true.
     Prefer the purpose-built tools; use this only when they can't answer.
     """
-    use Hermes.Server.Component, type: :tool
+    use Anubis.Server.Component, type: :tool
 
     alias OtpDebugMcp.{Checks, Tools}
 
@@ -305,8 +327,11 @@ defmodule OtpDebugMcp.Tools do
     def execute(%{code: code}, frame) do
       if System.get_env("OTP_DEBUG_MCP_ALLOW_EVAL") == "true" do
         case Checks.remote_eval(code) do
-          {:ok, value} -> Tools.json_response(frame, %{value: inspect(value, pretty: true, limit: 200)})
-          err -> Tools.error_response(frame, err)
+          {:ok, value} ->
+            Tools.json_response(frame, %{value: inspect(value, pretty: true, limit: 200)})
+
+          err ->
+            Tools.error_response(frame, err)
         end
       else
         Tools.error_response(

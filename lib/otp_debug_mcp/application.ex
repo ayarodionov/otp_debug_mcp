@@ -6,12 +6,12 @@ defmodule OtpDebugMcp.Application do
   @impl true
   def start(_type, _args) do
     children = [
-      Hermes.Server.Registry,
       OtpDebugMcp.Target,
       OtpDebugMcp.Snapshotter,
       # stdio transport: Claude Code launches this process and speaks MCP
       # over stdin/stdout. Everything else must log to stderr only.
-      {OtpDebugMcp.Server, transport: :stdio}
+      # trace_calls may legitimately run for up to 60s.
+      {OtpDebugMcp.Server, transport: :stdio, request_timeout: 90_000}
     ]
 
     opts = [strategy: :one_for_one, name: OtpDebugMcp.Supervisor]

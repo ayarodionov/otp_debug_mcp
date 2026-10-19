@@ -7,7 +7,14 @@ defmodule OtpDebugMcp.MixProject do
       version: "0.1.0",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
-      deps: deps()
+      deps: deps(),
+      releases: releases()
+    ]
+  end
+
+  defp releases do
+    [
+      otp_debug_mcp: [include_executables_for: [:unix]]
     ]
   end
 
@@ -23,7 +30,7 @@ defmodule OtpDebugMcp.MixProject do
   defp deps do
     [
       # MCP server framework (stdio + streamable HTTP transports).
-      {:hermes_mcp, "~> 0.14.1"},
+      {:anubis_mcp, "~> 2.1"},
       # Production-safe BEAM introspection. Loaded locally; its object code is
       # injected into the target node at connect time (see OtpDebugMcp.Target),
       # so the target app needs no recon dependency of its own.

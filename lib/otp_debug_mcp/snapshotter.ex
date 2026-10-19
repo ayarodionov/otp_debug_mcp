@@ -11,6 +11,13 @@ defmodule OtpDebugMcp.Snapshotter do
 
   alias OtpDebugMcp.Target
 
+  # Sum of every process's mailbox; processes that exit mid-scan return
+  # `undefined` and are skipped by the generator pattern.
+  @total_message_queue """
+  lists:sum([N || P <- erlang:processes(),
+                  {message_queue_len, N} <- [erlang:process_info(P, message_queue_len)]]).
+  """
+
   def start_link(_opts), do: Agent.start_link(fn -> nil end, name: __MODULE__)
 
   @doc "Capture a snapshot, store it, return a summary."
@@ -67,8 +74,7 @@ defmodule OtpDebugMcp.Snapshotter do
          {:ok, pcount} <- Target.rpc(:erlang, :system_info, [:process_count]),
          {:ok, port_count} <- Target.rpc(:erlang, :system_info, [:port_count]),
          {:ok, atom_count} <- Target.rpc(:erlang, :system_info, [:atom_count]),
-         {:ok, mqs} <-
-           Target.rpc(:erlang, :statistics, [:total_run_queue_lengths], 5_000) do
+         {:ok, total_mq} <- OtpDebugMcp.Checks.remote_eval(@total_message_queue) do
       {:ok,
        %{
          at: DateTime.utc_now(),
@@ -76,11 +82,8 @@ defmodule OtpDebugMcp.Snapshotter do
          process_count: pcount,
          port_count: port_count,
          atom_count: atom_count,
-         total_mq: total(mqs)
+         total_mq: total_mq
        }}
     end
   end
-
-  defp total(n) when is_integer(n), do: n
-  defp total(list) when is_list(list), do: Enum.sum(list)
 end

@@ -1,8 +1,7 @@
 # otp_debug_mcp
 
-> **Status: early skeleton.** The diagnostic logic is tested against live
-> nodes, but the MCP layer hasn't been exercised through a real client yet
-> and there's no release packaging. See the TODO list below.
+> **Status: early.** Tested end to end from Claude Code against live nodes,
+> but young: expect rough edges. See the TODO list below.
 
 An MCP server that lets AI agents (Claude Code, Claude Desktop, Cursor, …)
 connect to a **running** Erlang/Elixir/OTP node and debug it: not just raw
@@ -51,27 +50,44 @@ mix deps.get
 mix compile
 ```
 
-Register with Claude Code (from any project, or use `--scope user` for global):
+Build the release (Elixir 1.15+, tested on Elixir 1.19 / OTP 28):
 
 ```sh
-claude mcp add otp-debug -- \
-  env MIX_ENV=prod mix run --no-halt -e ":ok" # placeholder, see below
+MIX_ENV=prod mix release
 ```
 
-For real use, build an escript or release so startup is fast and stdout stays
-clean (MCP stdio requires that *nothing* but protocol messages goes to
-stdout — configure Logger to stderr). A `.mcp.json` entry looks like:
+Register it with Claude Code (`--scope user` makes it available in every
+project):
+
+```sh
+claude mcp add otp-debug --scope user -- \
+  /path/to/otp_debug_mcp/_build/prod/rel/otp_debug_mcp/bin/otp_debug_mcp start
+```
+
+Or as a `.mcp.json` entry:
 
 ```json
 {
   "mcpServers": {
     "otp-debug": {
-      "command": "/path/to/otp_debug_mcp/bin/otp_debug_mcp",
+      "command": "/path/to/otp_debug_mcp/_build/prod/rel/otp_debug_mcp/bin/otp_debug_mcp",
+      "args": ["start"],
       "env": { "OTP_DEBUG_MCP_ALLOW_EVAL": "false" }
     }
   }
 }
 ```
+
+Notes:
+
+- **Name mode is automatic.** `connect` starts distribution on demand in the
+  mode the target uses: shortnames for `app@host` (the Mix release default),
+  longnames for `app@1.2.3.4` or `app@host.domain`.
+- **Cookie.** Without a `cookie` argument, `~/.erlang.cookie` is used, which
+  matches `iex --sname`/`erl -sname`. Mix releases generate their own cookie;
+  pass the target's `RELEASE_COOKIE` (or `releases/COOKIE`).
+- **stdout is the protocol stream.** All logging goes to stderr, and IO from
+  the target during rpc calls and traces is redirected away from stdout.
 
 Then, in Claude Code:
 
@@ -89,14 +105,30 @@ A Claude Code skill encoding this workflow ships in
 `skills/otp-debug/SKILL.md` — copy it to `~/.claude/skills/otp-debug/` so
 Claude follows the playbook automatically.
 
+## Testing
+
+`scripts/` holds an end-to-end check that drives the release over MCP stdio
+the way a client does, against a demo node with a real bug:
+
+```sh
+elixir --sname shop --no-halt scripts/buggy_target.exs &
+python3 scripts/mcp_smoke.py \
+  _build/prod/rel/otp_debug_mcp/bin/otp_debug_mcp "shop@$(hostname -s)" Shop.PriceCache
+```
+
+It fails on any non-JSON line on stdout. The same demo node makes a good
+first prompt for Claude Code: *"shop@yourhost is getting slower and using
+more memory; find out why."*
+
 ## Status / TODO
 
-This is a skeleton. Open items:
+Open items:
 
-- [ ] Verify Hermes component API details against hermes_mcp 0.14 docs and compile
-- [ ] Tracer: return early once `max_events` collected (currently waits out the window)
 - [ ] Checks: supervisor restart-intensity check (scan logger/SASL reports)
 - [ ] Checks: `recon_alloc` fragmentation check (memory held by allocators vs used)
-- [ ] Release/escript packaging + Logger-to-stderr config
-- [ ] Tests against a disposable target node (`peer` module)
+- [ ] Snapshot: discount the debugger's own footprint (atoms/code loaded by
+      recon injection and tracing show up in diffs)
+- [ ] Print pids in the target's own `<0.x.y>` form in tool output
+- [ ] Exit with status 0 (not 1) when the client closes stdin
+- [ ] ExUnit tests against a disposable target node (`peer` module)
 - [ ] TLS distribution + `inet_dist_use_interface` guidance for prod targets
