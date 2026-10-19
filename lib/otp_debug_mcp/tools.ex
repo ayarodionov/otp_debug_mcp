@@ -1,0 +1,319 @@
+defmodule OtpDebugMcp.Tools do
+  @moduledoc """
+  MCP tool components. Each tool is a thin schema + dispatch layer; the real
+  logic lives in `OtpDebugMcp.Checks`, `OtpDebugMcp.Target`,
+  `OtpDebugMcp.Tracer` and `OtpDebugMcp.Snapshot`.
+  """
+
+  alias Hermes.Server.Response
+
+  @doc "Encode any term as a JSON tool response (falling back to inspect for non-JSON terms)."
+  def json_response(frame, term) do
+    text =
+      try do
+        JSON.encode!(term)
+      rescue
+        _ -> inspect(term, pretty: true, limit: 200)
+      end
+
+    {:reply, Response.text(Response.tool(), text), frame}
+  end
+
+  def error_response(frame, reason) do
+    {:reply, Response.error(Response.tool(), inspect(reason)), frame}
+  end
+
+  defmodule Connect do
+    @moduledoc "Connect to a running OTP node as a hidden node. Call this first."
+    use Hermes.Server.Component, type: :tool
+
+    alias OtpDebugMcp.{Target, Tools}
+
+    schema do
+      field(:node, {:required, :string},
+        description: "Target node name, e.g. myapp@127.0.0.1 or myapp@hostname"
+      )
+
+      field(:cookie, :string,
+        description: "Erlang cookie. Omit to use this machine's ~/.erlang.cookie"
+      )
+    end
+
+    @impl true
+    def execute(%{node: node} = params, frame) do
+      case Target.connect(node, params[:cookie]) do
+        :ok ->
+          Tools.json_response(frame, %{
+            connected: node,
+            hint: "Run the `diagnose` tool next for a full health check."
+          })
+
+        {:error, reason} ->
+          Tools.error_response(frame, {reason, connect_hints()})
+      end
+    end
+
+    defp connect_hints do
+      """
+      Connection failed. Common causes: wrong cookie (check ~/.erlang.cookie \
+      on the target host or the release's RELEASE_COOKIE); target not started \
+      with a node name (--sname/--name); shortname vs longname mismatch; \
+      epmd not reachable.
+      """
+    end
+  end
+
+  defmodule Diagnose do
+    @moduledoc """
+    Run the full diagnostic battery (message queues, binary leaks, memory,
+    process/atom/port limits, ETS, schedulers, CPU hogs). Findings come back
+    ranked worst-first, each with an interpretation and suggested next step.
+    This should be the FIRST tool called after connect.
+    """
+    use Hermes.Server.Component, type: :tool
+
+    alias OtpDebugMcp.{Checks, Tools}
+
+    schema do
+    end
+
+    @impl true
+    def execute(_params, frame), do: Tools.json_response(frame, Checks.run_all())
+  end
+
+  defmodule RunCheck do
+    @moduledoc "Run a single named diagnostic check (cheaper than the full battery)."
+    use Hermes.Server.Component, type: :tool
+
+    alias OtpDebugMcp.{Checks, Tools}
+
+    schema do
+      field(:check, {:required, :string},
+        description:
+          "One of: message_queues, binary_leak, memory_breakdown, process_count, " <>
+            "atom_table, ets_tables, ports, schedulers, top_reductions"
+      )
+    end
+
+    @impl true
+    def execute(%{check: check}, frame) do
+      case Enum.find(Checks.all_checks(), &(Atom.to_string(&1) == check)) do
+        nil -> Tools.error_response(frame, {:unknown_check, check, Checks.all_checks()})
+        name -> Tools.json_response(frame, Checks.run(name))
+      end
+    end
+  end
+
+  defmodule ProcessInfo do
+    @moduledoc """
+    Deep-inspect one process: process_info, current stacktrace, and (for
+    gen_* processes) its state via sys:get_state with a short timeout.
+    """
+    use Hermes.Server.Component, type: :tool
+
+    alias OtpDebugMcp.{Target, Tools}
+
+    schema do
+      field(:pid, {:required, :string},
+        description: "Pid as printed, e.g. <0.123.0>, or a registered name, e.g. MyApp.Worker"
+      )
+
+      field(:include_state, :boolean,
+        description:
+          "Also fetch sys:get_state (safe for gen_server/gen_statem; " <>
+            "skipped automatically if the process doesn't respond in 2s)"
+      )
+    end
+
+    @impl true
+    def execute(%{pid: pid_str} = params, frame) do
+      with {:ok, pid} <- resolve(pid_str),
+           {:ok, info} <- Target.rpc(:recon, :info, [pid]) do
+        state =
+          if params[:include_state] do
+            case Target.rpc(:sys, :get_state, [pid, 2_000], 3_000) do
+              {:ok, s} -> inspect(s, limit: 100, pretty: true)
+              {:error, e} -> "unavailable: #{inspect(e)}"
+            end
+          end
+
+        Tools.json_response(frame, %{
+          pid: pid_str,
+          info: inspect(info, limit: :infinity, pretty: true),
+          state: state
+        })
+      else
+        err -> Tools.error_response(frame, err)
+      end
+    end
+
+    # Resolve "<0.123.0>" via recon:pid/1-friendly parsing, otherwise treat as
+    # a registered name (tries both Elixir and plain atoms) on the target.
+    defp resolve("<" <> _ = pid_str) do
+      Target.rpc(:erlang, :list_to_pid, [String.to_charlist(pid_str)])
+    end
+
+    defp resolve(name) do
+      candidates = [String.to_atom(name), Module.concat([name])]
+
+      Enum.find_value(candidates, {:error, {:no_such_process, name}}, fn atom ->
+        case Target.rpc(:erlang, :whereis, [atom]) do
+          {:ok, pid} when is_pid(pid) -> {:ok, pid}
+          _ -> nil
+        end
+      end)
+    end
+  end
+
+  defmodule SupervisionTree do
+    @moduledoc "Render the supervision tree of one application on the target node."
+    use Hermes.Server.Component, type: :tool
+
+    alias OtpDebugMcp.{Target, Tools}
+
+    schema do
+      field(:app, {:required, :string}, description: "OTP application name, e.g. my_app")
+
+      field(:depth, :integer, description: "Max tree depth (default 5)")
+    end
+
+    @impl true
+    def execute(%{app: app} = params, frame) do
+      depth = params[:depth] || 5
+
+      with {:ok, masters} <- Target.rpc(:application_controller, :get_master, [String.to_atom(app)]),
+           true <- is_pid(masters) || {:error, {:app_not_running, app}},
+           {:ok, {root, _app}} <- Target.rpc(:application_master, :get_child, [masters]) do
+        Tools.json_response(frame, tree(root, depth))
+      else
+        err -> Tools.error_response(frame, err)
+      end
+    end
+
+    defp tree(_pid, 0), do: "..."
+
+    defp tree(pid, depth) when is_pid(pid) do
+      case Target.rpc(:supervisor, :which_children, [pid], 3_000) do
+        {:ok, children} when is_list(children) ->
+          %{
+            supervisor: inspect(pid),
+            children:
+              for {id, child, type, _mods} <- children do
+                base = %{id: inspect(id), pid: inspect(child), type: type}
+                if type == :supervisor and is_pid(child) do
+                  Map.put(base, :children, tree(child, depth - 1)[:children])
+                else
+                  base
+                end
+              end
+          }
+
+        _ ->
+          %{worker: inspect(pid)}
+      end
+    end
+
+    defp tree(other, _), do: %{child: inspect(other)}
+  end
+
+  defmodule TraceCalls do
+    @moduledoc """
+    Trace calls to a module/function on the target, safely: recon_trace
+    enforces a hard cap on trace messages and auto-stops, so this cannot
+    flood a production node.
+    """
+    use Hermes.Server.Component, type: :tool
+
+    alias OtpDebugMcp.{Tools, Tracer}
+
+    schema do
+      field(:module, {:required, :string}, description: "Module, e.g. Elixir.MyApp.Worker or ets")
+
+      field(:function, :string, description: "Function name; omit for all functions")
+
+      field(:max_events, :integer, description: "Stop after this many calls (default 20, max 100)")
+
+      field(:duration_ms, :integer,
+        description: "Stop after this long regardless (default 10000, max 60000)"
+      )
+    end
+
+    @impl true
+    def execute(%{module: mod} = params, frame) do
+      case Tracer.trace(
+             mod,
+             params[:function],
+             min(params[:max_events] || 20, 100),
+             min(params[:duration_ms] || 10_000, 60_000)
+           ) do
+        {:ok, events} -> Tools.json_response(frame, %{events: events})
+        err -> Tools.error_response(frame, err)
+      end
+    end
+  end
+
+  defmodule Snapshot do
+    @moduledoc """
+    Capture a system snapshot, or diff against the previous one. Growth over
+    time (memory, process count, queue lengths, ETS sizes) is far more
+    diagnostic than any point-in-time number: take a snapshot, wait, diff.
+    """
+    use Hermes.Server.Component, type: :tool
+
+    alias OtpDebugMcp.{Snapshotter, Tools}
+
+    schema do
+      field(:action, {:required, :string}, description: "\"take\" or \"diff\"")
+    end
+
+    @impl true
+    def execute(%{action: "take"}, frame) do
+      case Snapshotter.take() do
+        {:ok, summary} -> Tools.json_response(frame, summary)
+        err -> Tools.error_response(frame, err)
+      end
+    end
+
+    def execute(%{action: "diff"}, frame) do
+      case Snapshotter.diff() do
+        {:ok, diff} -> Tools.json_response(frame, diff)
+        err -> Tools.error_response(frame, err)
+      end
+    end
+
+    def execute(%{action: other}, frame),
+      do: Tools.error_response(frame, {:unknown_action, other})
+  end
+
+  defmodule RemoteEval do
+    @moduledoc """
+    Evaluate an Erlang expression on the target node. POWERFUL AND UNSAFE:
+    disabled unless the server was started with OTP_DEBUG_MCP_ALLOW_EVAL=true.
+    Prefer the purpose-built tools; use this only when they can't answer.
+    """
+    use Hermes.Server.Component, type: :tool
+
+    alias OtpDebugMcp.{Checks, Tools}
+
+    schema do
+      field(:code, {:required, :string},
+        description: "Erlang expression(s), e.g. \"erlang:statistics(run_queue).\""
+      )
+    end
+
+    @impl true
+    def execute(%{code: code}, frame) do
+      if System.get_env("OTP_DEBUG_MCP_ALLOW_EVAL") == "true" do
+        case Checks.remote_eval(code) do
+          {:ok, value} -> Tools.json_response(frame, %{value: inspect(value, pretty: true, limit: 200)})
+          err -> Tools.error_response(frame, err)
+        end
+      else
+        Tools.error_response(
+          frame,
+          "remote_eval is disabled; start the server with OTP_DEBUG_MCP_ALLOW_EVAL=true to enable it"
+        )
+      end
+    end
+  end
+end

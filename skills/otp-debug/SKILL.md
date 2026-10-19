@@ -1,0 +1,56 @@
+---
+name: otp-debug
+description: Debug a running Erlang/Elixir/OTP node with the otp-debug MCP server. Use when the user asks to investigate a live BEAM system - memory growth, slowness, stuck processes, crashes, message queue buildup - or mentions connecting to a running node.
+---
+
+# Debugging a live OTP node
+
+You have the `otp-debug` MCP tools. Follow this playbook; do not improvise
+raw introspection when a purpose-built tool exists.
+
+## Workflow
+
+1. **Connect first.** `connect(node, cookie?)`. If the user didn't give a node
+   name, ask for it (and check `epmd -names` on the target host for candidates).
+   If connection fails, relay the hint in the error — it's usually the cookie
+   or shortname/longname mismatch.
+2. **Always start with `diagnose`.** Findings come ranked worst-first with
+   interpretations. Report the top findings to the user before drilling in.
+3. **Drill into offenders**, don't re-scan:
+   - Big message queue → `process_info` on that pid (with `include_state` for
+     gen_servers); its `current_function` shows what it's stuck on. Then
+     `trace_calls` on the module it's blocked calling.
+   - Memory suspicion → `run_check(binary_leak)`, `run_check(ets_tables)`,
+     then `snapshot(take)` → wait 30-60s of real load → `snapshot(diff)`.
+     Only a growing delta proves a leak.
+   - CPU suspicion → `run_check(schedulers)` first; OS CPU% lies about the
+     BEAM (busy-wait). Only if schedulers are pegged, use `top_reductions`.
+4. **Confirm trends before concluding.** One snapshot is a guess; a diff is
+   evidence. Prefer two diffs 60s apart for leak claims.
+
+## Safety rules (production nodes)
+
+- Keep `trace_calls` limits small: ≤20 events, ≤10s, one module at a time.
+  Never trace `gen_server` / `gen` / commonly-hot stdlib modules themselves.
+- `process_info` with `include_state` sends a sys message to the process;
+  skip it for processes already showing huge message queues.
+- Do not use `remote_eval` unless the purpose-built tools can't answer AND
+  the user has enabled it; never eval anything that mutates state without
+  the user explicitly approving that exact expression.
+- `binary_leak` force-GCs processes — cheap, but mention it when running
+  against production.
+
+## Interpreting common patterns
+
+- Queue growing on one process, many callers blocked in `gen_server:call` →
+  single-process bottleneck; look for serialization through one gen_server
+  (registry, single db connection, ets owner doing writes).
+- `memory.binary` high and `binary_leak` finds big releases → refc binary
+  leak; fix is `binary:copy/1` on retained sub-binaries or hibernation.
+- `atom_count` growing at all → dynamic atom creation from input; grep for
+  `String.to_atom`, `list_to_atom`, `binary_to_term` without `:safe`.
+- All schedulers ~1.0 → genuine CPU saturation. One scheduler pegged, rest
+  idle → suspect a long-running NIF or a dirty-scheduler misconfiguration.
+- Process count climbing in diffs → process leak: spawned tasks/monitors
+  never terminating; check `supervision_tree` for unexpectedly huge
+  simple_one_for_one/DynamicSupervisor child counts.
