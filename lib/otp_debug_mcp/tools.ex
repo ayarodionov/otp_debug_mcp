@@ -251,12 +251,14 @@ defmodule OtpDebugMcp.Tools do
 
   defmodule TraceCalls do
     @moduledoc """
-    Trace calls to a module/function on the target, safely: recon_trace
-    enforces a hard cap on trace messages and auto-stops, so this cannot
-    flood a production node.
+    Trace calls to a module/function on the target, safely: hard caps on
+    event count and duration, and an early stop if calls arrive too fast,
+    so this cannot flood a production node.
 
-    Refuses if other tracing is active on the node (e.g. someone's
-    recon_trace session), because starting this trace would end it. Ask the
+    On OTP 27+ targets the trace runs in its own isolated trace session and
+    never affects other tracing on the node. On older targets it uses
+    recon_trace and refuses if other tracing is active (e.g. someone's
+    recon_trace session), because starting this trace would end it; ask the
     user before retrying with force: true.
     """
     use Anubis.Server.Component, type: :tool
@@ -278,8 +280,8 @@ defmodule OtpDebugMcp.Tools do
 
       field(:force, :boolean,
         description:
-          "Trace even though other tracing is active on the node, ending it. " <>
-            "Only with the user's explicit permission."
+          "Pre-OTP 27 targets only: trace even though other tracing is active " <>
+            "on the node, ending it. Only with the user's explicit permission."
       )
     end
 
@@ -288,15 +290,12 @@ defmodule OtpDebugMcp.Tools do
       case Tracer.trace(
              mod,
              params[:function],
-             min(params[:max_events] || 20, 100),
-             min(params[:duration_ms] || 10_000, 60_000),
+             (params[:max_events] || 20) |> min(100) |> max(1),
+             (params[:duration_ms] || 10_000) |> min(60_000) |> max(100),
              params[:force] == true
            ) do
-        {:ok, %{events: events, stopped_other_tracing: nil}} ->
-          Tools.json_response(frame, %{events: events})
-
-        {:ok, %{events: events, stopped_other_tracing: other}} ->
-          Tools.json_response(frame, %{events: events, stopped_other_tracing: other})
+        {:ok, result} ->
+          Tools.json_response(frame, Map.reject(result, fn {_k, v} -> is_nil(v) end))
 
         {:error, reason} ->
           Tools.error_response(frame, reason)

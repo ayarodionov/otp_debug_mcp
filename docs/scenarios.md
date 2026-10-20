@@ -177,8 +177,10 @@ Long terms are truncated so the result fits the agent's context.
 - Traced arguments are real production data and go to the AI provider
   along with everything else the tools return. Don't trace functions that
   handle secrets or personal data.
-- If someone else is tracing the node, `trace_calls` refuses and says what
-  it found. Forcing it ends their trace, so the agent should ask you first.
+- On OTP 27+ the trace runs in its own trace session and never affects
+  anyone else's. On older nodes, if someone else is tracing, `trace_calls`
+  refuses and says what it found. Forcing it ends their trace, so the agent
+  should ask you first.
 
 ### 9. Verifying a fix or a deploy
 
@@ -271,9 +273,10 @@ that on a dev machine.
 - **Keep `remote_eval` off** (the default) for production nodes.
 - **Tool output goes to the AI provider.** That includes process state,
   traced arguments and ETS contents. Mind secrets and personal data.
-- **Tracing is one at a time.** `trace_calls` won't start while another
-  `recon_trace` session or similar tracing is active, because it would end
-  it. Only force it if you know whose trace that is.
+- **Tracing on pre-27 nodes is one at a time.** There `trace_calls` won't
+  start while another `recon_trace` session or similar tracing is active,
+  because it would end it. Only force it if you know whose trace that is.
+  OTP 27+ nodes have isolated trace sessions, and this doesn't apply.
 - **Network.** Erlang distribution needs epmd (port 4369) and the
   distribution port range reachable from wherever the tool runs. Connecting
   to another machine hasn't been tested yet.

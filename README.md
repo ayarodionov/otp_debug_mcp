@@ -29,16 +29,19 @@ introspection primitives, but an encoded diagnostic playbook in the spirit of
   replacing a loaded module and later purging it would kill processes
   running it, such as an operator's `recon_trace` session. `connect` reports
   which recon is in use.
-- **Safe by default.** Tracing goes through `recon_trace` (hard caps on event
-  count and duration); every rpc has a timeout; arbitrary `remote_eval` is
-  disabled unless `OTP_DEBUG_MCP_ALLOW_EVAL=true`.
-  `trace_calls` uses recon_trace, which turns off all tracing in the node's
-  legacy trace session when it starts and stops. So it first checks for
-  such tracing (another `recon_trace` session, `dbg` on OTP 26 and earlier,
-  any `erlang:trace/3` user) and refuses, describing what it found, unless
-  called with `force: true`. The bundled skill tells the agent to ask the
-  user before forcing. OTP 27+ `dbg` uses its own trace session and is
-  unaffected.
+- **Safe by default.** Every trace has hard caps on event count and
+  duration and stops early if calls arrive too fast; every rpc has a
+  timeout; arbitrary `remote_eval` is disabled unless
+  `OTP_DEBUG_MCP_ALLOW_EVAL=true`.
+- **Tracing never disturbs someone else's.** On OTP 27+ targets,
+  `trace_calls` runs in its own isolated trace session
+  (`trace:session_create/3`), so other tracing on the node (an operator's
+  `recon_trace`, `dbg`, anything using `erlang:trace/3`) keeps running,
+  even on the same function. On older targets it falls back to
+  `recon_trace`, which turns off all tracing on the node when it starts and
+  stops. There it first checks for other tracing and refuses, describing
+  what it found, unless called with `force: true`. The bundled skill tells
+  the agent to ask the user before forcing.
 
 ## Tools
 
@@ -49,7 +52,7 @@ introspection primitives, but an encoded diagnostic playbook in the spirit of
 | `run_check` | One check: `message_queues`, `binary_leak`, `memory_breakdown`, `process_count`, `atom_table`, `ets_tables`, `ports`, `schedulers`, `top_reductions` |
 | `process_info` | Deep-inspect one process (recon:info + optional `sys:get_state`) |
 | `supervision_tree` | Render an application's supervision tree |
-| `trace_calls` | Rate-limited call tracing via recon_trace |
+| `trace_calls` | Rate-limited call tracing (isolated trace session on OTP 27+, recon_trace before) |
 | `snapshot` | Take / diff system snapshots — trends beat point-in-time numbers |
 | `remote_eval` | Arbitrary Erlang eval on the target (opt-in, off by default) |
 
@@ -174,9 +177,11 @@ Verified so far: every tool through MCP stdio; shortnames, longnames (IP and
 FQDN) and switching between them in one session; Mix release cookies;
 reconnect after a target restart; targets with their own recon (including
 an old one missing functions) keep their running recon sessions across
-repeat connects and checks; `trace_calls` refuses while another
-legacy-session trace is active (recon_trace or raw `erlang:trace/3`), and
-leaves OTP 27+ `dbg` sessions running. Not yet verified: a target on another machine.
+repeat connects and checks; on OTP 28, `trace_calls` traces the same
+function as an operator's `recon_trace` session without disturbing it; on
+an OTP 26 target, recon is compiled on the target and every check works,
+and `trace_calls` refuses while `dbg` is tracing unless forced. Not yet
+verified: a target on another machine.
 
 `scripts/recon_target.exs` is that last scenario: a node with an operator's
 recon_trace session open, logging once a second whether it's still alive:
@@ -191,6 +196,22 @@ python3 scripts/mcp_call.py _build/prod/rel/otp_debug_mcp/bin/otp_debug_mcp "[
 tail -1 /tmp/status.log   # operator_trace=alive
 ```
 
+An older OTP release runs best in Docker. Distribution through a published
+port works without epmd: the target listens on a fixed port, and the tool
+connects to that port without listening itself:
+
+```sh
+docker run -d --rm --name otp26 -p 9100:9100 erlang:26-slim \
+  erl -noinput -name old@127.0.0.1 -setcookie testcookie -erl_epmd_port 9100 \
+  -eval 'spawn(fun() -> timer:apply_interval(100, queue, new, []), receive after infinity -> ok end end).'
+ERL_FLAGS="-erl_epmd_port 9100 -dist_listen false" python3 scripts/mcp_call.py \
+  _build/prod/rel/otp_debug_mcp/bin/otp_debug_mcp '[
+  ["connect", {"node": "old@127.0.0.1", "cookie": "testcookie"}],
+  ["diagnose", {}],
+  ["trace_calls", {"module": "queue", "function": "new", "max_events": 4}]
+]'
+```
+
 ## Status / TODO
 
 Open items:
@@ -201,8 +222,6 @@ Open items:
       recon injection and tracing show up in diffs)
 - [ ] Print pids in the target's own `<0.x.y>` form in tool output
 - [ ] Exit with status 0 (not 1) when the client closes stdin
-- [ ] trace_calls: on OTP 27+, trace in an isolated `trace:session_create`
-      session so other tracing on the node is never touched
 - [ ] ExUnit tests against a disposable target node (`peer` module)
 - [ ] Verify against a target on another machine (firewalls, epmd port 4369,
       the distribution port range)
