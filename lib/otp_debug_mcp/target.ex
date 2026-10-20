@@ -305,10 +305,21 @@ defmodule OtpDebugMcp.Target do
       end
 
     case :net_kernel.start(name, %{name_domain: name_domain, hidden: true}) do
-      {:ok, _} -> :ok
-      {:error, reason} -> {:error, {:distribution_failed, reason}}
+      {:ok, _} ->
+        # Our node's own cookie guards connections to it, which it never
+        # needs. It would otherwise be ~/.erlang.cookie or, in a release, the
+        # cookie generated at build time, which anyone with a copy of the
+        # release has. Each target's cookie is set separately.
+        Node.set_cookie(random_cookie())
+        :ok
+
+      {:error, reason} ->
+        {:error, {:distribution_failed, reason}}
     end
   end
+
+  defp random_cookie,
+    do: 24 |> :crypto.strong_rand_bytes() |> Base.encode32(padding: false) |> String.to_atom()
 
   defp host(target), do: target |> Atom.to_string() |> String.split("@") |> List.last()
 

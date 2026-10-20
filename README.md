@@ -13,7 +13,9 @@ introspection primitives, but an encoded diagnostic playbook in the spirit of
 ## Design
 
 - **Hidden-node attach.** The server joins the target over Erlang distribution
-  as a hidden node, so it requires **zero changes to the target application**:
+  as a hidden node that accepts no connections itself (no listening port,
+  nothing registered with epmd, and a random cookie of its own), so it
+  requires **zero changes to the target application**:
   no dependency, no plug, no redeploy. It works on anything running on the
   BEAM (Erlang, Elixir, Gleam, LFE), unlike in-app servers such as Tidewave
   or extools.
@@ -249,7 +251,7 @@ connects to that port without listening itself:
 docker run -d --rm --name otp26 -p 9100:9100 erlang:26-slim \
   erl -noinput -name old@127.0.0.1 -setcookie testcookie -erl_epmd_port 9100 \
   -eval 'spawn(fun() -> timer:apply_interval(100, queue, new, []), receive after infinity -> ok end end).'
-ERL_FLAGS="-erl_epmd_port 9100 -dist_listen false" python3 scripts/mcp_call.py \
+ERL_FLAGS="-erl_epmd_port 9100" python3 scripts/mcp_call.py \
   _build/prod/rel/otp_debug_mcp/bin/otp_debug_mcp '[
   ["connect", {"node": "old@127.0.0.1", "cookie": "testcookie"}],
   ["diagnose", {}],

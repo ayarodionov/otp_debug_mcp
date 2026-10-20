@@ -27,9 +27,10 @@ the AI provider.
   ```
 
 - **The cookie.**
-- **Nothing inbound to the tool.** It only makes outgoing connections, so it
-  doesn't need to listen. Run it with `-dist_listen false` (see
-  [Passing VM flags](#passing-vm-flags-to-the-server)) and it opens no port.
+- **Nothing inbound to the tool.** It only makes outgoing connections, so
+  the release starts its node with `-dist_listen false`: it opens no port
+  and registers nothing with epmd. Its own cookie is also random on every
+  start; only the targets' cookies are ever used.
 
 ## Keeping the cookie out of the conversation
 
@@ -73,7 +74,7 @@ On your machine:
 ssh -N -L 9100:127.0.0.1:9100 prod-host
 ```
 
-and run the server with `ERL_FLAGS="-erl_epmd_port 9100 -dist_listen false"`.
+and run the server with `ERL_FLAGS="-erl_epmd_port 9100"`.
 `-erl_epmd_port` makes it dial port 9100 directly instead of asking epmd,
 so `connect` to `app@127.0.0.1` reaches the target through the tunnel.
 This was tested without the SSH hop, against a target configured as
@@ -108,7 +109,7 @@ and the flags, in the server's MCP configuration:
 
 ```json
 "env": {
-  "ERL_FLAGS": "-proto_dist inet_tls -ssl_dist_optfile /path/tool_ssl_dist.conf -dist_listen false"
+  "ERL_FLAGS": "-proto_dist inet_tls -ssl_dist_optfile /path/tool_ssl_dist.conf"
 }
 ```
 
@@ -146,11 +147,11 @@ cookie:
       "args": ["start"],
       "env": {
         "OTP_DEBUG_MCP_COOKIE": "...",
-        "ERL_FLAGS": "-dist_listen false"
+        "ERL_FLAGS": "-erl_epmd_port 9100"
       }
     }
   }
 }
 ```
 
-or with `claude mcp add -e ERL_FLAGS="-dist_listen false" -e OTP_DEBUG_MCP_COOKIE=... otp-debug -- /path/to/bin/otp_debug_mcp start`.
+or with `claude mcp add -e ERL_FLAGS="-erl_epmd_port 9100" -e OTP_DEBUG_MCP_COOKIE=... otp-debug -- /path/to/bin/otp_debug_mcp start`.

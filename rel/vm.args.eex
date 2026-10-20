@@ -1,0 +1,6 @@
+## The VM's flags for the release.
+
+## The server connects out to target nodes and never needs connections in,
+## so its node doesn't listen for any: nothing can connect to it, whatever
+## cookie it has.
+-dist_listen false

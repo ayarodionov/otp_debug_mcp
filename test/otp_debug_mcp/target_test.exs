@@ -27,6 +27,22 @@ defmodule OtpDebugMcp.TargetTest do
       assert {:ok, _} = Target.connect(Atom.to_string(target.node), nil)
     end
 
+    test "our own node's cookie is random, not ~/.erlang.cookie" do
+      target = start_target()
+      {:ok, _} = TestTarget.connect(target)
+
+      ours = Atom.to_string(Node.get_cookie())
+      assert byte_size(ours) >= 32
+
+      case File.read(Path.join(System.user_home!(), ".erlang.cookie")) do
+        {:ok, home} -> assert String.trim(home) != ours
+        {:error, _} -> :ok
+      end
+
+      # The target's own cookie is set for it alone.
+      assert :erlang.get_cookie(target.node) == String.to_atom(target.cookie)
+    end
+
     test "fails with a wrong cookie" do
       target = start_target()
 
