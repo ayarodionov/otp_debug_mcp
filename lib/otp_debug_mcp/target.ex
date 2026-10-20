@@ -110,6 +110,11 @@ defmodule OtpDebugMcp.Target do
   def handle_call({:connect, node_str, cookie}, _from, state) do
     target = String.to_atom(node_str)
 
+    # An existing connection would make Node.connect succeed whatever the
+    # cookie, so a wrong cookie would be reported as connected (and break
+    # the next reconnect). Start over so the cookie is always checked.
+    if target in Node.list(:hidden), do: Node.disconnect(target)
+
     with :ok <- ensure_distribution(target),
          :ok <- set_cookie(target, cookie),
          true <- Node.connect(target) || {:error, :connection_failed} do
