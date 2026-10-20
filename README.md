@@ -21,10 +21,14 @@ introspection primitives, but an encoded diagnostic playbook in the spirit of
   knowledge from twenty `process_info` round-trips.
 - **recon injected at connect time, only where missing.** recon's object
   code is loaded into the target over rpc, so recon-quality introspection
-  works even on nodes that never shipped it. If the target has its own
-  recon, that copy is used as-is and never loaded over: replacing a loaded
-  module and later purging it would kill processes running it, such as an
-  operator's `recon_trace` session. `connect` reports which recon is in use.
+  works even on nodes that never shipped it. A target on an older OTP
+  release than the tool can't load its compiled code, so there recon is
+  compiled on the target from its abstract code (this needs the target's
+  `compiler` application, which Elixir releases always include). If the
+  target has its own recon, that copy is used as-is and never loaded over:
+  replacing a loaded module and later purging it would kill processes
+  running it, such as an operator's `recon_trace` session. `connect` reports
+  which recon is in use.
 - **Safe by default.** Tracing goes through `recon_trace` (hard caps on event
   count and duration); every rpc has a timeout; arbitrary `remote_eval` is
   disabled unless `OTP_DEBUG_MCP_ALLOW_EVAL=true`.

@@ -14,7 +14,12 @@ defmodule OtpDebugMcp.MixProject do
 
   defp releases do
     [
-      otp_debug_mcp: [include_executables_for: [:unix]]
+      otp_debug_mcp: [
+        include_executables_for: [:unix],
+        # Keep debug_info: recon is compiled from it on targets running an
+        # older OTP release, which can't load our compiled code.
+        strip_beams: [keep: ["Dbgi"]]
+      ]
     ]
   end
 

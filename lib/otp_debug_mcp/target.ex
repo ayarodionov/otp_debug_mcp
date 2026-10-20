@@ -10,7 +10,9 @@ defmodule OtpDebugMcp.Target do
 
   At connect time we inject recon's object code into the target
   (`:code.load_binary/3` over rpc), so all recon-based checks run *on the
-  target* even though the target never declared recon as a dependency.
+  target* even though the target never declared recon as a dependency. A
+  target on an older OTP release than ours can't load our compiled code, so
+  there recon is compiled on the target from its abstract code.
 
   All remote calls go through `rpc/4`, which enforces a timeout so a stuck
   target can never hang an MCP tool call indefinitely.
@@ -21,8 +23,9 @@ defmodule OtpDebugMcp.Target do
 
   @rpc_timeout 5_000
   @recon_modules [:recon, :recon_alloc, :recon_lib, :recon_map, :recon_rec, :recon_trace]
+  @injected_marker :otp_debug_mcp_injected
 
-  defstruct node: nil, connected: false
+  defstruct node: nil, connected: false, recon: nil
 
   # -- Client API --------------------------------------------------------------
 
@@ -52,10 +55,7 @@ defmodule OtpDebugMcp.Target do
       {:ok, target} ->
         case with_stderr_group_leader(fn -> :rpc.call(target, mod, fun, args, timeout) end) do
           {:badrpc, {:EXIT, {:undef, [{m, f, a, _} | _]}}} when m in @recon_modules ->
-            {:error,
-             "#{m}:#{f}/#{length(a)} is not available in the target's own recon " <>
-               "version, which is used as-is so that its running recon sessions " <>
-               "are left untouched. Other checks still work."}
+            {:error, missing_recon_message(m, f, length(a))}
 
           {:badrpc, reason} ->
             {:error, {:badrpc, reason}}
@@ -63,6 +63,23 @@ defmodule OtpDebugMcp.Target do
           result ->
             {:ok, result}
         end
+    end
+  end
+
+  @doc "Why a recon function is undefined on the target, given how recon got there."
+  def missing_recon_message(m, f, arity) do
+    case GenServer.call(__MODULE__, :recon) do
+      %{source: "unavailable", reason: reason} ->
+        "#{m}:#{f}/#{arity} is not available: #{reason}"
+
+      %{source: "target"} ->
+        "#{m}:#{f}/#{arity} is not available in the target's own recon version, " <>
+          "which is used as-is so that its running recon sessions are left " <>
+          "untouched. Other checks still work."
+
+      _ ->
+        "#{m}:#{f}/#{arity} is not available on the target, although recon was " <>
+          "injected. Call connect again to re-inject it."
     end
   end
 
@@ -98,7 +115,7 @@ defmodule OtpDebugMcp.Target do
          true <- Node.connect(target) || {:error, :connection_failed} do
       recon = inject_recon(target)
       Logger.info("connected to #{target} (hidden), recon: #{inspect(recon)}")
-      {:reply, {:ok, %{recon: recon}}, %{state | node: target, connected: true}}
+      {:reply, {:ok, %{recon: recon}}, %{state | node: target, connected: true, recon: recon}}
     else
       # Keep the previous target only if a mode switch didn't drop it.
       {:error, _} = err ->
@@ -106,6 +123,8 @@ defmodule OtpDebugMcp.Target do
         {:reply, err, state}
     end
   end
+
+  def handle_call(:recon, _from, state), do: {:reply, state.recon, state}
 
   def handle_call(:target, _from, %{connected: false} = state),
     do: {:reply, {:error, :not_connected}, state}
@@ -116,9 +135,9 @@ defmodule OtpDebugMcp.Target do
         {:reply, {:ok, node}, state}
 
       Node.connect(node) ->
-        inject_recon(node)
-        Logger.info("reconnected to #{node}")
-        {:reply, {:ok, node}, state}
+        recon = inject_recon(node)
+        Logger.info("reconnected to #{node}, recon: #{inspect(recon)}")
+        {:reply, {:ok, node}, %{state | recon: recon}}
 
       true ->
         {:reply, {:error, {:connection_lost, node}}, state}
@@ -202,15 +221,21 @@ defmodule OtpDebugMcp.Target do
   defp inject_recon(target) do
     _ = Application.load(:recon)
 
-    injected =
+    missing =
       for mod <- Application.spec(:recon, :modules) || [],
           :rpc.call(target, :code, :which, [mod], @rpc_timeout) == :non_existing,
-          {^mod, bin, file} <- [:code.get_object_code(mod)] do
-        :rpc.call(target, :code, :load_binary, [mod, file, bin], @rpc_timeout)
-        mod
-      end
+          do: mod
 
-    ours = %{source: "injected", version: to_string(Application.spec(:recon, :vsn))}
+    case load_recon(target, missing) do
+      {:ok, how} -> describe_recon(target, missing, how)
+      {:error, reason} -> %{source: "unavailable", reason: reason}
+    end
+  end
+
+  defp describe_recon(target, injected, how) do
+    ours =
+      %{source: "injected", version: to_string(Application.spec(:recon, :vsn))}
+      |> Map.merge(if how == :compiled, do: %{compiled_on_target: true}, else: %{})
 
     # A target that depends on recon has the application loaded (releases
     # load every app); our injection loads bare modules only.
@@ -225,11 +250,105 @@ defmodule OtpDebugMcp.Target do
         %{source: "target", version: to_string(vsn), injected_missing_modules: injected}
 
       # Present without its application: injected by an earlier connect.
-      :rpc.call(target, :recon, :module_info, [:md5], @rpc_timeout) == :recon.module_info(:md5) ->
+      injected_by_us?(target) ->
         ours
 
       true ->
         %{source: "target", version: "unknown", injected_missing_modules: injected}
     end
+  end
+
+  defp injected_by_us?(target) do
+    case :rpc.call(target, :recon, :module_info, [], @rpc_timeout) do
+      info when is_list(info) ->
+        info[:md5] == :recon.module_info(:md5) or
+          Keyword.has_key?(info[:attributes] || [], @injected_marker)
+
+      _ ->
+        false
+    end
+  end
+
+  # Code compiled by a newer OTP generally can't be loaded by an older one
+  # (OTP 28's atom table encoding is unreadable to OTP 26, for one). So for
+  # an older target, recon is compiled *there*, from the abstract code in
+  # our copy's debug_info, with the target's own compiler. Compiled modules
+  # get a marker attribute (@injected_marker) so a later connect recognizes
+  # them as ours.
+
+  defp load_recon(_target, []), do: {:ok, :none}
+
+  defp load_recon(target, modules) do
+    with {:ok, how} <- load_method(target) do
+      Enum.reduce_while(modules, {:ok, how}, fn mod, acc ->
+        case load_module(target, mod, how) do
+          :ok -> {:cont, acc}
+          {:error, reason} -> {:halt, {:error, "could not load #{mod} into the target: #{reason}"}}
+        end
+      end)
+    end
+  end
+
+  defp load_method(target) do
+    ours = :erlang.system_info(:otp_release) |> to_string()
+    theirs = :rpc.call(target, :erlang, :system_info, [:otp_release], @rpc_timeout) |> to_string()
+
+    cond do
+      otp_major(theirs) >= otp_major(ours) ->
+        {:ok, :loaded}
+
+      :rpc.call(target, :code, :which, [:compile], @rpc_timeout) != :non_existing ->
+        {:ok, :compiled}
+
+      true ->
+        {:error,
+         "the target runs OTP #{theirs}, older than this tool's OTP #{ours}, so recon has " <>
+           "to be compiled on the target, but it has no compiler application. Checks " <>
+           "that need recon fail; the others work."}
+    end
+  end
+
+  # "26" -> 26; pre-OTP 17 names like "R16B03" sort as older than anything.
+  defp otp_major(release) do
+    case Integer.parse(release) do
+      {n, _} -> n
+      :error -> 0
+    end
+  end
+
+  defp load_module(target, mod, :loaded) do
+    {^mod, bin, file} = :code.get_object_code(mod)
+    load_binary(target, mod, file, bin)
+  end
+
+  defp load_module(target, mod, :compiled) do
+    {^mod, bin, _file} = :code.get_object_code(mod)
+
+    with {:ok, {_, [debug_info: {:debug_info_v1, backend, data}]}} <-
+           :beam_lib.chunks(bin, [:debug_info]),
+         {:ok, forms} <- backend.debug_info(:erlang_v1, mod, data, []),
+         forms = add_marker(forms),
+         {:ok, ^mod, compiled} <-
+           :rpc.call(target, :compile, :forms, [forms, [:binary, :return_errors]], 15_000) do
+      load_binary(target, mod, ~c"#{mod}.erl", compiled)
+    else
+      {:error, :beam_lib, _} -> {:error, "this tool's copy has no debug_info to compile from"}
+      {:error, errors, _warnings} -> {:error, "compile failed: #{inspect(errors)}"}
+      other -> {:error, inspect(other)}
+    end
+  end
+
+  defp load_binary(target, mod, file, bin) do
+    case :rpc.call(target, :code, :load_binary, [mod, file, bin], @rpc_timeout) do
+      {:module, ^mod} -> :ok
+      other -> {:error, inspect(other)}
+    end
+  end
+
+  defp add_marker(forms) do
+    Enum.flat_map(forms, fn
+      {:attribute, anno, :module, _} = form -> [form, {:attribute, anno, @injected_marker, true}]
+      form -> [form]
+    end)
   end
 end
