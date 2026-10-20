@@ -11,7 +11,11 @@ defmodule OtpDebugMcp.Application do
           # stdio transport: Claude Code launches this process and speaks MCP
           # over stdin/stdout. Everything else must log to stderr only.
           # trace_calls may legitimately run for up to 60s.
-          [{OtpDebugMcp.Server, transport: :stdio, request_timeout: 90_000}]
+          [
+            {OtpDebugMcp.Server, transport: :stdio, request_timeout: 90_000},
+            {OtpDebugMcp.StdinWatcher,
+             Anubis.Server.Registry.transport_name(OtpDebugMcp.Server, :stdio)}
+          ]
         else
           []
         end

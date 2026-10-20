@@ -3,7 +3,8 @@
 Usage: mcp_smoke.py BINARY NODE [TRACE_MODULE]
 
 Exits non-zero on any non-JSON line on stdout, a tool error, a trace that
-returns no events, or a server that doesn't exit when stdin closes.
+returns no events, or a server that doesn't exit with status 0 when stdin
+closes.
 """
 import json
 import signal
@@ -95,6 +96,8 @@ t0 = time.time()
 try:
     proc.wait(timeout=15)
     print(f"exit after stdin close -> code {proc.returncode} in {time.time() - t0:.1f}s")
+    if proc.returncode != 0:
+        failures.append(f"server exited with status {proc.returncode} when stdin closed")
 except subprocess.TimeoutExpired:
     proc.kill()
     print("exit after stdin close -> HUNG, killed")
