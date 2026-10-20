@@ -43,7 +43,9 @@ defmodule OtpDebugMcp.Tools do
       )
 
       field(:cookie, :string,
-        description: "Erlang cookie. Omit to use this machine's ~/.erlang.cookie"
+        description:
+          "Erlang cookie. Omit to use the server's OTP_DEBUG_MCP_COOKIE if set, " <>
+            "else this machine's ~/.erlang.cookie"
       )
     end
 
@@ -67,7 +69,10 @@ defmodule OtpDebugMcp.Tools do
       Connection failed. Common causes: wrong cookie (check ~/.erlang.cookie \
       on the target host or the release's RELEASE_COOKIE); target not started \
       with a node name (--sname/--name); shortname vs longname mismatch; \
-      epmd not reachable.
+      epmd or the distribution port not reachable; the target uses TLS \
+      distribution and this server doesn't, or the other way round (both \
+      need -proto_dist inet_tls and an ssl_dist optfile; see \
+      docs/production.md).
       """
     end
   end

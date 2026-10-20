@@ -320,14 +320,21 @@ defmodule OtpDebugMcp.Target do
     if :net_kernel.longnames(), do: :longnames, else: :shortnames
   end
 
-  # Without an explicit cookie, use ~/.erlang.cookie (what `iex --sname` and
-  # `erl -sname` use). Releases have their own cookie: pass RELEASE_COOKIE.
+  # Without an explicit cookie, use OTP_DEBUG_MCP_COOKIE from the server's
+  # environment, which keeps a production cookie out of the agent's context,
+  # or else ~/.erlang.cookie (what `iex --sname` and `erl -sname` use).
   defp set_cookie(target, nil) do
-    path = Path.join(System.user_home!(), ".erlang.cookie")
+    case System.get_env("OTP_DEBUG_MCP_COOKIE") do
+      cookie when cookie not in [nil, ""] ->
+        set_cookie(target, cookie)
 
-    case File.read(path) do
-      {:ok, cookie} -> set_cookie(target, String.trim(cookie))
-      {:error, _} -> :ok
+      _ ->
+        path = Path.join(System.user_home!(), ".erlang.cookie")
+
+        case File.read(path) do
+          {:ok, cookie} -> set_cookie(target, String.trim(cookie))
+          {:error, _} -> :ok
+        end
     end
   end
 

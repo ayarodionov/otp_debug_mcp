@@ -19,6 +19,14 @@ defmodule OtpDebugMcp.TargetTest do
       assert {:ok, []} = Target.rpc(:erlang, :nodes, [])
     end
 
+    test "without a cookie argument, uses OTP_DEBUG_MCP_COOKIE" do
+      target = start_target()
+      System.put_env("OTP_DEBUG_MCP_COOKIE", target.cookie)
+      on_exit(fn -> System.delete_env("OTP_DEBUG_MCP_COOKIE") end)
+
+      assert {:ok, _} = Target.connect(Atom.to_string(target.node), nil)
+    end
+
     test "fails with a wrong cookie" do
       target = start_target()
 

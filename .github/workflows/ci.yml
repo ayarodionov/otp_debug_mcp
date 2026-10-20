@@ -33,6 +33,30 @@ jobs:
       - run: mix compile --warnings-as-errors
       - run: mix test
 
+  tls:
+    name: Tests over TLS distribution
+    runs-on: ubuntu-24.04
+    env:
+      MIX_ENV: test
+    steps:
+      - uses: actions/checkout@v7
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28"
+          elixir-version: "1.19"
+      - uses: actions/cache@v6
+        with:
+          path: |
+            deps
+            _build
+          key: mix-test-28-${{ hashFiles('mix.lock') }}
+      - run: mix deps.get
+      - run: mix compile
+      # Every node, the tests' and the peers' (through ERL_FLAGS), uses TLS.
+      - run: |
+          CONF=$(scripts/tls_dist_certs.sh "$RUNNER_TEMP/tls")
+          ERL_FLAGS="-proto_dist inet_tls -ssl_dist_optfile $CONF" mix test
+
   old-otp:
     name: OTP 26 target
     runs-on: ubuntu-24.04

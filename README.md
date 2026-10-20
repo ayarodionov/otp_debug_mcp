@@ -109,9 +109,14 @@ Notes:
   in the other mode switches modes, dropping the previous connection.
 - **Reconnects.** If the target restarts, the next tool call reconnects and
   re-injects recon. If it's down, tools report `connection_lost`.
-- **Cookie.** Without a `cookie` argument, `~/.erlang.cookie` is used, which
-  matches `iex --sname`/`erl -sname`. Mix releases generate their own cookie;
-  pass the target's `RELEASE_COOKIE` (or `releases/COOKIE`).
+- **Cookie.** Without a `cookie` argument, the server uses the
+  `OTP_DEBUG_MCP_COOKIE` environment variable if it's set, which keeps a
+  production cookie out of the conversation, and otherwise
+  `~/.erlang.cookie`, which matches `iex --sname`/`erl -sname`. Mix releases
+  generate their own cookie (`RELEASE_COOKIE`, or `releases/COOKIE`).
+- **Production nodes.** [docs/production.md](docs/production.md) covers
+  firewalls and fixed distribution ports, targets that listen only on
+  loopback (with an SSH tunnel recipe), and TLS distribution.
 - **Pids look the same everywhere.** Every tool prints the target's pids
   and ports the way the target itself does (`<0.107.0>`), matching trace
   output and `remote_eval`, and `process_info` accepts them as given.
@@ -165,9 +170,17 @@ for the targets is in `test/support/fixtures.ex`. Tests tagged `old_otp`
 need a node running an older OTP release, which the Docker recipe below
 provides; see `test/otp_debug_mcp/old_otp_test.exs`.
 
-CI (`.github/workflows/ci.yml`) runs the tests on OTP 27 and 28, the
-`old_otp` tests against an OTP 26 container, and the smoke test below
-against the built release.
+The whole suite also runs over TLS distribution, peers included, which
+adds a test that the target sees the connection as TLS:
+
+```sh
+CONF=$(scripts/tls_dist_certs.sh /tmp/tls)
+ERL_FLAGS="-proto_dist inet_tls -ssl_dist_optfile $CONF" mix test
+```
+
+CI (`.github/workflows/ci.yml`) runs the tests on OTP 27 and 28, again
+over TLS distribution, the `old_otp` tests against an OTP 26 container,
+and the smoke test below against the built release.
 
 `scripts/` holds an end-to-end check that drives the release over MCP stdio
 the way a client does, against a demo node with a real bug:
@@ -248,7 +261,5 @@ ERL_FLAGS="-erl_epmd_port 9100 -dist_listen false" python3 scripts/mcp_call.py \
 
 Open items:
 
-- [ ] Exit with status 0 (not 1) when the client closes stdin
 - [ ] Verify against a target on another machine (firewalls, epmd port 4369,
       the distribution port range)
-- [ ] TLS distribution + `inet_dist_use_interface` guidance for prod targets
