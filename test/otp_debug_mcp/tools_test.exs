@@ -140,6 +140,18 @@ defmodule OtpDebugMcp.ToolsTest do
       assert Enum.count(children, &(&1["type"] == "worker")) == 2
     end
 
+    test "shows each supervisor's name, strategy and restart history" do
+      assert {:ok, root} = call_tool_json(Tools.SupervisionTree, %{app: "fixture_app"})
+
+      assert %{"strategy" => "one_for_one", "kind" => "static", "restarts" => restarts} = root
+      assert %{"max_restarts" => 3, "max_seconds" => 5, "restarts_in_window" => 0} = restarts
+
+      pool = Enum.find(root["children"], &(&1["type"] == "supervisor"))
+
+      assert %{"name" => "OtpDebugMcp.Fixtures.Pool", "kind" => "dynamic", "restarts" => %{}} =
+               pool
+    end
+
     test "stops at the depth limit" do
       assert {:ok, %{"children" => children}} =
                call_tool_json(Tools.SupervisionTree, %{app: "fixture_app", depth: 1})

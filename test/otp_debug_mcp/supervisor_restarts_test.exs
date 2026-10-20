@@ -1,7 +1,9 @@
 defmodule OtpDebugMcp.SupervisorRestartsTest do
   use ExUnit.Case, async: false
 
-  alias OtpDebugMcp.{Checks, TestTarget}
+  import OtpDebugMcp.ToolCase
+
+  alias OtpDebugMcp.{Checks, TestTarget, Tools}
   alias OtpDebugMcp.Fixtures.{App, CrashSup}
 
   # Each test gets a fresh target, since restart history is the subject.
@@ -79,6 +81,27 @@ defmodule OtpDebugMcp.SupervisorRestartsTest do
 
     # Tools fall back to inspect() for terms JSON can't encode.
     assert is_binary(JSON.encode!(check()))
+  end
+
+  test "supervision_tree shows a restart where it happened", %{target: target} do
+    :ok = TestTarget.call(target, App, :start, [3])
+    :ok = TestTarget.call(target, :logger, :set_primary_config, [:level, :none])
+
+    [{_, worker, _, _} | _] =
+      TestTarget.call(target, DynamicSupervisor, :which_children, [OtpDebugMcp.Fixtures.Pool])
+
+    true = TestTarget.call(target, :erlang, :exit, [worker, :kill])
+    Process.sleep(100)
+
+    {:ok, root} = call_tool_json(Tools.SupervisionTree, %{app: "fixture_app"})
+    assert %{"restarts_in_window" => 0} = root["restarts"]
+
+    pool = Enum.find(root["children"], &(&1["name"] == "OtpDebugMcp.Fixtures.Pool"))
+
+    assert %{"restarts_in_window" => 1, "last_restart_seconds_ago" => ago, "at_limit" => false} =
+             pool["restarts"]
+
+    assert ago <= 1
   end
 
   test "reads a DynamicSupervisor's history and names its application", %{target: target} do

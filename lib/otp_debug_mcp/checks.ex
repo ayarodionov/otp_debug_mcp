@@ -120,6 +120,19 @@ defmodule OtpDebugMcp.Checks do
     || P <- erlang:processes(), {supervisor, M, _} <- [InitialCall(P)]]}.
   """
 
+  # One supervisor's restart history, given as Sup.
+  @restart_history ~S"""
+  Name =
+    case erlang:process_info(Sup, registered_name) of
+      {registered_name, N} when is_atom(N) -> N;
+      _ -> undefined
+    end,
+  case catch sys:get_state(Sup, 1000) of
+    {'EXIT', _} -> {Name, unresponsive};
+    St -> {Name, {erlang:monotonic_time(second), History(St)}}
+  end.
+  """
+
   # Restarts this recent count as happening now.
   @recent_s 60
   @sample_ms 2_000
@@ -379,6 +392,35 @@ defmodule OtpDebugMcp.Checks do
 
   @doc "Erlang funs InitialCall/1 and History/1, for code evaluated on the target."
   def supervisor_funs, do: @supervisor_funs
+
+  @doc """
+  The registered name, strategy and summarized restart history of
+  supervisor `sup`, for supervision_tree. Without the history if its state
+  can't be read as a supervisor's.
+  """
+  def restart_history(sup) do
+    case remote_eval(@supervisor_funs <> @restart_history, Sup: sup) do
+      {:ok, {name, history}} -> Map.merge(registered(name), history_fields(history))
+      _ -> %{}
+    end
+  end
+
+  defp registered(:undefined), do: %{}
+  defp registered(name), do: %{name: inspect(name)}
+
+  defp history_fields({now, {kind, strategy, intensity, period, restarts}}) do
+    %{kind: kind, strategy: strategy, restarts: restart_summary(now, intensity, period, restarts)}
+  end
+
+  defp history_fields(:unresponsive) do
+    %{
+      restarts:
+        "unavailable: the supervisor didn't answer within 1s, usually because " <>
+          "it is blocked starting a child whose init hangs"
+    }
+  end
+
+  defp history_fields(_), do: %{}
 
   @doc """
   A supervisor's restart history, as read by History/1, summarized. `now`

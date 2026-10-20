@@ -53,7 +53,7 @@ introspection primitives, but an encoded diagnostic playbook in the spirit of
 | `diagnose` | Full health battery, findings ranked worst-first |
 | `run_check` | One check: `message_queues`, `supervisor_restarts`, `binary_leak`, `memory_breakdown`, `process_count`, `atom_table`, `ets_tables`, `ports`, `schedulers`, `top_reductions` |
 | `process_info` | Deep-inspect one process: recon:info, an age estimate, its supervisor's restart history, optional `sys:get_state` |
-| `supervision_tree` | Render an application's supervision tree |
+| `supervision_tree` | Render an application's supervision tree, with each supervisor's strategy and restart history |
 | `trace_calls` | Rate-limited call tracing (isolated trace session on OTP 27+, recon_trace before) |
 | `snapshot` | Take / diff system snapshots — trends beat point-in-time numbers |
 | `remote_eval` | Arbitrary Erlang eval on the target (opt-in, off by default) |
@@ -249,7 +249,6 @@ ERL_FLAGS="-erl_epmd_port 9100 -dist_listen false" python3 scripts/mcp_call.py \
 Open items:
 
 - [ ] Checks: `recon_alloc` fragmentation check (memory held by allocators vs used)
-- [ ] supervision_tree: show each supervisor's restart history
 - [ ] Snapshot: discount the debugger's own footprint (atoms/code loaded by
       recon injection and tracing show up in diffs)
 - [ ] Exit with status 0 (not 1) when the client closes stdin

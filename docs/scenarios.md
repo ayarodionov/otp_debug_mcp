@@ -241,9 +241,11 @@ how it's actually put together at runtime.
 
 **What the agent does.** `supervision_tree` for each application, plus a
 `diagnose` baseline. Combined with the source (scenario 8), it can map
-runtime processes to modules and explain restart strategies. That's often
-quicker than reading the code alone, because the runtime shows what's
-actually started, including dynamic children.
+runtime processes to modules and explain restart strategies and limits,
+which the tree shows for every supervisor along with its recent restarts.
+That's often quicker than reading the code alone, because the runtime
+shows what's actually started, including dynamic children, and which parts
+have been restarting.
 
 ---
 

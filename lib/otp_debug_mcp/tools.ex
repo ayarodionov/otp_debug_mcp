@@ -209,10 +209,14 @@ defmodule OtpDebugMcp.Tools do
   end
 
   defmodule SupervisionTree do
-    @moduledoc "Render the supervision tree of one application on the target node."
+    @moduledoc """
+    Render the supervision tree of one application on the target node, with
+    each supervisor's strategy and restart history (restarts within its
+    max_seconds window, the last restart, and whether it is at its limit).
+    """
     use Anubis.Server.Component, type: :tool
 
-    alias OtpDebugMcp.{Target, Tools}
+    alias OtpDebugMcp.{Checks, Target, Tools}
 
     schema do
       field(:app, {:required, :string}, description: "OTP application name, e.g. my_app")
@@ -237,7 +241,9 @@ defmodule OtpDebugMcp.Tools do
     @max_children 50
 
     defp tree(pid, depth) do
-      Map.merge(%{supervisor: Format.inspect(pid)}, children(pid, depth))
+      %{supervisor: Format.inspect(pid)}
+      |> Map.merge(Checks.restart_history(pid))
+      |> Map.merge(children(pid, depth))
     end
 
     defp children(_pid, 0), do: %{children: "not expanded: depth limit reached"}
@@ -249,9 +255,13 @@ defmodule OtpDebugMcp.Tools do
             for {id, child, type, _mods} <- Enum.take(children, @max_children) do
               base = %{id: Format.inspect(id), pid: Format.inspect(child), type: type}
 
-              if type == :supervisor and is_pid(child),
-                do: Map.merge(base, children(child, depth - 1)),
-                else: base
+              if type == :supervisor and is_pid(child) do
+                base
+                |> Map.merge(Checks.restart_history(child))
+                |> Map.merge(children(child, depth - 1))
+              else
+                base
+              end
             end
 
           result = %{child_count: length(children), children: shown}

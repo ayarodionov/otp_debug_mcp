@@ -72,3 +72,6 @@ raw introspection when a purpose-built tool exists.
 - Process count climbing in diffs → process leak: spawned tasks/monitors
   never terminating; check `supervision_tree` for unexpectedly huge
   simple_one_for_one/DynamicSupervisor child counts.
+- `supervision_tree` shows each supervisor's restart history: the subtree
+  with recent restarts is where a crash loop lives, and its strategy says
+  what restarts with the crashing child (one_for_all: all its siblings).
