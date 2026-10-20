@@ -61,9 +61,11 @@ defmodule OtpDebugMcp.Tracer do
   Line = fun
     ({trace_ts, P, call, {Mod, Fun, Args}, TS}) ->
       Fmt("~s ~p ~tp:~tp(~ts)",
-          [Time(TS), P, Mod, Fun, lists:join(", ", [io_lib:format("~9999tP", [A, 10]) || A <- Args])]);
+          [Time(TS), P, Mod, Fun, lists:join(", ", [io_lib:format("~9999tP", [A, 20]) || A <- Args])]);
     ({trace_ts, P, return_from, {Mod, Fun, Arity}, R, TS}) ->
-      Fmt("~s ~p ~tp:~tp/~p --> ~9999tP", [Time(TS), P, Mod, Fun, Arity, R, 10]);
+      Fmt("~s ~p ~tp:~tp/~p --> ~9999tP", [Time(TS), P, Mod, Fun, Arity, R, 20]);
+    ({trace_ts, P, exception_from, {Mod, Fun, Arity}, {Class, Reason}, TS}) ->
+      Fmt("~s ~p ~tp:~tp/~p raised ~p:~9999tP", [Time(TS), P, Mod, Fun, Arity, Class, Reason, 20]);
     (_) ->
       skip
   end,
@@ -149,7 +151,8 @@ defmodule OtpDebugMcp.Tracer do
   def trace(module_str, function_str, max_events, duration_ms, opts \\ []) do
     mod = resolve_module(module_str)
     fun = if function_str, do: String.to_atom(function_str), else: :_
-    spec = {mod, fun, [{:_, [], [{:return_trace}]}]}
+    # exception_trace reports returns, like return_trace, and exceptions too.
+    spec = {mod, fun, [{:_, [], [{:exception_trace}]}]}
 
     with {:ok, true} <- Target.rpc(:code, :is_loaded, [mod]) |> loaded?(module_str),
          {:ok, target} <- Target.target(),
@@ -406,8 +409,9 @@ defmodule OtpDebugMcp.Tracer do
 
   defp chars(_other), do: nil
 
+  # recon_trace pretty-prints terms over several indented lines.
   defp truncate(line) do
-    line = String.trim(line)
+    line = line |> String.trim() |> String.replace(~r/\s*\n\s*/, " ")
 
     if String.length(line) > @max_line do
       String.slice(line, 0, @max_line) <> " …(truncated)"

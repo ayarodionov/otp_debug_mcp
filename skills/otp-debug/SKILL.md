@@ -23,6 +23,10 @@ raw introspection when a purpose-built tool exists.
    - Memory suspicion → `run_check(binary_leak)`, `run_check(ets_tables)`,
      then `snapshot(take)` → wait 30-60s of real load → `snapshot(diff)`.
      Only a growing delta proves a leak.
+   - Intermittent failures or crash reports → `run_check(supervisor_restarts)`:
+     its `restarting_children` carry the exit reason and stack trace (file
+     and line) when a child dies during the sample; then `trace_calls` on
+     the crashing function to see its arguments.
    - CPU suspicion → `run_check(schedulers)` first; OS CPU% lies about the
      BEAM (busy-wait). Only if schedulers are pegged, use `top_reductions`.
 4. **Confirm trends before concluding.** One snapshot is a guess; a diff is
@@ -55,6 +59,11 @@ raw introspection when a purpose-built tool exists.
   `String.to_atom`, `list_to_atom`, `binary_to_term` without `:safe`.
 - All schedulers ~1.0 → genuine CPU saturation. One scheduler pegged, rest
   idle → suspect a long-running NIF or a dirty-scheduler misconfiguration.
+- `supervisor_restarts` with recent restarts → a crash loop. Below
+  `max_restarts` it never fails over and shows up only as intermittent
+  errors; `at_limit` means one more crash takes the supervisor and its
+  siblings down. Restart churn also puts the supervisor at the top of
+  `top_reductions`; that's not a CPU problem.
 - Process count climbing in diffs → process leak: spawned tasks/monitors
   never terminating; check `supervision_tree` for unexpectedly huge
   simple_one_for_one/DynamicSupervisor child counts.

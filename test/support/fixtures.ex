@@ -139,3 +139,76 @@ defmodule OtpDebugMcp.Fixtures.App do
     {:ok, sup}
   end
 end
+
+defmodule OtpDebugMcp.Fixtures.Crasher do
+  @moduledoc "A GenServer that raises `ms` milliseconds after it starts, or never if nil."
+  use GenServer
+
+  def start_link(ms), do: GenServer.start_link(__MODULE__, ms)
+
+  @impl true
+  def init(nil), do: {:ok, nil}
+
+  def init(ms) do
+    Process.send_after(self(), :crash, ms)
+    {:ok, ms}
+  end
+
+  @impl true
+  def handle_info(:crash, _ms), do: raise(ArgumentError, "crash loop fixture")
+end
+
+defmodule OtpDebugMcp.Fixtures.CrashSup do
+  @moduledoc """
+  A registered supervisor of Crashers, given as `[{id, ms}]`, started under
+  a holder process so it outlives the peer.call that starts it. The
+  target's logging is turned off, since crash reports would flood the test
+  output.
+  """
+  alias OtpDebugMcp.Fixtures.Crasher
+
+  def start(name, children, opts) do
+    :logger.set_primary_config(:level, :none)
+    caller = self()
+
+    spawn(fn ->
+      specs = for {id, ms} <- children, do: Supervisor.child_spec({Crasher, ms}, id: id)
+      {:ok, _} = Supervisor.start_link(specs, [name: name, strategy: :one_for_one] ++ opts)
+      send(caller, :started)
+      Process.sleep(:infinity)
+    end)
+
+    receive do
+      :started -> :ok
+    after
+      5_000 -> {:error, :not_started}
+    end
+  end
+
+  @doc "Kill the child `id` of supervisor `name` and wait until it's restarted."
+  def kill_child(name, id) do
+    old = child_pid(name, id)
+    Process.exit(old, :kill)
+    wait_for_new_child(name, id, old, 100)
+  end
+
+  defp child_pid(name, id) do
+    Enum.find_value(Supervisor.which_children(name), fn
+      {^id, pid, _, _} when is_pid(pid) -> pid
+      _ -> nil
+    end)
+  end
+
+  defp wait_for_new_child(_name, _id, _old, 0), do: {:error, :not_restarted}
+
+  defp wait_for_new_child(name, id, old, n) do
+    case child_pid(name, id) do
+      pid when is_pid(pid) and pid != old ->
+        :ok
+
+      _ ->
+        Process.sleep(10)
+        wait_for_new_child(name, id, old, n - 1)
+    end
+  end
+end

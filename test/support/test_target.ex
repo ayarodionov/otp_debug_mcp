@@ -15,7 +15,9 @@ defmodule OtpDebugMcp.TestTarget do
     OtpDebugMcp.Fixtures.Mailbox,
     OtpDebugMcp.Fixtures.Operator,
     OtpDebugMcp.Fixtures.App,
-    OtpDebugMcp.Fixtures.Worker
+    OtpDebugMcp.Fixtures.Worker,
+    OtpDebugMcp.Fixtures.Crasher,
+    OtpDebugMcp.Fixtures.CrashSup
   ]
 
   defstruct [:peer, :node, :cookie, :name, :opts]

@@ -2,7 +2,7 @@ defmodule OtpDebugMcp.TracerTest do
   use ExUnit.Case, async: false
 
   alias OtpDebugMcp.{Target, TestTarget, Tracer}
-  alias OtpDebugMcp.Fixtures.{Operator, Ticker}
+  alias OtpDebugMcp.Fixtures.{CrashSup, Operator, Ticker}
 
   @ticker "OtpDebugMcp.Fixtures.Ticker"
 
@@ -24,6 +24,30 @@ defmodule OtpDebugMcp.TracerTest do
     on_exit(fn -> TestTarget.stop(target) end)
     {:ok, _} = TestTarget.connect(target)
     target
+  end
+
+  # A child that raises in handle_info 200ms after each start.
+  defp crashing_target do
+    target = TestTarget.start()
+    on_exit(fn -> TestTarget.stop(target) end)
+    opts = [max_restarts: 1_000, max_seconds: 5]
+    :ok = TestTarget.call(target, CrashSup, :start, [:crash_sup, [{:looper, 200}], opts])
+    {:ok, _} = TestTarget.connect(target)
+    target
+  end
+
+  defp assert_exception_event(backend) do
+    assert {:ok, %{events: events}} =
+             Tracer.trace("OtpDebugMcp.Fixtures.Crasher", "handle_info", 2, 5_000,
+               backend: backend
+             )
+
+    assert [call, raised] = events
+    assert call =~ "handle_info(crash"
+    assert raised =~ ~r/handle_info\/2 .*error/
+    assert raised =~ "'Elixir.ArgumentError'"
+    assert raised =~ "crash loop fixture"
+    refute raised =~ "\n"
   end
 
   defp timed(fun) do
@@ -78,6 +102,11 @@ defmodule OtpDebugMcp.TracerTest do
                Tracer.trace("No.Such.Module", nil, 5, 1_000)
     end
 
+    test "reports exceptions" do
+      crashing_target()
+      assert_exception_event(:auto)
+    end
+
     test "leaves an operator's recon_trace session on the same function running" do
       target = operator_target()
 
@@ -101,6 +130,11 @@ defmodule OtpDebugMcp.TracerTest do
       # Our own trace is fully gone, so a second one isn't refused.
       assert {:ok, %{events: [_ | _]}} =
                Tracer.trace(@ticker, "handle_info", 2, 5_000, backend: :recon_trace)
+    end
+
+    test "reports exceptions" do
+      crashing_target()
+      assert_exception_event(:recon_trace)
     end
 
     test "refuses while an operator's recon_trace session runs, unless forced" do

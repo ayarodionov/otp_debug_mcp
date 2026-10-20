@@ -14,6 +14,7 @@ defmodule OtpDebugMcp.Checks do
 
   @checks [
     :message_queues,
+    :supervisor_restarts,
     :binary_leak,
     :memory_breakdown,
     :process_count,
@@ -65,6 +66,130 @@ defmodule OtpDebugMcp.Checks do
       """)
     else
       err -> error_result(:message_queues, err)
+    end
+  end
+
+  # Every supervisor's restart history, read from its own state. Erlang
+  # supervisors (and Elixir's Supervisor) keep it in a #state{} record
+  # whose intensity, period and restarts fields have sat at positions 6-8
+  # for many OTP releases; DynamicSupervisor keeps it in its struct. Both
+  # record monotonic seconds, newest first, and both mark themselves with
+  # an '$initial_call' of {supervisor, Module, 1}, so one process scan
+  # finds them all, including supervisors outside any application.
+  @supervisors ~S"""
+  Now = erlang:monotonic_time(second),
+  InitialCall = fun(P) ->
+    try erlang:process_info(P, {dictionary, '$initial_call'}) of
+      {_, V} -> V;
+      _ -> undefined
+    catch error:badarg ->
+      %% {dictionary, Key} is OTP 26.2+.
+      case erlang:process_info(P, dictionary) of
+        {dictionary, D} -> proplists:get_value('$initial_call', D);
+        _ -> undefined
+      end
+    end
+  end,
+  History = fun
+    (St) when is_tuple(St), tuple_size(St) >= 8, element(1, St) =:= state,
+              is_integer(element(6, St)), is_integer(element(7, St)), is_list(element(8, St)) ->
+      {static, element(3, St), element(6, St), element(7, St), element(8, St)};
+    (#{restarts := R, max_restarts := I, max_seconds := Pe, strategy := S}) ->
+      {dynamic, S, I, Pe, R};
+    (_) ->
+      unknown
+  end,
+  Name = fun(P) ->
+    case erlang:process_info(P, registered_name) of
+      {registered_name, N} when is_atom(N) -> N;
+      _ -> P
+    end
+  end,
+  {Now,
+   [{P, M, Name(P), application:get_application(P),
+     case catch sys:get_state(P, 1000) of
+       {'EXIT', _} -> unresponsive;
+       St -> History(St)
+     end}
+    || P <- erlang:processes(), {supervisor, M, _} <- [InitialCall(P)]]}.
+  """
+
+  # Restarts this recent count as happening now.
+  @recent_s 60
+  @sample_ms 2_000
+  @max_sampled 10
+
+  def run(:supervisor_restarts) do
+    with {:ok, {now, sups}} <- remote_eval(@supervisors) do
+      restarted =
+        for {pid, mod, name, app, {kind, strategy, intensity, period, [_ | _] = restarts}} <- sups do
+          in_window = Enum.count(restarts, &(&1 >= now - period))
+
+          %{
+            supervisor: inspect(name),
+            pid: inspect(pid),
+            application: app_name(app),
+            kind: kind,
+            strategy: strategy,
+            max_restarts: intensity,
+            max_seconds: period,
+            restarts_in_window: in_window,
+            last_restart_seconds_ago: now - Enum.max(restarts),
+            at_limit: in_window > 0 and in_window >= intensity,
+            raw_pid: pid
+          }
+          # Every Supervisor.start_link(children, opts) has this callback
+          # module, so it says nothing.
+          |> Map.merge(if mod == Supervisor.Default, do: %{}, else: %{module: inspect(mod)})
+        end
+        |> Enum.sort_by(& &1.last_restart_seconds_ago)
+
+      unresponsive = for {_pid, _, name, _, :unresponsive} <- sups, do: inspect(name)
+
+      recent = Enum.filter(restarted, &(&1.last_restart_seconds_ago <= @recent_s))
+      sampled = sample_restarting_children(recent)
+
+      findings =
+        Enum.map(restarted, fn s ->
+          s |> Map.delete(:raw_pid) |> Map.merge(Map.get(sampled, s.raw_pid, %{}))
+        end)
+
+      status =
+        cond do
+          Enum.any?(restarted, & &1.at_limit) -> :critical
+          recent != [] or unresponsive != [] -> :warning
+          true -> :ok
+        end
+
+      result(
+        :supervisor_restarts,
+        status,
+        %{
+          supervisors_scanned: length(sups),
+          restarted: findings,
+          unresponsive: unresponsive
+        },
+        """
+        Supervisors that have restarted children, from each supervisor's own
+        restart history (only recent restarts are kept, so this shows current
+        activity, not totals), most recent first. restarts_in_window counts
+        restarts within the last max_seconds; at_limit means one more crash in
+        that window makes the supervisor give up: it terminates all its children
+        and exits, so its parent restarts it or, at the top, the application
+        stops. A loop that stays below the limit is the worse case: nothing
+        ever fails over, and it shows up only as intermittent errors from
+        whatever depends on the child. A last restart within #{@recent_s}s
+        means a crash loop may be running now: restarting_children names the
+        children whose pid changed during a #{div(@sample_ms, 1000)}s sample,
+        with the exit_reason (including the stack trace, with file and line)
+        of each one seen to die. Next step: read the code at the top of that
+        stack; trace_calls on the crashing function shows its arguments.
+        Unresponsive supervisors didn't answer within 1s, usually because
+        they are blocked starting a child whose init hangs.
+        """
+      )
+    else
+      err -> error_result(:supervisor_restarts, err)
     end
   end
 
@@ -246,6 +371,93 @@ defmodule OtpDebugMcp.Checks do
   end
 
   # -- Helpers -------------------------------------------------------------------
+
+  defp app_name({:ok, app}), do: app
+  defp app_name(_), do: nil
+
+  # Which children are restarting: compare each supervisor's children in
+  # two samples taken @sample_ms apart. Dynamic supervisors' children have
+  # no stable ids to compare by.
+  defp sample_restarting_children(sups) do
+    {static, dynamic} =
+      sups
+      |> Enum.take(@max_sampled)
+      |> Enum.split_with(&(&1.kind == :static and &1.strategy != :simple_one_for_one))
+
+    before = Map.new(static, &{&1.raw_pid, children_by_id(&1.raw_pid)})
+
+    # Monitoring a child is passive, and a child that dies during the sample
+    # tells us why, stack trace included.
+    monitors =
+      for {_sup, children} <- before,
+          children,
+          {_id, {pid, _}} <- children,
+          is_pid(pid),
+          into: %{},
+          do: {Process.monitor(pid), pid}
+
+    if static != [], do: Process.sleep(@sample_ms)
+    reasons = collect_exit_reasons(monitors)
+
+    sampled =
+      Map.new(static, fn sup ->
+        changed = changed(before[sup.raw_pid], children_by_id(sup.raw_pid), reasons)
+        {sup.raw_pid, %{restarting_children: changed}}
+      end)
+
+    Enum.reduce(dynamic, sampled, fn sup, acc ->
+      Map.put(acc, sup.raw_pid, %{
+        restarting_children: "not sampled: a dynamic supervisor's children have no stable ids"
+      })
+    end)
+  end
+
+  defp children_by_id(sup) do
+    case Target.rpc(:supervisor, :which_children, [sup], 2_000) do
+      {:ok, children} when is_list(children) ->
+        Map.new(children, fn {id, pid, _type, mods} -> {id, {pid, mods}} end)
+
+      _ ->
+        nil
+    end
+  end
+
+  defp collect_exit_reasons(monitors) do
+    Map.new(monitors, fn {ref, pid} ->
+      receive do
+        {:DOWN, ^ref, :process, _, reason} -> {pid, reason}
+      after
+        0 ->
+          Process.demonitor(ref, [:flush])
+          {pid, nil}
+      end
+    end)
+  end
+
+  defp changed(nil, _, _), do: "unavailable: which_children failed"
+  defp changed(_, nil, _), do: "unavailable: which_children failed"
+
+  defp changed(before, now, reasons) do
+    for {id, {pid, mods}} <- now,
+        {old_pid, _} = Map.get(before, id, {nil, nil}),
+        pid != old_pid or pid == :restarting do
+      %{
+        id: inspect(id),
+        modules: inspect(mods),
+        pid_before: inspect(old_pid),
+        pid_now: inspect(pid)
+      }
+      |> Map.merge(exit_reason(reasons[old_pid]))
+    end
+  end
+
+  defp exit_reason(nil), do: %{}
+
+  # In Erlang syntax and depth-limited, like trace lines.
+  defp exit_reason(reason) do
+    text = :io_lib.format(~c"~9999tP", [reason, 20], chars_limit: 1500)
+    %{exit_reason: IO.chardata_to_string(text)}
+  end
 
   @doc "Evaluate an Erlang expression string on the target. Used by checks and the eval tool."
   def remote_eval(code) do

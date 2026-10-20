@@ -51,7 +51,7 @@ introspection primitives, but an encoded diagnostic playbook in the spirit of
 |---|---|
 | `connect` | Attach to a node (name + optional cookie) as a hidden node |
 | `diagnose` | Full health battery, findings ranked worst-first |
-| `run_check` | One check: `message_queues`, `binary_leak`, `memory_breakdown`, `process_count`, `atom_table`, `ets_tables`, `ports`, `schedulers`, `top_reductions` |
+| `run_check` | One check: `message_queues`, `supervisor_restarts`, `binary_leak`, `memory_breakdown`, `process_count`, `atom_table`, `ets_tables`, `ports`, `schedulers`, `top_reductions` |
 | `process_info` | Deep-inspect one process (recon:info + optional `sys:get_state`) |
 | `supervision_tree` | Render an application's supervision tree |
 | `trace_calls` | Rate-limited call tracing (isolated trace session on OTP 27+, recon_trace before) |
@@ -60,7 +60,11 @@ introspection primitives, but an encoded diagnostic playbook in the spirit of
 
 The diagnostic checks live in `lib/otp_debug_mcp/checks.ex`; each returns
 structured findings plus an interpretation telling the agent what the numbers
-mean and what to look at next.
+mean and what to look at next. `supervisor_restarts` finds crash loops: it
+reads every supervisor's own restart history (including `DynamicSupervisor`),
+flags supervisors one crash away from giving up, and names the children
+restarting right now, with the exit reason and stack trace of one seen to
+die.
 
 ## Setup
 
@@ -133,7 +137,8 @@ Claude follows the playbook automatically.
 example prompt, the tools involved, and what to watch out for:
 
 - **Production problems:** memory growth, slow requests, high CPU, stuck
-  processes and call timeouts, approaching system limits, incident triage
+  processes and call timeouts, approaching system limits, crash loops and
+  intermittent failures, incident triage
 - **Understanding and verifying:** tracing a runtime problem to the code in
   your repo, seeing what a function really receives, verifying a fix or a
   deploy, watching a load test, learning an unfamiliar system
@@ -201,7 +206,13 @@ an OTP 26 target, recon is compiled on the target and every check works,
 and `trace_calls` refuses while `dbg` is tracing unless forced. Not yet
 verified: a target on another machine.
 
-`scripts/recon_target.exs` is that last scenario: a node with an operator's
+`scripts/crash_loop_target.exs` runs a payment gateway in a crash loop
+just under its supervisor's restart limit, failing intermittently. Asked
+*"payments@yourhost fails payments now and then; find out why"*, a headless
+Claude Code session got the cause and the file and line from `diagnose`
+alone.
+
+`scripts/recon_target.exs` is the scenario of a target with its own recon: a node with an operator's
 recon_trace session open, logging once a second whether it's still alive:
 
 ```sh
@@ -234,7 +245,6 @@ ERL_FLAGS="-erl_epmd_port 9100 -dist_listen false" python3 scripts/mcp_call.py \
 
 Open items:
 
-- [ ] Checks: supervisor restart-intensity check (scan logger/SASL reports)
 - [ ] Checks: `recon_alloc` fragmentation check (memory held by allocators vs used)
 - [ ] Snapshot: discount the debugger's own footprint (atoms/code loaded by
       recon injection and tracing show up in diffs)
