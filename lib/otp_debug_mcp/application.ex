@@ -5,14 +5,16 @@ defmodule OtpDebugMcp.Application do
 
   @impl true
   def start(_type, _args) do
-    children = [
-      OtpDebugMcp.Target,
-      OtpDebugMcp.Snapshotter,
-      # stdio transport: Claude Code launches this process and speaks MCP
-      # over stdin/stdout. Everything else must log to stderr only.
-      # trace_calls may legitimately run for up to 60s.
-      {OtpDebugMcp.Server, transport: :stdio, request_timeout: 90_000}
-    ]
+    children =
+      [OtpDebugMcp.Target, OtpDebugMcp.Snapshotter] ++
+        if Application.get_env(:otp_debug_mcp, :mcp_server, true) do
+          # stdio transport: Claude Code launches this process and speaks MCP
+          # over stdin/stdout. Everything else must log to stderr only.
+          # trace_calls may legitimately run for up to 60s.
+          [{OtpDebugMcp.Server, transport: :stdio, request_timeout: 90_000}]
+        else
+          []
+        end
 
     opts = [strategy: :one_for_one, name: OtpDebugMcp.Supervisor]
     Supervisor.start_link(children, opts)

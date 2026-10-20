@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: Tests (OTP ${{ matrix.otp }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # Isolated trace sessions, which the tests expect, need OTP 27+.
+        otp: ["27", "28"]
+    env:
+      MIX_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ matrix.otp }}
+          elixir-version: "1.19"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: mix-test-${{ matrix.otp }}-${{ hashFiles('mix.lock') }}
+      - run: mix deps.get
+      - run: mix format --check-formatted
+      - run: mix compile --warnings-as-errors
+      - run: mix test
+
+  old-otp:
+    name: OTP 26 target
+    runs-on: ubuntu-24.04
+    env:
+      MIX_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28"
+          elixir-version: "1.19"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: mix-test-28-${{ hashFiles('mix.lock') }}
+      - run: mix deps.get
+      - run: mix compile
+      # The target listens on a fixed distribution port, published from the
+      # container; the tests connect to it without epmd and without listening.
+      - name: Start an OTP 26 target
+        run: |
+          docker run -d --name otp26 -p 9100:9100 erlang:26-slim \
+            erl -noinput -name old@127.0.0.1 -setcookie testcookie -erl_epmd_port 9100 \
+            -eval 'spawn(fun() -> timer:apply_interval(100, queue, new, []), receive after infinity -> ok end end).'
+          sleep 5
+      - run: mix test --only old_otp
+        env:
+          OLD_OTP_NODE: old@127.0.0.1
+          OLD_OTP_COOKIE: testcookie
+          ERL_FLAGS: -erl_epmd_port 9100 -dist_listen false
+      - name: Target log
+        if: always()
+        run: docker logs otp26
+
+  release:
+    name: Release over MCP stdio
+    runs-on: ubuntu-24.04
+    env:
+      MIX_ENV: prod
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28"
+          elixir-version: "1.19"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: mix-prod-28-${{ hashFiles('mix.lock') }}
+      - run: mix deps.get
+      - run: mix release --overwrite
+      - name: Smoke test against the buggy demo node
+        run: |
+          elixir --sname shop --no-halt scripts/buggy_target.exs &
+          sleep 5
+          python3 scripts/mcp_smoke.py _build/prod/rel/otp_debug_mcp/bin/otp_debug_mcp \
+            "shop@$(hostname -s)" Shop.PriceCache

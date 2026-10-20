@@ -287,8 +287,11 @@ defmodule OtpDebugMcp.Target do
     with {:ok, how} <- load_method(target) do
       Enum.reduce_while(modules, {:ok, how}, fn mod, acc ->
         case load_module(target, mod, how) do
-          :ok -> {:cont, acc}
-          {:error, reason} -> {:halt, {:error, "could not load #{mod} into the target: #{reason}"}}
+          :ok ->
+            {:cont, acc}
+
+          {:error, reason} ->
+            {:halt, {:error, "could not load #{mod} into the target: #{reason}"}}
         end
       end)
     end

@@ -1,5 +1,7 @@
 # otp_debug_mcp
 
+[![CI](https://github.com/ayarodionov/otp_debug_mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/ayarodionov/otp_debug_mcp/actions/workflows/ci.yml)
+
 > **Status: early.** Tested end to end from Claude Code against live nodes,
 > but young: expect rough edges. See the TODO list below.
 
@@ -143,6 +145,22 @@ doesn't support yet.
 
 ## Testing
 
+```sh
+mix test
+```
+
+The tests start real target nodes with OTP's `peer` module and connect to
+them over distribution as hidden nodes, exactly as against a live system:
+connection and name modes, reconnects, recon injection, every check,
+snapshots, both tracing backends, and the tools' JSON output. Fixture code
+for the targets is in `test/support/fixtures.ex`. Tests tagged `old_otp`
+need a node running an older OTP release, which the Docker recipe below
+provides; see `test/otp_debug_mcp/old_otp_test.exs`.
+
+CI (`.github/workflows/ci.yml`) runs the tests on OTP 27 and 28, the
+`old_otp` tests against an OTP 26 container, and the smoke test below
+against the built release.
+
 `scripts/` holds an end-to-end check that drives the release over MCP stdio
 the way a client does, against a demo node with a real bug:
 
@@ -222,7 +240,6 @@ Open items:
       recon injection and tracing show up in diffs)
 - [ ] Print pids in the target's own `<0.x.y>` form in tool output
 - [ ] Exit with status 0 (not 1) when the client closes stdin
-- [ ] ExUnit tests against a disposable target node (`peer` module)
 - [ ] Verify against a target on another machine (firewalls, epmd port 4369,
       the distribution port range)
 - [ ] TLS distribution + `inet_dist_use_interface` guidance for prod targets

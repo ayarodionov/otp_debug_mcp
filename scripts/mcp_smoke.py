@@ -1,4 +1,10 @@
-"""Drive the otp_debug_mcp release over stdio JSON-RPC and check the protocol."""
+"""Drive the otp_debug_mcp release over stdio JSON-RPC and check the protocol.
+
+Usage: mcp_smoke.py BINARY NODE [TRACE_MODULE]
+
+Exits non-zero on any non-JSON line on stdout, a tool error, a trace that
+returns no events, or a server that doesn't exit when stdin closes.
+"""
 import json
 import signal
 import subprocess
@@ -8,6 +14,7 @@ import time
 signal.signal(signal.SIGALRM, lambda *_: sys.exit("WATCHDOG: no progress in 90s"))
 signal.alarm(90)
 binary, target = sys.argv[1], sys.argv[2]
+failures = []
 proc = subprocess.Popen([binary, "start"], stdin=subprocess.PIPE,
                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
@@ -46,7 +53,10 @@ def call(i, name, args):
     send({"jsonrpc": "2.0", "id": i, "method": "tools/call",
           "params": {"name": name, "arguments": args}})
     r = recv(i)["result"]
-    return r.get("isError", False), r["content"][0]["text"]
+    err, text = r.get("isError", False), r["content"][0]["text"]
+    if err:
+        failures.append(f"{name}: {text[:300]}")
+    return err, text
 
 
 err, text = call(3, "connect", {"node": target})
@@ -70,6 +80,8 @@ if len(sys.argv) > 3:
     err, text = call(5, "trace_calls", {"module": sys.argv[3], "max_events": 3})
     events = [] if err else json.loads(text)["events"]
     print("trace_calls ->", "ERROR " + text if err else f"{len(events)} events")
+    if not err and not events:
+        failures.append("trace_calls: no events")
     for e in events:
         print("   ", e.strip()[:110])
     call(6, "snapshot", {"action": "take"})
@@ -86,3 +98,8 @@ try:
 except subprocess.TimeoutExpired:
     proc.kill()
     print("exit after stdin close -> HUNG, killed")
+    failures.append("server did not exit when stdin closed")
+
+if failures:
+    sys.exit("FAILED:\n  " + "\n  ".join(failures))
+print("OK")

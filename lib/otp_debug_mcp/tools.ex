@@ -292,7 +292,7 @@ defmodule OtpDebugMcp.Tools do
              params[:function],
              (params[:max_events] || 20) |> min(100) |> max(1),
              (params[:duration_ms] || 10_000) |> min(60_000) |> max(100),
-             params[:force] == true
+             force: params[:force] == true
            ) do
         {:ok, result} ->
           Tools.json_response(frame, Map.reject(result, fn {_k, v} -> is_nil(v) end))

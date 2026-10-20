@@ -1,0 +1,98 @@
+defmodule OtpDebugMcp.TestTarget do
+  @moduledoc """
+  Disposable target nodes for tests, started with `:peer`.
+
+  The peer is controlled over its standard io, not over distribution, so
+  the test node isn't connected to it in advance: `OtpDebugMcp.Target`
+  connects as a hidden node exactly as it does against a real system.
+  Each peer gets its own cookie, and the fixture modules in
+  `OtpDebugMcp.Fixtures` are loaded into it. recon is on its code path
+  only with `recon: true`.
+  """
+
+  @fixtures [
+    OtpDebugMcp.Fixtures.Ticker,
+    OtpDebugMcp.Fixtures.Mailbox,
+    OtpDebugMcp.Fixtures.Operator,
+    OtpDebugMcp.Fixtures.App,
+    OtpDebugMcp.Fixtures.Worker
+  ]
+
+  defstruct [:peer, :node, :cookie, :name, :opts]
+
+  @doc """
+  Start a target node. Options: `:name`, `:cookie`, `longnames: true` (as
+  `name@127.0.0.1`), `recon: true` (recon application loaded, as in a
+  release that depends on it).
+  """
+  def start(opts \\ []) do
+    name =
+      Keyword.get_lazy(opts, :name, fn -> :"target_#{System.unique_integer([:positive])}" end)
+
+    cookie =
+      Keyword.get_lazy(opts, :cookie, fn -> "cookie_#{System.unique_integer([:positive])}" end)
+
+    paths = elixir_paths() ++ if(opts[:recon], do: [lib_ebin(:recon)], else: [])
+
+    peer_opts = %{
+      name: name,
+      connection: :standard_io,
+      args: [~c"-setcookie", ~c"#{cookie}"] ++ Enum.flat_map(paths, &[~c"-pa", &1])
+    }
+
+    peer_opts =
+      if opts[:longnames],
+        do: Map.merge(peer_opts, %{longnames: true, host: ~c"127.0.0.1"}),
+        else: peer_opts
+
+    {:ok, peer, node} = :peer.start(peer_opts)
+    target = %__MODULE__{peer: peer, node: node, cookie: cookie, name: name, opts: opts}
+
+    {:ok, _} = call(target, :application, :ensure_all_started, [:elixir])
+    if opts[:recon], do: :ok = call(target, :application, :load, [:recon])
+
+    for mod <- @fixtures do
+      {^mod, bin, file} = :code.get_object_code(mod)
+      {:module, ^mod} = call(target, :code, :load_binary, [mod, file, bin])
+    end
+
+    target
+  end
+
+  @doc "Stop the target and wait until our node has noticed it's gone."
+  def stop(%__MODULE__{peer: peer, node: node}) do
+    :peer.stop(peer)
+    wait_until(fn -> node not in Node.list(:hidden) end)
+  end
+
+  @doc "Stop the target and start a fresh one with the same name and cookie."
+  def restart(%__MODULE__{} = target) do
+    stop(target)
+    start(Keyword.merge(target.opts, name: target.name, cookie: target.cookie))
+  end
+
+  @doc "Run `mod.fun(args)` on the target, over the peer control channel."
+  def call(%__MODULE__{peer: peer}, mod, fun, args), do: :peer.call(peer, mod, fun, args, 15_000)
+
+  @doc "Connect `OtpDebugMcp.Target` to the target."
+  def connect(%__MODULE__{node: node, cookie: cookie}),
+    do: OtpDebugMcp.Target.connect(Atom.to_string(node), cookie)
+
+  def wait_until(fun, timeout \\ 5_000) do
+    cond do
+      fun.() ->
+        :ok
+
+      timeout <= 0 ->
+        raise "condition not met in time"
+
+      true ->
+        Process.sleep(50)
+        wait_until(fun, timeout - 50)
+    end
+  end
+
+  defp elixir_paths, do: Enum.map([:elixir, :logger], &lib_ebin/1)
+
+  defp lib_ebin(app), do: app |> :code.lib_dir() |> Path.join("ebin") |> to_charlist()
+end

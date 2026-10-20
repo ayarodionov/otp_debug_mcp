@@ -133,21 +133,42 @@ defmodule OtpDebugMcp.Tracer do
           stopped_other_tracing: term()
         }
 
-  @spec trace(String.t(), String.t() | nil, pos_integer(), pos_integer(), boolean()) ::
+  @doc """
+  Trace calls to `module_str` (and `function_str`, or all its functions).
+
+  Options:
+
+    * `:force` - on the recon_trace backend, trace even though other
+      tracing is active, ending it (default `false`)
+    * `:backend` - `:auto` (default) picks an isolated trace session when
+      the target supports it, else recon_trace; `:recon_trace` forces the
+      latter, for testing it on newer nodes
+  """
+  @spec trace(String.t(), String.t() | nil, pos_integer(), pos_integer(), keyword()) ::
           {:ok, result()} | {:error, term()}
-  def trace(module_str, function_str, max_events, duration_ms, force \\ false) do
+  def trace(module_str, function_str, max_events, duration_ms, opts \\ []) do
     mod = resolve_module(module_str)
     fun = if function_str, do: String.to_atom(function_str), else: :_
     spec = {mod, fun, [{:_, [], [{:return_trace}]}]}
 
     with {:ok, true} <- Target.rpc(:code, :is_loaded, [mod]) |> loaded?(module_str),
          {:ok, target} <- Target.target(),
-         {:ok, sessions?} <- Checks.remote_eval(@sessions_probe) do
-      if sessions? do
-        session_trace(target, spec, max_events, duration_ms)
-      else
-        recon_trace(target, spec, max_events, duration_ms, force)
+         {:ok, backend} <- backend(Keyword.get(opts, :backend, :auto)) do
+      case backend do
+        :session ->
+          session_trace(target, spec, max_events, duration_ms)
+
+        :recon_trace ->
+          recon_trace(target, spec, max_events, duration_ms, Keyword.get(opts, :force, false))
       end
+    end
+  end
+
+  defp backend(:recon_trace), do: {:ok, :recon_trace}
+
+  defp backend(:auto) do
+    with {:ok, sessions?} <- Checks.remote_eval(@sessions_probe) do
+      {:ok, if(sessions?, do: :session, else: :recon_trace)}
     end
   end
 
@@ -162,7 +183,8 @@ defmodule OtpDebugMcp.Tracer do
       Owner: self()
     ]
 
-    with {:ok, events} <- run_holder(target, @session_holder, bindings, collector, spec, duration_ms) do
+    with {:ok, events} <-
+           run_holder(target, @session_holder, bindings, collector, spec, duration_ms) do
       {:ok, %{events: events, backend: "isolated trace session", stopped_other_tracing: nil}}
     end
   end
@@ -181,7 +203,8 @@ defmodule OtpDebugMcp.Tracer do
         Owner: self()
       ]
 
-      with {:ok, events} <- run_holder(target, @recon_holder, bindings, collector, spec, duration_ms) do
+      with {:ok, events} <-
+             run_holder(target, @recon_holder, bindings, collector, spec, duration_ms) do
         {:ok, %{events: events, backend: "recon_trace", stopped_other_tracing: other}}
       end
     end
