@@ -25,6 +25,11 @@ defmodule OtpDebugMcp.Target do
   @recon_modules [:recon, :recon_alloc, :recon_lib, :recon_map, :recon_rec, :recon_trace]
   @injected_marker :otp_debug_mcp_injected
   @spawns :otp_debug_mcp_target_spawns
+  # The debugger's own footprint on the target: atoms known to exist there,
+  # functions already called there, and what first-time calls added.
+  @known_atoms :otp_debug_mcp_known_atoms
+  @called :otp_debug_mcp_called
+  @footprint :otp_debug_mcp_footprint
 
   defstruct node: nil, connected: false, recon: nil
 
@@ -115,6 +120,78 @@ defmodule OtpDebugMcp.Target do
   end
 
   @doc """
+  Run `fun`, which sends `term` to the target, and log what it adds there.
+
+  Atoms are never freed, and sending a term creates its atoms on the
+  receiving node; calling a module for the first time may load it. So the
+  first time `signature` is used, or when `term` holds atoms we haven't
+  sent before, the target's atom count and code memory are read before and
+  after, and the difference is logged for `footprint_since/1`, which
+  snapshot diffs subtract. Repeat calls cost nothing extra.
+  """
+  def with_footprint(target, signature, term, fun) do
+    new_atoms =
+      Enum.reject(atoms_in(term, MapSet.new()), &:ets.member(@known_atoms, {target, &1}))
+
+    first_call? = :ets.insert_new(@called, {{target, signature}})
+
+    if first_call? or new_atoms != [] do
+      before = footprint_reading(target)
+      result = fun.()
+      for atom <- new_atoms, do: :ets.insert(@known_atoms, {{target, atom}})
+      record_footprint(before, footprint_reading(target))
+      result
+    else
+      fun.()
+    end
+  end
+
+  @doc """
+  What this tool added to the target since monotonic time `since_us`:
+  `%{atoms: count, code_bytes: bytes}`.
+  """
+  def footprint_since(since_us) do
+    :ets.select(@footprint, [
+      {{{:"$1", :_}, :"$2", :"$3"}, [{:>=, :"$1", since_us}], [{{:"$2", :"$3"}}]}
+    ])
+    |> Enum.reduce(%{atoms: 0, code_bytes: 0}, fn {atoms, code}, acc ->
+      %{atoms: acc.atoms + atoms, code_bytes: acc.code_bytes + code}
+    end)
+  end
+
+  defp footprint_reading(target) do
+    with atoms when is_integer(atoms) <- raw_call(target, :erlang, :system_info, [:atom_count]),
+         code when is_integer(code) <- raw_call(target, :erlang, :memory, [:code]) do
+      {atoms, code}
+    else
+      _ -> nil
+    end
+  end
+
+  defp record_footprint({atoms0, code0}, {atoms1, code1})
+       when atoms1 > atoms0 or code1 > code0 do
+    key = {System.monotonic_time(:microsecond), make_ref()}
+    :ets.insert(@footprint, {key, max(atoms1 - atoms0, 0), max(code1 - code0, 0)})
+  end
+
+  defp record_footprint(_, _), do: :ok
+
+  defp atoms_in(atom, acc) when is_atom(atom), do: MapSet.put(acc, atom)
+  defp atoms_in([head | tail], acc), do: atoms_in(tail, atoms_in(head, acc))
+  defp atoms_in(tuple, acc) when is_tuple(tuple), do: atoms_in(Tuple.to_list(tuple), acc)
+
+  defp atoms_in(map, acc) when is_map(map),
+    do: map |> :maps.to_list() |> atoms_in(acc)
+
+  defp atoms_in(_other, acc), do: acc
+
+  # A target that restarted has none of the atoms or code we added.
+  defp forget_footprint(target) do
+    :ets.match_delete(@known_atoms, {{target, :_}})
+    :ets.match_delete(@called, {{target, :_}})
+  end
+
+  @doc """
   Run `fun` with this process's group leader set to stderr.
 
   Remote processes (rpc workers, remote spawns) send their io to the caller's
@@ -137,6 +214,11 @@ defmodule OtpDebugMcp.Target do
   @impl true
   def init(_opts) do
     :ets.new(@spawns, [:named_table, :public, :ordered_set, write_concurrency: true])
+
+    for table <- [@known_atoms, @called],
+        do: :ets.new(table, [:named_table, :public, :set, read_concurrency: true])
+
+    :ets.new(@footprint, [:named_table, :public, :ordered_set])
     {:ok, %__MODULE__{}}
   end
 
@@ -148,6 +230,7 @@ defmodule OtpDebugMcp.Target do
     # cookie, so a wrong cookie would be reported as connected (and break
     # the next reconnect). Start over so the cookie is always checked.
     if target in Node.list(:hidden), do: Node.disconnect(target)
+    forget_footprint(target)
 
     with :ok <- ensure_distribution(target),
          :ok <- set_cookie(target, cookie),
@@ -175,6 +258,7 @@ defmodule OtpDebugMcp.Target do
         {:reply, {:ok, node}, state}
 
       Node.connect(node) ->
+        forget_footprint(node)
         recon = inject_recon(node)
         Logger.info("reconnected to #{node}, recon: #{inspect(recon)}")
         {:reply, {:ok, node}, %{state | recon: recon}}
@@ -381,8 +465,14 @@ defmodule OtpDebugMcp.Target do
     end
   end
 
-  # Every rpc spawns a process on the target to run it.
   defp call(target, mod, fun, args, timeout) do
+    with_footprint(target, {mod, fun, length(args)}, [mod, fun | args], fn ->
+      raw_call(target, mod, fun, args, timeout)
+    end)
+  end
+
+  # Every rpc spawns a process on the target to run it.
+  defp raw_call(target, mod, fun, args, timeout \\ @rpc_timeout) do
     note_spawns()
     :rpc.call(target, mod, fun, args, timeout)
   end

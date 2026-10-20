@@ -55,7 +55,7 @@ introspection primitives, but an encoded diagnostic playbook in the spirit of
 | `process_info` | Deep-inspect one process: recon:info, an age estimate, its supervisor's restart history, optional `sys:get_state` |
 | `supervision_tree` | Render an application's supervision tree, with each supervisor's strategy and restart history |
 | `trace_calls` | Rate-limited call tracing (isolated trace session on OTP 27+, recon_trace before) |
-| `snapshot` | Take / diff system snapshots — trends beat point-in-time numbers |
+| `snapshot` | Take / diff system snapshots — trends beat point-in-time numbers; diffs exclude the atoms and code this tool itself adds |
 | `remote_eval` | Arbitrary Erlang eval on the target (opt-in, off by default) |
 
 The diagnostic checks live in `lib/otp_debug_mcp/checks.ex`; each returns
@@ -248,8 +248,6 @@ ERL_FLAGS="-erl_epmd_port 9100 -dist_listen false" python3 scripts/mcp_call.py \
 
 Open items:
 
-- [ ] Snapshot: discount the debugger's own footprint (atoms/code loaded by
-      recon injection and tracing show up in diffs)
 - [ ] Exit with status 0 (not 1) when the client closes stdin
 - [ ] Verify against a target on another machine (firewalls, epmd port 4369,
       the distribution port range)

@@ -22,8 +22,12 @@ defmodule OtpDebugMcp.Snapshotter do
 
   @doc "Capture a snapshot, store it, return a summary."
   def take do
+    # Before capturing, so the capture's own footprint is in the window.
+    started_us = System.monotonic_time(:microsecond)
+
     case capture() do
       {:ok, snap} ->
+        snap = Map.put(snap, :started_us, started_us)
         Agent.update(__MODULE__, fn _ -> snap end)
 
         {:ok,
@@ -47,27 +51,41 @@ defmodule OtpDebugMcp.Snapshotter do
 
       old ->
         with {:ok, new} <- capture() do
+          ours = Target.footprint_since(old.started_us)
+
           {:ok,
            %{
              window_seconds: DateTime.diff(new.at, old.at),
              memory_delta_mb:
                Map.new(new.memory, fn {k, v} ->
-                 {k, Float.round((v - (old.memory[k] || 0)) / 1_048_576, 2)}
+                 delta = v - (old.memory[k] || 0) - code_footprint(k, ours)
+                 {k, Float.round(delta / 1_048_576, 2)}
                end),
              process_count_delta: new.process_count - old.process_count,
              port_count_delta: new.port_count - old.port_count,
-             atom_count_delta: new.atom_count - old.atom_count,
+             atom_count_delta: new.atom_count - old.atom_count - ours.atoms,
              total_message_queue_delta: new.total_mq - old.total_mq,
+             excluded_footprint_of_this_tool: %{
+               atoms: ours.atoms,
+               code_mb: Float.round(ours.code_bytes / 1_048_576, 2)
+             },
              interpretation: """
              Positive deltas that keep growing across repeated diffs indicate \
              leaks: memory_delta.binary → refc binary leak (run binary_leak \
              check); process_count_delta → process leak; atom_count_delta > 0 \
-             is always worth investigating (atoms are never freed).\
+             is always worth investigating (atoms are never freed). The deltas \
+             exclude what this tool itself added to the node in the window \
+             (atoms it sent, code it caused to load), shown in \
+             excluded_footprint_of_this_tool.\
              """
            }}
         end
     end
   end
+
+  # Loaded code counts in erlang:memory's code, system and total.
+  defp code_footprint(key, ours) when key in [:code, :system, :total], do: ours.code_bytes
+  defp code_footprint(_key, _ours), do: 0
 
   defp capture do
     with {:ok, memory} <- Target.rpc(:erlang, :memory, []),

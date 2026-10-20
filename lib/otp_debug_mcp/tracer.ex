@@ -218,38 +218,55 @@ defmodule OtpDebugMcp.Tracer do
   # before returning: for recon_trace, that means its clear() has run, so our
   # own trace is gone before the next call probes for other tracing.
   defp run_holder(target, code, bindings, collector, {mod, fun, _}, duration_ms) do
-    # A list of bindings is an orddict to erl_eval, so it must be sorted.
-    # The holder; recon_trace spawns its tracer and formatter too.
-    Target.note_spawns(if code == @recon_holder, do: 3, else: 1)
-
-    {holder, ref} =
-      Target.with_stderr_group_leader(fn ->
-        Node.spawn_monitor(target, :erl_eval, :exprs, [parse!(code), Enum.sort(bindings)])
-      end)
-
-    receive do
-      {:trace_started, ^holder, 0} ->
+    case start_holder(target, code, bindings) do
+      {:started, holder, ref, 0} ->
         stop_and_wait(holder, ref)
 
         {:error,
          "no function in #{inspect(mod)} matches #{fun}. The module is loaded on the " <>
            "target, so check the function name."}
 
-      {:trace_started, ^holder, _matched} ->
+      {:started, holder, ref, _matched} ->
         events = await_events(collector, ref, duration_ms)
         stop_and_wait(holder, ref)
         {:ok, events}
 
-      {:DOWN, ^ref, :process, _, {:undef, [{m, f, a, _} | _]}} when m == :recon_trace ->
+      {:down, {:undef, [{:recon_trace = m, f, a, _} | _]}} ->
         {:error, Target.missing_recon_message(m, f, length(a))}
 
-      {:DOWN, ^ref, :process, _, reason} ->
+      {:down, reason} ->
         {:error, {:trace_failed, reason}}
-    after
-      5_000 ->
+
+      {:timeout, holder, ref} ->
         stop_and_wait(holder, ref)
         {:error, "the trace did not start within 5s"}
     end
+  end
+
+  # Spawning the holder sends its code and bindings, whose atoms (variable
+  # names, the traced function) the target may not have yet, and starting
+  # the trace may load modules there, so it counts toward the footprint.
+  defp start_holder(target, code, bindings) do
+    exprs = parse!(code)
+    # A list of bindings is an orddict to erl_eval, so it must be sorted.
+    bindings = Enum.sort(bindings)
+
+    Target.with_footprint(target, {:trace_holder, :erlang.phash2(code)}, [exprs, bindings], fn ->
+      # The holder; recon_trace spawns its tracer and formatter too.
+      Target.note_spawns(if code == @recon_holder, do: 3, else: 1)
+
+      {holder, ref} =
+        Target.with_stderr_group_leader(fn ->
+          Node.spawn_monitor(target, :erl_eval, :exprs, [exprs, bindings])
+        end)
+
+      receive do
+        {:trace_started, ^holder, matched} -> {:started, holder, ref, matched}
+        {:DOWN, ^ref, :process, _, reason} -> {:down, reason}
+      after
+        5_000 -> {:timeout, holder, ref}
+      end
+    end)
   end
 
   defp stop_and_wait(holder, ref) do

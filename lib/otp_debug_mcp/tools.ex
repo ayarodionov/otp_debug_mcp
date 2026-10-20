@@ -336,6 +336,7 @@ defmodule OtpDebugMcp.Tools do
     Capture a system snapshot, or diff against the previous one. Growth over
     time (memory, process count, queue lengths, ETS sizes) is far more
     diagnostic than any point-in-time number: take a snapshot, wait, diff.
+    Diffs exclude the atoms and code this tool itself adds to the node.
     """
     use Anubis.Server.Component, type: :tool
 
