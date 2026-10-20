@@ -10,7 +10,7 @@ defmodule OtpDebugMcp.Server do
 
   use Anubis.Server,
     name: "otp-debug",
-    version: "0.1.0",
+    version: Mix.Project.config()[:version],
     capabilities: [:tools]
 
   alias OtpDebugMcp.Tools

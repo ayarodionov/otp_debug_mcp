@@ -1,0 +1,92 @@
+name: Release
+
+# On a v* tag: build the release on each platform, smoke-test it there,
+# and publish a GitHub release with the tarballs and checksums. Run it by
+# hand to build and test without publishing.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The oldest supported runners, for the widest glibc compatibility.
+          - os: ubuntu-22.04
+            target: linux-x86_64
+          - os: ubuntu-22.04-arm
+            target: linux-arm64
+          - os: macos-14
+            target: macos-arm64
+    env:
+      MIX_ENV: prod
+    steps:
+      - uses: actions/checkout@v7
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28"
+          elixir-version: "1.19"
+      - run: mix deps.get
+      - run: mix release
+
+      - name: Smoke test the release
+        run: |
+          elixir --sname shop --no-halt scripts/buggy_target.exs &
+          sleep 5
+          python3 scripts/mcp_smoke.py _build/prod/rel/otp_debug_mcp/bin/otp_debug_mcp \
+            "shop@$(hostname -s)" Shop.PriceCache
+
+      - name: Show the libraries the runtime links to
+        run: |
+          crypto=$(find _build/prod/rel/otp_debug_mcp/lib -name 'crypto.so' | head -1)
+          if command -v otool >/dev/null; then otool -L "$crypto"; else ldd "$crypto"; fi
+
+      - name: Package
+        run: |
+          vsn=$(cat _build/prod/rel/otp_debug_mcp/releases/start_erl.data | cut -d' ' -f2)
+          name="otp_debug_mcp-$vsn-${{ matrix.target }}"
+          cp -R README.md LICENSE CHANGELOG.md docs skills _build/prod/rel/otp_debug_mcp/
+          tar -C _build/prod/rel -czf "$name.tar.gz" otp_debug_mcp
+          shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
+          echo "PACKAGE=$name" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.PACKAGE }}
+          path: |
+            ${{ env.PACKAGE }}.tar.gz
+            ${{ env.PACKAGE }}.tar.gz.sha256
+
+  publish:
+    name: Publish the GitHub release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Check the tag matches the version in mix.exs
+        run: |
+          vsn=$(sed -n 's/^ *version: "\(.*\)",$/\1/p' mix.exs)
+          test "v$vsn" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME, mix.exs $vsn"; exit 1; }
+
+      - name: Release notes from the changelog
+        run: |
+          awk -v v="## ${GITHUB_REF_NAME#v}" '$0 == v {on = 1; next} /^## / {on = 0} on' \
+            CHANGELOG.md > notes.md
+          test -s notes.md
+
+      - run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --notes-file notes.md
+        env:
+          GH_TOKEN: ${{ github.token }}
