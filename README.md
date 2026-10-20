@@ -112,6 +112,9 @@ Notes:
 - **Cookie.** Without a `cookie` argument, `~/.erlang.cookie` is used, which
   matches `iex --sname`/`erl -sname`. Mix releases generate their own cookie;
   pass the target's `RELEASE_COOKIE` (or `releases/COOKIE`).
+- **Pids look the same everywhere.** Every tool prints the target's pids
+  and ports the way the target itself does (`<0.107.0>`), matching trace
+  output and `remote_eval`, and `process_info` accepts them as given.
 - **stdout is the protocol stream.** All logging goes to stderr, and IO from
   the target during rpc calls and traces is redirected away from stdout.
 
@@ -248,7 +251,6 @@ Open items:
 - [ ] Checks: `recon_alloc` fragmentation check (memory held by allocators vs used)
 - [ ] Snapshot: discount the debugger's own footprint (atoms/code loaded by
       recon injection and tracing show up in diffs)
-- [ ] Print pids in the target's own `<0.x.y>` form in tool output
 - [ ] Exit with status 0 (not 1) when the client closes stdin
 - [ ] Verify against a target on another machine (firewalls, epmd port 4369,
       the distribution port range)

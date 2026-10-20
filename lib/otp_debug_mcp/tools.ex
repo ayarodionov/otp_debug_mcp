@@ -6,6 +6,7 @@ defmodule OtpDebugMcp.Tools do
   """
 
   alias Anubis.Server.Response
+  alias OtpDebugMcp.Format
 
   @doc "Encode any term as a JSON tool response (falling back to inspect for non-JSON terms)."
   def json_response(frame, term) do
@@ -13,7 +14,7 @@ defmodule OtpDebugMcp.Tools do
       try do
         JSON.encode!(term)
       rescue
-        _ -> inspect(term, pretty: true, limit: 200)
+        _ -> Format.inspect(term, pretty: true, limit: 200)
       end
 
     {:reply, Response.text(Response.tool(), text), frame}
@@ -24,7 +25,7 @@ defmodule OtpDebugMcp.Tools do
       cond do
         is_binary(reason) -> reason
         is_map(reason) -> JSON.encode!(reason)
-        true -> inspect(reason)
+        true -> Format.inspect(reason)
       end
 
     {:reply, Response.error(Response.tool(), message), frame}
@@ -142,7 +143,7 @@ defmodule OtpDebugMcp.Tools do
           if params[:include_state] do
             case Target.rpc(:sys, :get_state, [pid, 2_000], 3_000) do
               {:ok, s} ->
-                inspect(s, limit: 100, pretty: true)
+                Format.inspect(s, limit: 100, pretty: true)
 
               {:error, {:badrpc, {:EXIT, {:timeout, _}}}} ->
                 "unavailable: the process did not answer sys:get_state within 2s. " <>
@@ -150,13 +151,13 @@ defmodule OtpDebugMcp.Tools do
                   "or its mailbox is backed up, so system messages wait in line too."
 
               {:error, e} ->
-                "unavailable: #{inspect(e)}"
+                "unavailable: #{Format.inspect(e)}"
             end
           end
 
         Tools.json_response(frame, %{
           pid: pid_str,
-          info: inspect(info, limit: :infinity, pretty: true),
+          info: Format.inspect(info, limit: :infinity, pretty: true),
           state: state
         })
       else
@@ -164,10 +165,10 @@ defmodule OtpDebugMcp.Tools do
       end
     end
 
-    # Pids arrive in three shapes: "#PID<39943.107.0>" as printed in our own
-    # tool output (node index from *our* side), "<39943.107.0>", or
-    # "<0.107.0>" as the target itself prints it. Only the last form must be
-    # parsed on the target; the others are already valid locally.
+    # Pids arrive as "<0.107.0>", as the target and our tools print them
+    # (see OtpDebugMcp.Format), which must be parsed on the target, or in
+    # our node's form, "#PID<39943.107.0>" or "<39943.107.0>", from an
+    # agent that got one elsewhere, which is already valid locally.
     defp resolve("#PID" <> rest), do: resolve(rest)
 
     defp resolve("<0." <> _ = pid_str) do
@@ -221,7 +222,7 @@ defmodule OtpDebugMcp.Tools do
     @max_children 50
 
     defp tree(pid, depth) do
-      Map.merge(%{supervisor: inspect(pid)}, children(pid, depth))
+      Map.merge(%{supervisor: Format.inspect(pid)}, children(pid, depth))
     end
 
     defp children(_pid, 0), do: %{children: "not expanded: depth limit reached"}
@@ -231,7 +232,7 @@ defmodule OtpDebugMcp.Tools do
         {:ok, children} when is_list(children) ->
           shown =
             for {id, child, type, _mods} <- Enum.take(children, @max_children) do
-              base = %{id: inspect(id), pid: inspect(child), type: type}
+              base = %{id: Format.inspect(id), pid: Format.inspect(child), type: type}
 
               if type == :supervisor and is_pid(child),
                 do: Map.merge(base, children(child, depth - 1)),
@@ -245,7 +246,7 @@ defmodule OtpDebugMcp.Tools do
             else: result
 
         other ->
-          %{children: "unavailable: #{inspect(other)}"}
+          %{children: "unavailable: #{Format.inspect(other)}"}
       end
     end
   end
@@ -369,7 +370,7 @@ defmodule OtpDebugMcp.Tools do
     end
 
     # The input is Erlang, so answer in Erlang syntax too (depth-limited).
-    defp erlang_term(term), do: IO.chardata_to_string(:io_lib.format(~c"~tP", [term, 40]))
+    defp erlang_term(term), do: Format.erlang(~c"~tP", [term, 40])
 
     defp describe_error({_loc, mod, desc}) when is_atom(mod),
       do: "syntax error: #{mod.format_error(desc)}"
@@ -381,6 +382,6 @@ defmodule OtpDebugMcp.Tools do
       do: "evaluation raised: #{erlang_term(reason)}"
 
     defp describe_error({:badrpc, :timeout}), do: "evaluation timed out after 15s"
-    defp describe_error(other), do: inspect(other)
+    defp describe_error(other), do: Format.inspect(other)
   end
 end

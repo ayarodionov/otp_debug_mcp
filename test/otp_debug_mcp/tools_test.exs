@@ -43,6 +43,35 @@ defmodule OtpDebugMcp.ToolsTest do
              call_tool_json(Tools.Diagnose, %{})
   end
 
+  test "pids are printed as the target prints them, and are accepted as input" do
+    {:ok, [%{"check" => "message_queues", "findings" => [%{"pid" => pid}]} | _]} =
+      call_tool_json(Tools.Diagnose, %{})
+
+    assert pid =~ ~r/^<0\.\d+\.\d+>$/
+
+    assert {:ok, %{"info" => info}} = call_tool_json(Tools.ProcessInfo, %{pid: pid})
+    assert info =~ ~r/<0\.\d+\.\d+>/
+    refute info =~ "#PID"
+
+    assert {:ok, %{"supervisor" => sup}} =
+             call_tool_json(Tools.SupervisionTree, %{app: "fixture_app"})
+
+    assert sup =~ ~r/^<0\.\d+\.\d+>$/
+
+    assert {:ok, %{"events" => [event | _]}} =
+             call_tool_json(Tools.TraceCalls, %{
+               module: "OtpDebugMcp.Fixtures.Ticker",
+               max_events: 2
+             })
+
+    [_, ticker_pid] = Regex.run(~r/ (<0\.\d+\.\d+>) /, event)
+
+    assert {:ok, %{"info" => ticker_info}} =
+             call_tool_json(Tools.ProcessInfo, %{pid: ticker_pid})
+
+    assert ticker_info =~ "registered_name: :ticker"
+  end
+
   test "run_check rejects an unknown check" do
     assert {:error, text} = call_tool(Tools.RunCheck, %{check: "nope"})
     assert text =~ "unknown_check"
@@ -134,6 +163,11 @@ defmodule OtpDebugMcp.ToolsTest do
 
       assert {:ok, %{"value" => "{ok,[1,2]}"}} =
                call_tool_json(Tools.RemoteEval, %{code: "{ok, [1, 2]}."})
+
+      assert {:ok, %{"value" => pid}} =
+               call_tool_json(Tools.RemoteEval, %{code: "whereis(init)."})
+
+      assert pid =~ ~r/^<0\.\d+\.\d+>$/
 
       assert {:error, "syntax error: " <> _} = call_tool(Tools.RemoteEval, %{code: "{ok,"})
 

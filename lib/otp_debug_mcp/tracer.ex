@@ -28,7 +28,7 @@ defmodule OtpDebugMcp.Tracer do
       So before tracing we look for such tracing and refuse unless forced.
   """
 
-  alias OtpDebugMcp.{Checks, Target}
+  alias OtpDebugMcp.{Checks, Format, Target}
 
   # Whether the target has OTP 27+ trace sessions.
   @sessions_probe """
@@ -303,14 +303,14 @@ defmodule OtpDebugMcp.Tracer do
 
   defp describe_tracer({tracer, info}) when is_list(info) do
     %{
-      tracer: inspect(tracer),
-      registered_name: inspect(info[:registered_name]),
-      initial_call: inspect(info[:initial_call]),
-      current_function: inspect(info[:current_function])
+      tracer: Format.inspect(tracer),
+      registered_name: Format.inspect(info[:registered_name]),
+      initial_call: Format.inspect(info[:initial_call]),
+      current_function: Format.inspect(info[:current_function])
     }
   end
 
-  defp describe_tracer({tracer, _}), do: %{tracer: inspect(tracer)}
+  defp describe_tracer({tracer, _}), do: %{tracer: Format.inspect(tracer)}
 
   defp refuse_unless_forced(nil, _force, _target), do: :ok
   defp refuse_unless_forced(_other, true, _target), do: :ok

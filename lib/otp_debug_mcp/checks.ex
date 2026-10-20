@@ -10,7 +10,7 @@ defmodule OtpDebugMcp.Checks do
   twenty rounds of raw `process_info` calls.
   """
 
-  alias OtpDebugMcp.Target
+  alias OtpDebugMcp.{Format, Target}
 
   @checks [
     :message_queues,
@@ -48,7 +48,7 @@ defmodule OtpDebugMcp.Checks do
     with {:ok, top} <- Target.rpc(:recon, :proc_count, [:message_queue_len, 10]) do
       offenders =
         for {pid, qlen, info} <- top, qlen > 1_000 do
-          %{pid: inspect(pid), queue_len: qlen, info: format_proc_info(info)}
+          %{pid: Format.inspect(pid), queue_len: qlen, info: format_proc_info(info)}
         end
 
       status =
@@ -126,8 +126,8 @@ defmodule OtpDebugMcp.Checks do
           in_window = Enum.count(restarts, &(&1 >= now - period))
 
           %{
-            supervisor: inspect(name),
-            pid: inspect(pid),
+            supervisor: Format.inspect(name),
+            pid: Format.inspect(pid),
             application: app_name(app),
             kind: kind,
             strategy: strategy,
@@ -144,7 +144,7 @@ defmodule OtpDebugMcp.Checks do
         end
         |> Enum.sort_by(& &1.last_restart_seconds_ago)
 
-      unresponsive = for {_pid, _, name, _, :unresponsive} <- sups, do: inspect(name)
+      unresponsive = for {_pid, _, name, _, :unresponsive} <- sups, do: Format.inspect(name)
 
       recent = Enum.filter(restarted, &(&1.last_restart_seconds_ago <= @recent_s))
       sampled = sample_restarting_children(recent)
@@ -201,7 +201,7 @@ defmodule OtpDebugMcp.Checks do
     with {:ok, leaks} <- Target.rpc(:recon, :bin_leak, [5], 15_000) do
       offenders =
         for {pid, freed, info} <- leaks, freed < -1_000 do
-          %{pid: inspect(pid), binaries_freed: -freed, info: format_proc_info(info)}
+          %{pid: Format.inspect(pid), binaries_freed: -freed, info: format_proc_info(info)}
         end
 
       status = if Enum.any?(offenders, &(&1.binaries_freed > 100_000)), do: :warning, else: :ok
@@ -306,7 +306,12 @@ defmodule OtpDebugMcp.Checks do
 
       top =
         for {name, mem_words, size, owner} <- tables do
-          %{name: inspect(name), bytes: mem_words * wordsize, rows: size, owner: inspect(owner)}
+          %{
+            name: inspect(name),
+            bytes: mem_words * wordsize,
+            rows: size,
+            owner: Format.inspect(owner)
+          }
         end
 
       result(:ets_tables, :ok, top, """
@@ -358,7 +363,7 @@ defmodule OtpDebugMcp.Checks do
     with {:ok, top} <- Target.rpc(:recon, :proc_window, [:reductions, 5, 1_000], 10_000) do
       hogs =
         for {pid, reds, info} <- top do
-          %{pid: inspect(pid), reductions_per_s: reds, info: format_proc_info(info)}
+          %{pid: Format.inspect(pid), reductions_per_s: reds, info: format_proc_info(info)}
         end
 
       result(:top_reductions, :ok, hogs, """
@@ -444,8 +449,8 @@ defmodule OtpDebugMcp.Checks do
       %{
         id: inspect(id),
         modules: inspect(mods),
-        pid_before: inspect(old_pid),
-        pid_now: inspect(pid)
+        pid_before: Format.inspect(old_pid),
+        pid_now: Format.inspect(pid)
       }
       |> Map.merge(exit_reason(reasons[old_pid]))
     end
@@ -454,10 +459,8 @@ defmodule OtpDebugMcp.Checks do
   defp exit_reason(nil), do: %{}
 
   # In Erlang syntax and depth-limited, like trace lines.
-  defp exit_reason(reason) do
-    text = :io_lib.format(~c"~9999tP", [reason, 20], chars_limit: 1500)
-    %{exit_reason: IO.chardata_to_string(text)}
-  end
+  defp exit_reason(reason),
+    do: %{exit_reason: Format.erlang(~c"~9999tP", [reason, 20], chars_limit: 1500)}
 
   @doc "Evaluate an Erlang expression string on the target. Used by checks and the eval tool."
   def remote_eval(code) do
@@ -476,13 +479,13 @@ defmodule OtpDebugMcp.Checks do
   # name atom as the first element.
   defp format_proc_info(info) when is_list(info) do
     Enum.reduce(info, %{}, fn
-      {k, v}, acc when is_atom(k) -> Map.put(acc, k, inspect(v))
+      {k, v}, acc when is_atom(k) -> Map.put(acc, k, Format.inspect(v))
       name, acc when is_atom(name) -> Map.put(acc, :registered_name, inspect(name))
-      other, acc -> Map.put(acc, :extra, inspect(other))
+      other, acc -> Map.put(acc, :extra, Format.inspect(other))
     end)
   end
 
-  defp format_proc_info(other), do: inspect(other)
+  defp format_proc_info(other), do: Format.inspect(other)
 
   defp result(check, status, findings, interpretation) do
     %{
@@ -497,6 +500,11 @@ defmodule OtpDebugMcp.Checks do
     do: %{check: check, status: :error, findings: [], interpretation: "check failed: " <> message}
 
   defp error_result(check, err) do
-    %{check: check, status: :error, findings: [], interpretation: "check failed: #{inspect(err)}"}
+    %{
+      check: check,
+      status: :error,
+      findings: [],
+      interpretation: "check failed: #{Format.inspect(err)}"
+    }
   end
 end

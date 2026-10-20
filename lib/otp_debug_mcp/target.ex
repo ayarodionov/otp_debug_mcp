@@ -42,6 +42,10 @@ defmodule OtpDebugMcp.Target do
   @spec target() :: {:ok, node()} | {:error, :not_connected | {:connection_lost, node()}}
   def target, do: GenServer.call(__MODULE__, :target)
 
+  @doc "The target node, or nil before the first connect. Never reconnects."
+  @spec connected_node() :: node() | nil
+  def connected_node, do: GenServer.call(__MODULE__, :connected_node)
+
   @doc """
   Run `mod.fun(args)` on the target node with a bounded timeout.
   Returns `{:ok, result}` or `{:error, reason}`.
@@ -130,6 +134,7 @@ defmodule OtpDebugMcp.Target do
   end
 
   def handle_call(:recon, _from, state), do: {:reply, state.recon, state}
+  def handle_call(:connected_node, _from, state), do: {:reply, state.node, state}
 
   def handle_call(:target, _from, %{connected: false} = state),
     do: {:reply, {:error, :not_connected}, state}
