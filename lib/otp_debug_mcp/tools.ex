@@ -20,7 +20,13 @@ defmodule OtpDebugMcp.Tools do
   end
 
   def error_response(frame, reason) do
-    message = if is_binary(reason), do: reason, else: inspect(reason)
+    message =
+      cond do
+        is_binary(reason) -> reason
+        is_map(reason) -> JSON.encode!(reason)
+        true -> inspect(reason)
+      end
+
     {:reply, Response.error(Response.tool(), message), frame}
   end
 
@@ -248,6 +254,10 @@ defmodule OtpDebugMcp.Tools do
     Trace calls to a module/function on the target, safely: recon_trace
     enforces a hard cap on trace messages and auto-stops, so this cannot
     flood a production node.
+
+    Refuses if other tracing is active on the node (e.g. someone's
+    recon_trace session), because starting this trace would end it. Ask the
+    user before retrying with force: true.
     """
     use Anubis.Server.Component, type: :tool
 
@@ -265,6 +275,12 @@ defmodule OtpDebugMcp.Tools do
       field(:duration_ms, :integer,
         description: "Stop after this long regardless (default 10000, max 60000)"
       )
+
+      field(:force, :boolean,
+        description:
+          "Trace even though other tracing is active on the node, ending it. " <>
+            "Only with the user's explicit permission."
+      )
     end
 
     @impl true
@@ -273,10 +289,17 @@ defmodule OtpDebugMcp.Tools do
              mod,
              params[:function],
              min(params[:max_events] || 20, 100),
-             min(params[:duration_ms] || 10_000, 60_000)
+             min(params[:duration_ms] || 10_000, 60_000),
+             params[:force] == true
            ) do
-        {:ok, events} -> Tools.json_response(frame, %{events: events})
-        err -> Tools.error_response(frame, err)
+        {:ok, %{events: events, stopped_other_tracing: nil}} ->
+          Tools.json_response(frame, %{events: events})
+
+        {:ok, %{events: events, stopped_other_tracing: other}} ->
+          Tools.json_response(frame, %{events: events, stopped_other_tracing: other})
+
+        {:error, reason} ->
+          Tools.error_response(frame, reason)
       end
     end
   end

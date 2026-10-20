@@ -28,11 +28,13 @@ introspection primitives, but an encoded diagnostic playbook in the spirit of
 - **Safe by default.** Tracing goes through `recon_trace` (hard caps on event
   count and duration); every rpc has a timeout; arbitrary `remote_eval` is
   disabled unless `OTP_DEBUG_MCP_ALLOW_EVAL=true`.
-  **One known exception:** `trace_calls` uses recon_trace, which allows one
-  trace per node and turns off all tracing in Erlang's original shared trace
-  session when it starts and stops. That ends any `recon_trace` session
-  someone else has running (OTP 27+ `dbg` uses its own session and is
-  unaffected). Don't use `trace_calls` on a node someone else is tracing.
+  `trace_calls` uses recon_trace, which turns off all tracing in the node's
+  legacy trace session when it starts and stops. So it first checks for
+  such tracing (another `recon_trace` session, `dbg` on OTP 26 and earlier,
+  any `erlang:trace/3` user) and refuses, describing what it found, unless
+  called with `force: true`. The bundled skill tells the agent to ask the
+  user before forcing. OTP 27+ `dbg` uses its own trace session and is
+  unaffected.
 
 ## Tools
 
@@ -168,7 +170,9 @@ Verified so far: every tool through MCP stdio; shortnames, longnames (IP and
 FQDN) and switching between them in one session; Mix release cookies;
 reconnect after a target restart; targets with their own recon (including
 an old one missing functions) keep their running recon sessions across
-repeat connects and checks. Not yet verified: a target on another machine.
+repeat connects and checks; `trace_calls` refuses while another
+legacy-session trace is active (recon_trace or raw `erlang:trace/3`), and
+leaves OTP 27+ `dbg` sessions running. Not yet verified: a target on another machine.
 
 `scripts/recon_target.exs` is that last scenario: a node with an operator's
 recon_trace session open, logging once a second whether it's still alive:
@@ -193,8 +197,6 @@ Open items:
       recon injection and tracing show up in diffs)
 - [ ] Print pids in the target's own `<0.x.y>` form in tool output
 - [ ] Exit with status 0 (not 1) when the client closes stdin
-- [ ] trace_calls: refuse when another `recon_trace` session is active on
-      the target, unless forced (and have the skill ask the user first)
 - [ ] trace_calls: on OTP 27+, trace in an isolated `trace:session_create`
       session so other tracing on the node is never touched
 - [ ] ExUnit tests against a disposable target node (`peer` module)

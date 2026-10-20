@@ -32,6 +32,10 @@ raw introspection when a purpose-built tool exists.
 
 - Keep `trace_calls` limits small: ≤20 events, ≤10s, one module at a time.
   Never trace `gen_server` / `gen` / commonly-hot stdlib modules themselves.
+- If `trace_calls` is refused because other tracing is active, someone may
+  be debugging this node right now. Show the user what the refusal found
+  and ask before retrying with `force: true`; forcing ends their tracing.
+  Never set `force` on your own.
 - `process_info` with `include_state` sends a sys message to the process;
   skip it for processes already showing huge message queues.
 - Do not use `remote_eval` unless the purpose-built tools can't answer AND

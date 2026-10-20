@@ -177,8 +177,8 @@ Long terms are truncated so the result fits the agent's context.
 - Traced arguments are real production data and go to the AI provider
   along with everything else the tools return. Don't trace functions that
   handle secrets or personal data.
-- `trace_calls` currently ends any `recon_trace` session someone else is
-  running on the node. Coordinate with your team first.
+- If someone else is tracing the node, `trace_calls` refuses and says what
+  it found. Forcing it ends their trace, so the agent should ask you first.
 
 ### 9. Verifying a fix or a deploy
 
@@ -271,8 +271,9 @@ that on a dev machine.
 - **Keep `remote_eval` off** (the default) for production nodes.
 - **Tool output goes to the AI provider.** That includes process state,
   traced arguments and ETS contents. Mind secrets and personal data.
-- **Tracing isn't shared.** `trace_calls` ends any `recon_trace` session
-  someone else is running on the node.
+- **Tracing is one at a time.** `trace_calls` won't start while another
+  `recon_trace` session or similar tracing is active, because it would end
+  it. Only force it if you know whose trace that is.
 - **Network.** Erlang distribution needs epmd (port 4369) and the
   distribution port range reachable from wherever the tool runs. Connecting
   to another machine hasn't been tested yet.

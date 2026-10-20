@@ -16,6 +16,13 @@ defmodule OtpDebugMcp.Tracer do
   Formatted trace lines are written to an io server on our node (the
   collector), which counts them so we can return as soon as `max_events`
   lines have arrived.
+
+  recon_trace allows one trace per node, and its `clear/0` (run when a trace
+  starts and stops) turns off *all* tracing in the node's legacy trace
+  session, whoever set it up: another recon_trace, `dbg` on OTP 26 and
+  earlier, or anything calling `erlang:trace/3`. So before tracing we look
+  for such tracing and refuse unless forced. Tools using OTP 27+ trace
+  sessions (including `dbg` there) are unaffected and invisible to the probe.
   """
 
   alias OtpDebugMcp.Target
@@ -30,14 +37,30 @@ defmodule OtpDebugMcp.Tracer do
   recon_trace:clear().
   """
 
-  @spec trace(String.t(), String.t() | nil, pos_integer(), pos_integer()) ::
-          {:ok, [String.t()]} | {:error, term()}
-  def trace(module_str, function_str, max_events, duration_ms) do
+  # Active tracing in the legacy session: a registered recon_trace tracer,
+  # tracing inherited by new processes, and every process that has a tracer.
+  # trace_info/2 returns `undefined` for processes that exit mid-scan, which
+  # the generator pattern skips.
+  @probe """
+  Recon = case whereis(recon_trace_tracer) of undefined -> []; R -> [R] end,
+  New = case erlang:trace_info(new, tracer) of {tracer, []} -> []; {tracer, NT} -> [NT]; _ -> [] end,
+  Traced = [T || P <- erlang:processes(), {tracer, T} <- [erlang:trace_info(P, tracer)], T =/= []],
+  Tracers = lists:usort(Recon ++ New ++ Traced),
+  {Recon =/= [], New =/= [], length(Traced),
+   [{T, catch erlang:process_info(T, [registered_name, initial_call, current_function])}
+    || T <- Tracers, is_pid(T)] ++ [{T, other} || T <- Tracers, not is_pid(T)]}.
+  """
+
+  @spec trace(String.t(), String.t() | nil, pos_integer(), pos_integer(), boolean()) ::
+          {:ok, %{events: [String.t()], stopped_other_tracing: term()}} | {:error, term()}
+  def trace(module_str, function_str, max_events, duration_ms, force \\ false) do
     mod = resolve_module(module_str)
     fun = if function_str, do: String.to_atom(function_str), else: :_
 
     with {:ok, true} <- Target.rpc(:code, :is_loaded, [mod]) |> loaded?(module_str),
-         {:ok, target} <- Target.target() do
+         {:ok, target} <- Target.target(),
+         {:ok, other} <- other_tracing(),
+         :ok <- refuse_unless_forced(other, force, target) do
       owner = self()
       collector = spawn(fn -> collector_loop(owner, max_events, []) end)
 
@@ -57,9 +80,67 @@ defmodule OtpDebugMcp.Tracer do
         end)
 
       events = await_events(collector, duration_ms)
-      send(holder, :stop)
-      {:ok, events}
+      stop_and_wait(holder)
+      {:ok, %{events: events, stopped_other_tracing: other}}
     end
+  end
+
+  # Waiting for the holder to finish its recon_trace:clear() means our own
+  # trace is fully gone before the next call probes for other tracing.
+  defp stop_and_wait(holder) do
+    ref = Process.monitor(holder)
+    send(holder, :stop)
+
+    receive do
+      {:DOWN, ^ref, :process, _, _} -> :ok
+    after
+      5_000 -> Process.demonitor(ref, [:flush])
+    end
+  end
+
+  defp other_tracing do
+    with {:ok, {recon?, new?, traced_count, tracers}} <- OtpDebugMcp.Checks.remote_eval(@probe) do
+      if recon? or new? or traced_count > 0 do
+        {:ok,
+         %{
+           recon_trace_session: recon?,
+           traces_new_processes: new?,
+           traced_processes: traced_count,
+           tracers: Enum.map(tracers, &describe_tracer/1)
+         }}
+      else
+        {:ok, nil}
+      end
+    end
+  end
+
+  defp describe_tracer({tracer, info}) when is_list(info) do
+    %{
+      tracer: inspect(tracer),
+      registered_name: inspect(info[:registered_name]),
+      initial_call: inspect(info[:initial_call]),
+      current_function: inspect(info[:current_function])
+    }
+  end
+
+  defp describe_tracer({tracer, _}), do: %{tracer: inspect(tracer)}
+
+  defp refuse_unless_forced(nil, _force, _target), do: :ok
+  defp refuse_unless_forced(_other, true, _target), do: :ok
+
+  defp refuse_unless_forced(other, false, target) do
+    {:error,
+     %{
+       refused: "other tracing is active on #{target}",
+       active_tracing: other,
+       why:
+         "trace_calls uses recon_trace, which turns off all tracing in the node's " <>
+           "legacy trace session when it starts and stops, so this tracing would " <>
+           "end. Someone may be debugging this node right now.",
+       next_step:
+         "Ask the user whether it is OK to stop this tracing. Only if they agree, " <>
+           "call trace_calls again with force: true."
+     }}
   end
 
   defp loaded?({:ok, {:file, _}}, _), do: {:ok, true}
