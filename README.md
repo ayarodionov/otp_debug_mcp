@@ -70,23 +70,47 @@ die.
 
 ## Setup
 
+### Download a release
+
+[Releases](https://github.com/ayarodionov/otp_debug_mcp/releases) bundle
+their own Erlang runtime, so nothing else needs installing. They're built
+for:
+
+- macOS on Apple silicon (`macos-arm64`)
+- Linux on x86_64 and arm64 (`linux-x86_64`, `linux-arm64`), with glibc
+  from Ubuntu 22.04 or later and OpenSSL 3 (`libcrypto.so.3`)
+
 ```sh
-mix deps.get
-mix compile
+vsn=0.1.0 target=macos-arm64   # or linux-x86_64, linux-arm64
+base=https://github.com/ayarodionov/otp_debug_mcp/releases/download/v$vsn
+curl -LO "$base/otp_debug_mcp-$vsn-$target.tar.gz"
+curl -LO "$base/otp_debug_mcp-$vsn-$target.tar.gz.sha256"
+shasum -a 256 -c "otp_debug_mcp-$vsn-$target.tar.gz.sha256"
+mkdir -p ~/.local && tar -xzf "otp_debug_mcp-$vsn-$target.tar.gz" -C ~/.local
 ```
 
-Build the release (Elixir 1.15+, tested on Elixir 1.19 / OTP 28):
+The server is then `~/.local/otp_debug_mcp/bin/otp_debug_mcp`. The
+binaries aren't signed: on macOS, an archive downloaded with a browser
+rather than `curl` is quarantined, and the server won't start until you
+run `xattr -dr com.apple.quarantine ~/.local/otp_debug_mcp`.
+
+### Build from source
+
+Needs Elixir 1.19 and Erlang/OTP 27 or later:
 
 ```sh
+mix deps.get
 MIX_ENV=prod mix release
 ```
 
-Register it with Claude Code (`--scope user` makes it available in every
-project):
+The server is then `_build/prod/rel/otp_debug_mcp/bin/otp_debug_mcp`.
+
+### Register it with Claude Code
+
+`--scope user` makes it available in every project:
 
 ```sh
-claude mcp add otp-debug --scope user -- \
-  /path/to/otp_debug_mcp/_build/prod/rel/otp_debug_mcp/bin/otp_debug_mcp start
+claude mcp add otp-debug --scope user -- ~/.local/otp_debug_mcp/bin/otp_debug_mcp start
 ```
 
 Or as a `.mcp.json` entry:
@@ -95,12 +119,19 @@ Or as a `.mcp.json` entry:
 {
   "mcpServers": {
     "otp-debug": {
-      "command": "/path/to/otp_debug_mcp/_build/prod/rel/otp_debug_mcp/bin/otp_debug_mcp",
+      "command": "/home/you/.local/otp_debug_mcp/bin/otp_debug_mcp",
       "args": ["start"],
       "env": { "OTP_DEBUG_MCP_ALLOW_EVAL": "false" }
     }
   }
 }
+```
+
+Install the skill too (it's in the release archive as well), so Claude
+follows the debugging playbook:
+
+```sh
+mkdir -p ~/.claude/skills && cp -R ~/.local/otp_debug_mcp/skills/otp-debug ~/.claude/skills/
 ```
 
 Notes:
@@ -137,9 +168,9 @@ Then, in Claude Code:
    `trace_calls` to see live traffic
 4. `snapshot(take)` → wait → `snapshot(diff)` to confirm leaks/trends
 
-A Claude Code skill encoding this workflow ships in
-`skills/otp-debug/SKILL.md` — copy it to `~/.claude/skills/otp-debug/` so
-Claude follows the playbook automatically.
+The Claude Code skill installed in [Setup](#register-it-with-claude-code),
+`skills/otp-debug/SKILL.md`, encodes this workflow, so Claude follows it
+automatically.
 
 ## Usage scenarios
 
@@ -258,6 +289,18 @@ ERL_FLAGS="-erl_epmd_port 9100" python3 scripts/mcp_call.py \
   ["trace_calls", {"module": "queue", "function": "new", "max_events": 4}]
 ]'
 ```
+
+## Releasing
+
+1. Set the new version in `mix.exs`, and add a `## <version>` section for
+   it at the top of `CHANGELOG.md`.
+2. Commit, then tag and push: `git tag v<version> && git push origin v<version>`.
+
+The [Release workflow](.github/workflows/release.yml) builds and
+smoke-tests each platform's archive, checks the tag matches `mix.exs`, and
+publishes the GitHub release with the changelog section as its notes. Run
+it by hand (`gh workflow run Release`) to build and test without
+publishing.
 
 ## Status / TODO
 
