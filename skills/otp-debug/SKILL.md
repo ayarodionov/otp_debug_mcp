@@ -25,6 +25,9 @@ raw introspection when a purpose-built tool exists.
      history. A young process under a supervisor with recent restarts is a
      restarted child, and `exited_during_check` means it just died again:
      look at `supervisor_restarts` for why.
+   - OS memory (RSS) far above `memory_breakdown`'s total →
+     `run_check(allocator_fragmentation)`: memory held in partly empty
+     allocator carriers, and which allocator holds it.
    - Memory suspicion → `run_check(binary_leak)`, `run_check(ets_tables)`,
      then `snapshot(take)` → wait 30-60s of real load → `snapshot(diff)`.
      Only a growing delta proves a leak.

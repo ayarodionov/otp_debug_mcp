@@ -75,8 +75,8 @@ defmodule OtpDebugMcp.Tools do
   defmodule Diagnose do
     @moduledoc """
     Run the full diagnostic battery (message queues, supervisor restarts and
-    crash loops, binary leaks, memory, process/atom/port limits, ETS,
-    schedulers, CPU hogs). Findings come back
+    crash loops, binary leaks, memory and allocator fragmentation,
+    process/atom/port limits, ETS, schedulers, CPU hogs). Findings come back
     ranked worst-first, each with an interpretation and suggested next step.
     This should be the FIRST tool called after connect.
     """
@@ -101,7 +101,8 @@ defmodule OtpDebugMcp.Tools do
       field(:check, {:required, :string},
         description:
           "One of: message_queues, supervisor_restarts, binary_leak, memory_breakdown, " <>
-            "process_count, atom_table, ets_tables, ports, schedulers, top_reductions"
+            "allocator_fragmentation, process_count, atom_table, ets_tables, ports, " <>
+            "schedulers, top_reductions"
       )
     end
 

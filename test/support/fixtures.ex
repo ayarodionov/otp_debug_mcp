@@ -224,3 +224,36 @@ defmodule OtpDebugMcp.Fixtures.Spawner do
     loop(interval)
   end
 end
+
+defmodule OtpDebugMcp.Fixtures.Fragmenter do
+  @moduledoc """
+  Fragments binary_alloc: allocates `mb` megabytes of 64 KB binaries, then
+  frees all but one in `keep_every`, which a registered process holds. Most
+  carriers stay allocated around a few live blocks.
+  """
+
+  def start(mb, keep_every) do
+    holder = spawn(fn -> receive do: ({:keep, bins} -> hold(bins)) end)
+    Process.register(holder, :fragmenter)
+    caller = self()
+
+    spawn(fn ->
+      bins = for i <- 1..(mb * 16), do: :binary.copy(<<rem(i, 256)>>, 65_536)
+      send(holder, {:keep, Enum.take_every(bins, keep_every)})
+      send(caller, :done)
+    end)
+
+    receive do
+      :done -> :ok
+    after
+      30_000 -> {:error, :timeout}
+    end
+  end
+
+  # Keeps the binaries referenced, forever.
+  defp hold(bins) do
+    receive do
+      :never -> hold(bins)
+    end
+  end
+end

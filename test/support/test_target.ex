@@ -18,7 +18,8 @@ defmodule OtpDebugMcp.TestTarget do
     OtpDebugMcp.Fixtures.Worker,
     OtpDebugMcp.Fixtures.Crasher,
     OtpDebugMcp.Fixtures.CrashSup,
-    OtpDebugMcp.Fixtures.Spawner
+    OtpDebugMcp.Fixtures.Spawner,
+    OtpDebugMcp.Fixtures.Fragmenter
   ]
 
   defstruct [:peer, :node, :cookie, :name, :opts]

@@ -17,6 +17,7 @@ defmodule OtpDebugMcp.Checks do
     :supervisor_restarts,
     :binary_leak,
     :memory_breakdown,
+    :allocator_fragmentation,
     :process_count,
     :atom_table,
     :ets_tables,
@@ -265,6 +266,48 @@ defmodule OtpDebugMcp.Checks do
     end
   end
 
+  # Memory the VM's allocators hold from the OS against what live data
+  # uses. recon_alloc reads it from erlang:system_info({allocator, A}); its
+  # set_unit/1 only affects snapshots, so these are always bytes.
+  def run(:allocator_fragmentation) do
+    with {:ok, allocated} <- Target.rpc(:recon_alloc, :memory, [:allocated]),
+         {:ok, used} <- Target.rpc(:recon_alloc, :memory, [:used]),
+         {:ok, peak} <- Target.rpc(:recon_alloc, :memory, [:allocated, :max]),
+         {:ok, instances} <- Target.rpc(:recon_alloc, :fragmentation, [:current]) do
+      unused = allocated - used
+      usage = if allocated > 0, do: used / allocated, else: 1.0
+
+      findings = %{
+        allocated_bytes: allocated,
+        used_bytes: used,
+        unused_bytes: unused,
+        usage: Float.round(usage, 3),
+        peak_allocated_bytes: peak,
+        allocators: allocator_slack(instances)
+      }
+
+      result(:allocator_fragmentation, fragmentation_status(unused, usage), findings, """
+      Memory the VM's allocators hold from the OS (allocated_bytes, roughly
+      what the OS sees as the node's memory, apart from what NIFs and drivers
+      allocate themselves) against what live data uses (used_bytes, about
+      erlang:memory(total)). The difference sits in partly empty carriers:
+      fragmentation. Some is normal, since allocators keep carriers for reuse,
+      and small nodes often show usage near 0.5 with tens of MB unused; it
+      matters when unused_bytes is large. allocators names the allocators
+      holding the most slack: binary_alloc after bursts of large binaries,
+      eheap_alloc after process heap spikes, ets_alloc after table churn.
+      peak_allocated_bytes far above allocated_bytes means memory went back
+      to the OS after a spike. Remedies are allocator flags, such as a
+      different allocation strategy (+MBas aobf for binary_alloc) or smaller
+      carriers; see recon_alloc's documentation and the memory chapter of
+      Erlang in Anger. If the OS reports much more than allocated_bytes, the
+      rest is outside the allocators: NIFs, drivers, or the code area.
+      """)
+    else
+      err -> error_result(:allocator_fragmentation, err)
+    end
+  end
+
   # Process count vs the node's process limit.
   def run(:process_count) do
     with {:ok, count} <- Target.rpc(:erlang, :system_info, [:process_count]),
@@ -436,6 +479,42 @@ defmodule OtpDebugMcp.Checks do
       last_restart_seconds_ago: if(restarts != [], do: now - Enum.max(restarts)),
       at_limit: in_window > 0 and in_window >= intensity
     }
+  end
+
+  @mib 1_048_576
+
+  @doc false
+  # Fragmentation matters in absolute terms: a small node with half its
+  # allocated memory unused is normal.
+  def fragmentation_status(unused, usage) do
+    cond do
+      unused >= 2_048 * @mib and usage < 0.4 -> :critical
+      unused >= 512 * @mib and usage < 0.6 -> :warning
+      true -> :ok
+    end
+  end
+
+  # Per allocator type (summing its instances), the five holding the most
+  # allocated-but-unused memory.
+  defp allocator_slack(instances) do
+    instances
+    |> Enum.group_by(fn {{alloc, _n}, _props} -> alloc end, fn {_key, props} -> props end)
+    |> Enum.map(fn {alloc, props} ->
+      sum = fn key -> props |> Enum.map(&Keyword.get(&1, key, 0)) |> Enum.sum() end
+      allocated = sum.(:sbcs_carriers_size) + sum.(:mbcs_carriers_size)
+      used = sum.(:sbcs_block_size) + sum.(:mbcs_block_size)
+
+      %{
+        allocator: alloc,
+        instances: length(props),
+        allocated_bytes: allocated,
+        used_bytes: used,
+        unused_bytes: allocated - used,
+        usage: if(allocated > 0, do: Float.round(used / allocated, 3), else: 1.0)
+      }
+    end)
+    |> Enum.sort_by(& &1.unused_bytes, :desc)
+    |> Enum.take(5)
   end
 
   defp app_name({:ok, app}), do: app

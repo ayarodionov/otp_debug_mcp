@@ -52,6 +52,7 @@ category that's large:
 | `binary` | refc binaries held by long-lived processes | `binary_leak` |
 | `ets` | a table without eviction | `ets_tables` |
 | `atom` | atoms created from input | `atom_table` |
+| nothing: the OS sees far more than `erlang:memory()` reports | allocator fragmentation: carriers kept alive by a few live blocks | `allocator_fragmentation` |
 
 It then takes a `snapshot`, waits under real load, and diffs it. A single
 large number is a guess; a number that keeps growing across diffs is the
@@ -312,7 +313,5 @@ that on a dev machine.
 These would be natural scenarios, but the tool can't do them well yet (see
 the README's TODO list):
 
-- **Memory the OS sees but the VM doesn't account for** (allocator
-  fragmentation). There's no `recon_alloc` check yet.
 - **Multi-node clusters.** The tool talks to one node at a time. You can
   `connect` to each in turn, but it doesn't compare or correlate nodes.
