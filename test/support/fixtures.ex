@@ -212,3 +212,15 @@ defmodule OtpDebugMcp.Fixtures.CrashSup do
     end
   end
 end
+
+defmodule OtpDebugMcp.Fixtures.Spawner do
+  @moduledoc "Keeps a node busy spawning a short-lived process every `interval` ms."
+
+  def start(interval), do: spawn(fn -> loop(interval) end)
+
+  defp loop(interval) do
+    spawn(fn -> :ok end)
+    Process.sleep(interval)
+    loop(interval)
+  end
+end

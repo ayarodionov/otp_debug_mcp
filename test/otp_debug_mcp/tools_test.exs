@@ -96,6 +96,25 @@ defmodule OtpDebugMcp.ToolsTest do
       end
     end
 
+    test "estimates the process's age and reports its supervisor", %{target: target} do
+      [{_, worker, _, _} | _] =
+        TestTarget.call(target, DynamicSupervisor, :which_children, [OtpDebugMcp.Fixtures.Pool])
+
+      pid = TestTarget.call(target, :erlang, :pid_to_list, [worker]) |> to_string()
+
+      assert {:ok, %{"age" => age, "supervisor" => sup}} =
+               call_tool_json(Tools.ProcessInfo, %{pid: pid})
+
+      assert %{"estimated_seconds" => _, "younger_than_seconds" => _, "how" => _} = age
+
+      assert %{
+               "supervisor" => "OtpDebugMcp.Fixtures.Pool",
+               "kind" => "dynamic",
+               "child_id" => nil
+             } =
+               sup
+    end
+
     test "fetches gen_server state" do
       assert {:ok, %{"state" => state}} =
                call_tool_json(Tools.ProcessInfo, %{pid: "ticker", include_state: true})

@@ -20,6 +20,11 @@ raw introspection when a purpose-built tool exists.
    - Big message queue → `process_info` on that pid (with `include_state` for
      gen_servers); its `current_function` shows what it's stuck on. Then
      `trace_calls` on the module it's blocked calling.
+   - `process_info` also gives the process's age, estimated from pid order
+     (`younger_than_seconds` is a hard bound), and its supervisor's restart
+     history. A young process under a supervisor with recent restarts is a
+     restarted child, and `exited_during_check` means it just died again:
+     look at `supervisor_restarts` for why.
    - Memory suspicion → `run_check(binary_leak)`, `run_check(ets_tables)`,
      then `snapshot(take)` → wait 30-60s of real load → `snapshot(diff)`.
      Only a growing delta proves a leak.

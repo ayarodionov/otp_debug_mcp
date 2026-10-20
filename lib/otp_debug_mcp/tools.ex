@@ -116,12 +116,13 @@ defmodule OtpDebugMcp.Tools do
 
   defmodule ProcessInfo do
     @moduledoc """
-    Deep-inspect one process: process_info, current stacktrace, and (for
-    gen_* processes) its state via sys:get_state with a short timeout.
+    Deep-inspect one process: process_info, current stacktrace, an estimate
+    of its age, the restart history of its supervisor, and (for gen_*
+    processes) its state via sys:get_state with a short timeout.
     """
     use Anubis.Server.Component, type: :tool
 
-    alias OtpDebugMcp.{Target, Tools}
+    alias OtpDebugMcp.{ProcessContext, Target, Tools}
 
     schema do
       field(:pid, {:required, :string},
@@ -137,7 +138,10 @@ defmodule OtpDebugMcp.Tools do
 
     @impl true
     def execute(%{pid: pid_str} = params, frame) do
+      # Context first: its age estimate counts the processes spawned since,
+      # and every rpc spawns one on the target.
       with {:ok, pid} <- resolve(pid_str),
+           {:ok, context} <- context(pid),
            {:ok, info} <- Target.rpc(:recon, :info, [pid]) do
         state =
           if params[:include_state] do
@@ -155,13 +159,24 @@ defmodule OtpDebugMcp.Tools do
             end
           end
 
-        Tools.json_response(frame, %{
-          pid: pid_str,
-          info: Format.inspect(info, limit: :infinity, pretty: true),
-          state: state
-        })
+        Tools.json_response(
+          frame,
+          Map.merge(context, %{
+            pid: pid_str,
+            info: Format.inspect(info, limit: :infinity, pretty: true),
+            state: state
+          })
+        )
       else
         err -> Tools.error_response(frame, err)
+      end
+    end
+
+    # A process that exited is reported by recon:info right after.
+    defp context(pid) do
+      case ProcessContext.describe(pid) do
+        {:ok, context} -> {:ok, context}
+        {:error, reason} -> {:ok, %{age: "unavailable: #{Format.inspect(reason)}"}}
       end
     end
 

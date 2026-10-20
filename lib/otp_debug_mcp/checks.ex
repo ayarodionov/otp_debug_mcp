@@ -76,8 +76,10 @@ defmodule OtpDebugMcp.Checks do
   # record monotonic seconds, newest first, and both mark themselves with
   # an '$initial_call' of {supervisor, Module, 1}, so one process scan
   # finds them all, including supervisors outside any application.
-  @supervisors ~S"""
-  Now = erlang:monotonic_time(second),
+  #
+  # InitialCall and History are shared with process_info's supervisor
+  # context, through supervisor_funs/0.
+  @supervisor_funs ~S"""
   InitialCall = fun(P) ->
     try erlang:process_info(P, {dictionary, '$initial_call'}) of
       {_, V} -> V;
@@ -99,6 +101,10 @@ defmodule OtpDebugMcp.Checks do
     (_) ->
       unknown
   end,
+  """
+
+  @supervisor_scan ~S"""
+  Now = erlang:monotonic_time(second),
   Name = fun(P) ->
     case erlang:process_info(P, registered_name) of
       {registered_name, N} when is_atom(N) -> N;
@@ -120,24 +126,18 @@ defmodule OtpDebugMcp.Checks do
   @max_sampled 10
 
   def run(:supervisor_restarts) do
-    with {:ok, {now, sups}} <- remote_eval(@supervisors) do
+    with {:ok, {now, sups}} <- remote_eval(@supervisor_funs <> @supervisor_scan) do
       restarted =
         for {pid, mod, name, app, {kind, strategy, intensity, period, [_ | _] = restarts}} <- sups do
-          in_window = Enum.count(restarts, &(&1 >= now - period))
-
           %{
             supervisor: Format.inspect(name),
             pid: Format.inspect(pid),
             application: app_name(app),
             kind: kind,
             strategy: strategy,
-            max_restarts: intensity,
-            max_seconds: period,
-            restarts_in_window: in_window,
-            last_restart_seconds_ago: now - Enum.max(restarts),
-            at_limit: in_window > 0 and in_window >= intensity,
             raw_pid: pid
           }
+          |> Map.merge(restart_summary(now, intensity, period, restarts))
           # Every Supervisor.start_link(children, opts) has this callback
           # module, so it says nothing.
           |> Map.merge(if mod == Supervisor.Default, do: %{}, else: %{module: inspect(mod)})
@@ -377,6 +377,25 @@ defmodule OtpDebugMcp.Checks do
 
   # -- Helpers -------------------------------------------------------------------
 
+  @doc "Erlang funs InitialCall/1 and History/1, for code evaluated on the target."
+  def supervisor_funs, do: @supervisor_funs
+
+  @doc """
+  A supervisor's restart history, as read by History/1, summarized. `now`
+  is the target's `erlang:monotonic_time(second)`.
+  """
+  def restart_summary(now, intensity, period, restarts) do
+    in_window = Enum.count(restarts, &(&1 >= now - period))
+
+    %{
+      max_restarts: intensity,
+      max_seconds: period,
+      restarts_in_window: in_window,
+      last_restart_seconds_ago: if(restarts != [], do: now - Enum.max(restarts)),
+      at_limit: in_window > 0 and in_window >= intensity
+    }
+  end
+
   defp app_name({:ok, app}), do: app
   defp app_name(_), do: nil
 
@@ -462,12 +481,16 @@ defmodule OtpDebugMcp.Checks do
   defp exit_reason(reason),
     do: %{exit_reason: Format.erlang(~c"~9999tP", [reason, 20], chars_limit: 1500)}
 
-  @doc "Evaluate an Erlang expression string on the target. Used by checks and the eval tool."
-  def remote_eval(code) do
+  @doc """
+  Evaluate an Erlang expression string on the target, with `bindings` as
+  its variables (e.g. `[Pid: pid]`). Used by checks and the eval tool.
+  """
+  def remote_eval(code, bindings \\ []) do
+    # A list of bindings is an orddict to erl_eval, so it must be sorted.
     with {:ok, tokens, _} <- :erl_scan.string(String.to_charlist(code)),
          {:ok, exprs} <- :erl_parse.parse_exprs(tokens),
          {:ok, {:value, value, _binds}} <-
-           Target.rpc(:erl_eval, :exprs, [exprs, []], 15_000) do
+           Target.rpc(:erl_eval, :exprs, [exprs, Enum.sort(bindings)], 15_000) do
       {:ok, value}
     else
       {:error, _} = err -> err

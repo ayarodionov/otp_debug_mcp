@@ -98,8 +98,10 @@ pegged scheduler with the rest idle, which points to a long-running NIF.
 
 > Calls to `Billing.Ledger` time out after 5 seconds. Why?
 
-**What the agent does.** `process_info` on the process by name.
-`current_function` and the stack trace show where it's blocked: waiting on
+**What the agent does.** `process_info` on the process by name. Its age
+and its supervisor's restart history tell a long-stuck process from one
+that keeps crashing and coming back. `current_function` and the stack
+trace show where it's blocked: waiting on
 another process's call, a receive, a port or a lock. `include_state: true`
 fetches its state, and a `sys:get_state` timeout is itself a finding:
 the process is too busy or blocked to answer. `supervision_tree` shows

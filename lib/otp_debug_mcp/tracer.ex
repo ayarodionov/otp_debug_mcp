@@ -219,6 +219,9 @@ defmodule OtpDebugMcp.Tracer do
   # own trace is gone before the next call probes for other tracing.
   defp run_holder(target, code, bindings, collector, {mod, fun, _}, duration_ms) do
     # A list of bindings is an orddict to erl_eval, so it must be sorted.
+    # The holder; recon_trace spawns its tracer and formatter too.
+    Target.note_spawns(if code == @recon_holder, do: 3, else: 1)
+
     {holder, ref} =
       Target.with_stderr_group_leader(fn ->
         Node.spawn_monitor(target, :erl_eval, :exprs, [parse!(code), Enum.sort(bindings)])

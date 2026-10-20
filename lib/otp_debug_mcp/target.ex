@@ -24,6 +24,7 @@ defmodule OtpDebugMcp.Target do
   @rpc_timeout 5_000
   @recon_modules [:recon, :recon_alloc, :recon_lib, :recon_map, :recon_rec, :recon_trace]
   @injected_marker :otp_debug_mcp_injected
+  @spawns :otp_debug_mcp_target_spawns
 
   defstruct node: nil, connected: false, recon: nil
 
@@ -57,7 +58,7 @@ defmodule OtpDebugMcp.Target do
         err
 
       {:ok, target} ->
-        case with_stderr_group_leader(fn -> :rpc.call(target, mod, fun, args, timeout) end) do
+        case with_stderr_group_leader(fn -> call(target, mod, fun, args, timeout) end) do
           {:badrpc, {:EXIT, {:undef, [{m, f, a, _} | _]}}} when m in @recon_modules ->
             {:error, missing_recon_message(m, f, length(a))}
 
@@ -88,6 +89,32 @@ defmodule OtpDebugMcp.Target do
   end
 
   @doc """
+  Record that we spawned `n` processes on the target. Each rpc spawns one
+  there; `OtpDebugMcp.ProcessContext` discounts them when it estimates a
+  process's age from the pids spawned since.
+  """
+  def note_spawns(n \\ 1) do
+    now = System.monotonic_time(:microsecond)
+    for i <- 1..n//1, do: :ets.insert(@spawns, {{now, i, make_ref()}})
+    :ok
+  end
+
+  @doc """
+  How many seconds before monotonic time `at_us` each of our spawns on the
+  target happened, most recent first; spawns up to `slack_us` after it
+  count as 0. Forgets spawns older than an hour.
+  """
+  def own_spawn_ages(at_us, slack_us \\ 0) do
+    cutoff = at_us - 3_600_000_000
+    :ets.select_delete(@spawns, [{{{:"$1", :_, :_}}, [{:<, :"$1", cutoff}], [true]}])
+
+    for {{t, _, _}} <- :ets.tab2list(@spawns), t <= at_us + slack_us do
+      max(at_us - t, 0) / 1_000_000
+    end
+    |> Enum.sort()
+  end
+
+  @doc """
   Run `fun` with this process's group leader set to stderr.
 
   Remote processes (rpc workers, remote spawns) send their io to the caller's
@@ -108,7 +135,10 @@ defmodule OtpDebugMcp.Target do
   # -- GenServer ---------------------------------------------------------------
 
   @impl true
-  def init(_opts), do: {:ok, %__MODULE__{}}
+  def init(_opts) do
+    :ets.new(@spawns, [:named_table, :public, :ordered_set, write_concurrency: true])
+    {:ok, %__MODULE__{}}
+  end
 
   @impl true
   def handle_call({:connect, node_str, cookie}, _from, state) do
@@ -233,7 +263,7 @@ defmodule OtpDebugMcp.Target do
 
     missing =
       for mod <- Application.spec(:recon, :modules) || [],
-          :rpc.call(target, :code, :which, [mod], @rpc_timeout) == :non_existing,
+          call(target, :code, :which, [mod], @rpc_timeout) == :non_existing,
           do: mod
 
     case load_recon(target, missing) do
@@ -249,7 +279,7 @@ defmodule OtpDebugMcp.Target do
 
     # A target that depends on recon has the application loaded (releases
     # load every app); our injection loads bare modules only.
-    target_app = :rpc.call(target, :application, :get_key, [:recon, :vsn], @rpc_timeout)
+    target_app = call(target, :application, :get_key, [:recon, :vsn], @rpc_timeout)
 
     cond do
       :recon in injected ->
@@ -269,7 +299,7 @@ defmodule OtpDebugMcp.Target do
   end
 
   defp injected_by_us?(target) do
-    case :rpc.call(target, :recon, :module_info, [], @rpc_timeout) do
+    case call(target, :recon, :module_info, [], @rpc_timeout) do
       info when is_list(info) ->
         info[:md5] == :recon.module_info(:md5) or
           Keyword.has_key?(info[:attributes] || [], @injected_marker)
@@ -304,13 +334,13 @@ defmodule OtpDebugMcp.Target do
 
   defp load_method(target) do
     ours = :erlang.system_info(:otp_release) |> to_string()
-    theirs = :rpc.call(target, :erlang, :system_info, [:otp_release], @rpc_timeout) |> to_string()
+    theirs = call(target, :erlang, :system_info, [:otp_release], @rpc_timeout) |> to_string()
 
     cond do
       otp_major(theirs) >= otp_major(ours) ->
         {:ok, :loaded}
 
-      :rpc.call(target, :code, :which, [:compile], @rpc_timeout) != :non_existing ->
+      call(target, :code, :which, [:compile], @rpc_timeout) != :non_existing ->
         {:ok, :compiled}
 
       true ->
@@ -342,7 +372,7 @@ defmodule OtpDebugMcp.Target do
          {:ok, forms} <- backend.debug_info(:erlang_v1, mod, data, []),
          forms = add_marker(forms),
          {:ok, ^mod, compiled} <-
-           :rpc.call(target, :compile, :forms, [forms, [:binary, :return_errors]], 15_000) do
+           call(target, :compile, :forms, [forms, [:binary, :return_errors]], 15_000) do
       load_binary(target, mod, ~c"#{mod}.erl", compiled)
     else
       {:error, :beam_lib, _} -> {:error, "this tool's copy has no debug_info to compile from"}
@@ -351,8 +381,14 @@ defmodule OtpDebugMcp.Target do
     end
   end
 
+  # Every rpc spawns a process on the target to run it.
+  defp call(target, mod, fun, args, timeout) do
+    note_spawns()
+    :rpc.call(target, mod, fun, args, timeout)
+  end
+
   defp load_binary(target, mod, file, bin) do
-    case :rpc.call(target, :code, :load_binary, [mod, file, bin], @rpc_timeout) do
+    case call(target, :code, :load_binary, [mod, file, bin], @rpc_timeout) do
       {:module, ^mod} -> :ok
       other -> {:error, inspect(other)}
     end
