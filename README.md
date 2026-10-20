@@ -19,12 +19,20 @@ introspection primitives, but an encoded diagnostic playbook in the spirit of
   runs a whole battery of checks and returns ranked findings with
   interpretations — instead of making the AI reconstruct BEAM operational
   knowledge from twenty `process_info` round-trips.
-- **recon injected at connect time.** recon's object code is loaded into the
-  target over rpc, so recon-quality introspection works even on nodes that
-  never shipped it.
+- **recon injected at connect time, only where missing.** recon's object
+  code is loaded into the target over rpc, so recon-quality introspection
+  works even on nodes that never shipped it. If the target has its own
+  recon, that copy is used as-is and never loaded over: replacing a loaded
+  module and later purging it would kill processes running it, such as an
+  operator's `recon_trace` session. `connect` reports which recon is in use.
 - **Safe by default.** Tracing goes through `recon_trace` (hard caps on event
   count and duration); every rpc has a timeout; arbitrary `remote_eval` is
   disabled unless `OTP_DEBUG_MCP_ALLOW_EVAL=true`.
+  **One known exception:** `trace_calls` uses recon_trace, which allows one
+  trace per node and turns off all tracing in Erlang's original shared trace
+  session when it starts and stops. That ends any `recon_trace` session
+  someone else has running (OTP 27+ `dbg` uses its own session and is
+  unaffected). Don't use `trace_calls` on a node someone else is tracing.
 
 ## Tools
 
@@ -142,8 +150,22 @@ python3 scripts/mcp_call.py _build/prod/rel/otp_debug_mcp/bin/otp_debug_mcp "[
 
 Verified so far: every tool through MCP stdio; shortnames, longnames (IP and
 FQDN) and switching between them in one session; Mix release cookies;
-reconnect after a target restart. Not yet verified: a target on another
-machine.
+reconnect after a target restart; targets with their own recon (including
+an old one missing functions) keep their running recon sessions across
+repeat connects and checks. Not yet verified: a target on another machine.
+
+`scripts/recon_target.exs` is that last scenario: a node with an operator's
+recon_trace session open, logging once a second whether it's still alive:
+
+```sh
+STATUS_FILE=/tmp/status.log elixir --sname rt -pa _build/prod/lib/recon/ebin \
+  --no-halt scripts/recon_target.exs &
+python3 scripts/mcp_call.py _build/prod/rel/otp_debug_mcp/bin/otp_debug_mcp "[
+  [\"connect\", {\"node\": \"rt@$(hostname -s)\"}], [\"diagnose\", {}],
+  [\"connect\", {\"node\": \"rt@$(hostname -s)\"}]
+]"
+tail -1 /tmp/status.log   # operator_trace=alive
+```
 
 ## Status / TODO
 
@@ -155,6 +177,10 @@ Open items:
       recon injection and tracing show up in diffs)
 - [ ] Print pids in the target's own `<0.x.y>` form in tool output
 - [ ] Exit with status 0 (not 1) when the client closes stdin
+- [ ] trace_calls: refuse when another `recon_trace` session is active on
+      the target, unless forced (and have the skill ask the user first)
+- [ ] trace_calls: on OTP 27+, trace in an isolated `trace:session_create`
+      session so other tracing on the node is never touched
 - [ ] ExUnit tests against a disposable target node (`peer` module)
 - [ ] Verify against a target on another machine (firewalls, epmd port 4369,
       the distribution port range)

@@ -281,6 +281,9 @@ defmodule OtpDebugMcp.Checks do
     }
   end
 
+  defp error_result(check, {:error, message}) when is_binary(message),
+    do: %{check: check, status: :error, findings: [], interpretation: "check failed: " <> message}
+
   defp error_result(check, err) do
     %{check: check, status: :error, findings: [], interpretation: "check failed: #{inspect(err)}"}
   end

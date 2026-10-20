@@ -43,9 +43,10 @@ defmodule OtpDebugMcp.Tools do
     @impl true
     def execute(%{node: node} = params, frame) do
       case Target.connect(node, params[:cookie]) do
-        :ok ->
+        {:ok, %{recon: recon}} ->
           Tools.json_response(frame, %{
             connected: node,
+            recon: recon,
             hint: "Run the `diagnose` tool next for a full health check."
           })
 

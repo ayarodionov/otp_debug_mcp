@@ -20,6 +20,7 @@ defmodule OtpDebugMcp.Target do
   require Logger
 
   @rpc_timeout 5_000
+  @recon_modules [:recon, :recon_alloc, :recon_lib, :recon_map, :recon_rec, :recon_trace]
 
   defstruct node: nil, connected: false
 
@@ -28,7 +29,7 @@ defmodule OtpDebugMcp.Target do
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
   @doc "Connect to `node` (e.g. `:\"myapp@127.0.0.1\"`), using `cookie` if given."
-  @spec connect(String.t(), String.t() | nil) :: :ok | {:error, term()}
+  @spec connect(String.t(), String.t() | nil) :: {:ok, %{recon: map()}} | {:error, term()}
   def connect(node, cookie \\ nil), do: GenServer.call(__MODULE__, {:connect, node, cookie})
 
   @doc """
@@ -50,8 +51,17 @@ defmodule OtpDebugMcp.Target do
 
       {:ok, target} ->
         case with_stderr_group_leader(fn -> :rpc.call(target, mod, fun, args, timeout) end) do
-          {:badrpc, reason} -> {:error, {:badrpc, reason}}
-          result -> {:ok, result}
+          {:badrpc, {:EXIT, {:undef, [{m, f, a, _} | _]}}} when m in @recon_modules ->
+            {:error,
+             "#{m}:#{f}/#{length(a)} is not available in the target's own recon " <>
+               "version, which is used as-is so that its running recon sessions " <>
+               "are left untouched. Other checks still work."}
+
+          {:badrpc, reason} ->
+            {:error, {:badrpc, reason}}
+
+          result ->
+            {:ok, result}
         end
     end
   end
@@ -86,9 +96,9 @@ defmodule OtpDebugMcp.Target do
     with :ok <- ensure_distribution(target),
          :ok <- set_cookie(target, cookie),
          true <- Node.connect(target) || {:error, :connection_failed} do
-      inject_recon(target)
-      Logger.info("connected to #{target} (hidden)")
-      {:reply, :ok, %{state | node: target, connected: true}}
+      recon = inject_recon(target)
+      Logger.info("connected to #{target} (hidden), recon: #{inspect(recon)}")
+      {:reply, {:ok, %{recon: recon}}, %{state | node: target, connected: true}}
     else
       # Keep the previous target only if a mode switch didn't drop it.
       {:error, _} = err ->
@@ -183,15 +193,43 @@ defmodule OtpDebugMcp.Target do
     :ok
   end
 
-  # Push recon's BEAM code into the target so checks can call it remotely.
+  # Push recon's BEAM code into the target so checks can call it remotely,
+  # but only modules the target doesn't already have (loaded or on its code
+  # path). Loading over an existing module would make the target's version
+  # "old", and the next load hard-purges it, killing any process still
+  # running it, such as an operator's recon_trace session. This also makes
+  # repeat connects and reconnects load nothing.
   defp inject_recon(target) do
     _ = Application.load(:recon)
 
-    for mod <- Application.spec(:recon, :modules) || [],
-        {^mod, bin, file} <- [:code.get_object_code(mod)] do
-      :rpc.call(target, :code, :load_binary, [mod, file, bin], @rpc_timeout)
-    end
+    injected =
+      for mod <- Application.spec(:recon, :modules) || [],
+          :rpc.call(target, :code, :which, [mod], @rpc_timeout) == :non_existing,
+          {^mod, bin, file} <- [:code.get_object_code(mod)] do
+        :rpc.call(target, :code, :load_binary, [mod, file, bin], @rpc_timeout)
+        mod
+      end
 
-    :ok
+    ours = %{source: "injected", version: to_string(Application.spec(:recon, :vsn))}
+
+    # A target that depends on recon has the application loaded (releases
+    # load every app); our injection loads bare modules only.
+    target_app = :rpc.call(target, :application, :get_key, [:recon, :vsn], @rpc_timeout)
+
+    cond do
+      :recon in injected ->
+        ours
+
+      match?({:ok, _}, target_app) ->
+        {:ok, vsn} = target_app
+        %{source: "target", version: to_string(vsn), injected_missing_modules: injected}
+
+      # Present without its application: injected by an earlier connect.
+      :rpc.call(target, :recon, :module_info, [:md5], @rpc_timeout) == :recon.module_info(:md5) ->
+        ours
+
+      true ->
+        %{source: "target", version: "unknown", injected_missing_modules: injected}
+    end
   end
 end
