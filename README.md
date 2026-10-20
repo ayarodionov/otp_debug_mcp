@@ -116,6 +116,22 @@ A Claude Code skill encoding this workflow ships in
 `skills/otp-debug/SKILL.md` — copy it to `~/.claude/skills/otp-debug/` so
 Claude follows the playbook automatically.
 
+## Usage scenarios
+
+[docs/scenarios.md](docs/scenarios.md) walks through each of these with an
+example prompt, the tools involved, and what to watch out for:
+
+- **Production problems:** memory growth, slow requests, high CPU, stuck
+  processes and call timeouts, approaching system limits, incident triage
+- **Understanding and verifying:** tracing a runtime problem to the code in
+  your repo, seeing what a function really receives, verifying a fix or a
+  deploy, watching a load test, learning an unfamiliar system
+- **Other targets:** Erlang products you didn't write (message brokers,
+  databases), and your own node during development
+
+It ends with a checklist for production use and the scenarios the tool
+doesn't support yet.
+
 ## Testing
 
 `scripts/` holds an end-to-end check that drives the release over MCP stdio
