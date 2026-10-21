@@ -113,12 +113,12 @@ jobs:
           key: mix-prod-28-${{ hashFiles('mix.lock') }}
       - run: mix deps.get
       - run: mix release --overwrite
-      - name: Smoke test against the buggy demo node
+      - name: Smoke test against the Elixir demo node
         run: |
-          elixir --sname shop --no-halt scripts/buggy_target.exs &
-          sleep 5
+          examples/elixir/run.sh shop
+          sleep 3
           python3 scripts/mcp_smoke.py _build/prod/rel/otp_debug_mcp/bin/otp_debug_mcp \
-            "shop@$(hostname -s)" Shop.PriceCache
+            "shop_ex@$(hostname -s)" Shop.PriceCache
       - name: Smoke test against the Erlang demo node
         run: |
           examples/erlang/run.sh shop

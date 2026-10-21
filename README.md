@@ -199,6 +199,30 @@ example prompt, the tools involved, and what to watch out for:
 It ends with a checklist for production use and the scenarios the tool
 doesn't support yet.
 
+## Demo targets
+
+`examples/` has demo nodes in each BEAM language, each with a bug for the
+tool to find. Each directory's `run.sh` builds and starts them in the
+background, on this host with `-sname`, and `run.sh stop` stops them:
+
+| Language | Directory | Demos |
+|---|---|---|
+| Elixir | [examples/elixir](examples/elixir) | a mailbox that never drains, a crash loop, a cluster with one bad node, and a Mix release with its own cookie |
+| Erlang | [examples/erlang](examples/erlang) | a mailbox that never drains, an OTP application in a crash loop, a session store leaking atoms and ETS rows, and a cluster with one bad node |
+| Gleam | [examples/gleam](examples/gleam) | a mailbox that never drains, a supervised actor whose `let assert` panics in a loop, and a job runner leaking processes |
+| LFE | [examples/lfe](examples/lfe) | a mailbox that never drains, an OTP application in a crash loop, and an index whose slices pin whole binaries |
+
+Point Claude Code at one without saying what's wrong:
+
+> shop_ex@yourhost is getting slower and using more memory; find out why.
+
+Headless Claude Code sessions, given only a prompt like that and no
+source, found each kind of bug: the crash loop's cause, file and line
+from `diagnose` alone; the cluster's bad node through `cluster`, pointed
+at a healthy one; the atom leak, the process leak and the pinned binaries
+through `diagnose`. CI smoke-tests the release against the shop demo in
+each language.
+
 ## Testing
 
 ```sh
@@ -225,28 +249,25 @@ CI (`.github/workflows/ci.yml`) runs the tests on OTP 27 and 28, again
 over TLS distribution, the `old_otp` tests against an OTP 26 container,
 and the smoke test below against the built release.
 
-`scripts/` holds an end-to-end check that drives the release over MCP stdio
-the way a client does, against a demo node with a real bug:
+`scripts/mcp_smoke.py` is an end-to-end check that drives the release over
+MCP stdio the way a client does, against a demo node with a real bug:
 
 ```sh
-elixir --sname shop --no-halt scripts/buggy_target.exs &
+examples/elixir/run.sh shop
 python3 scripts/mcp_smoke.py \
-  _build/prod/rel/otp_debug_mcp/bin/otp_debug_mcp "shop@$(hostname -s)" Shop.PriceCache
+  _build/prod/rel/otp_debug_mcp/bin/otp_debug_mcp "shop_ex@$(hostname -s)" Shop.PriceCache
 ```
 
-It fails on any non-JSON line on stdout. The same demo node makes a good
-first prompt for Claude Code: *"shop@yourhost is getting slower and using
-more memory; find out why."*
+It fails on any non-JSON line on stdout, a tool error, an empty trace, or
+an exit status other than 0 when stdin closes.
 
 `scripts/mcp_call.py` runs an arbitrary sequence of tool calls, with shell
-steps in between (e.g. to restart the target). `scripts/demo_shop` is a
-small app with a nested supervision tree, built as a Mix release so it has
-its own cookie:
+steps in between, e.g. to restart the target. Against the Elixir release
+demo, which has its own cookie:
 
 ```sh
-(cd scripts/demo_shop && MIX_ENV=prod mix release)
-REL=scripts/demo_shop/_build/prod/rel/demo_shop
-$REL/bin/demo_shop daemon
+examples/elixir/run.sh release
+REL=examples/elixir/demo_shop/_build/prod/rel/demo_shop
 python3 scripts/mcp_call.py _build/prod/rel/otp_debug_mcp/bin/otp_debug_mcp "[
   [\"connect\", {\"node\": \"demo_shop@$(hostname -s)\", \"cookie\": \"$(cat $REL/releases/COOKIE)\"}],
   [\"supervision_tree\", {\"app\": \"demo_shop\"}],
@@ -271,31 +292,9 @@ both recipes in [docs/production.md](docs/production.md): an SSH tunnel to
 a target listening only on loopback, and TLS distribution, which refused
 plain-TCP connections and certificates from another CA.
 
-[examples/erlang](examples/erlang) has the same kinds of demo in plain
-Erlang/OTP, with no Elixir: a mailbox that never drains, an OTP
-application in a crash loop, a session store leaking atoms and ETS rows,
-and a cluster with one bad node. [examples/gleam](examples/gleam) has
-Gleam ones, with `gleam_otp` actors and supervisors: a mailbox that never
-drains, a supervised actor whose `let assert` panics in a loop, and a job
-runner leaking processes. [examples/lfe](examples/lfe) has LFE (Lisp
-Flavoured Erlang) ones: a mailbox that never drains, an OTP application in
-a crash loop, and an index whose slices pin whole binaries. Each
-directory's `run.sh` builds and starts them, and CI smoke-tests the
-release against the Erlang, Gleam and LFE shops too.
-
-`scripts/cluster_demo.sh start` runs a three-node cluster on this host in
-which only `shop_b` has the cache bug. Pointed at the healthy `shop_a`, a
-headless Claude Code session ran `cluster` first and went straight to
-`shop_b` and the cause.
-
-`scripts/crash_loop_target.exs` runs a payment gateway in a crash loop
-just under its supervisor's restart limit, failing intermittently. Asked
-*"payments@yourhost fails payments now and then; find out why"*, a headless
-Claude Code session got the cause and the file and line from `diagnose`
-alone.
-
-`scripts/recon_target.exs` is the scenario of a target with its own recon: a node with an operator's
-recon_trace session open, logging once a second whether it's still alive:
+`scripts/recon_target.exs` is a target with its own recon and an
+operator's recon_trace session open, logging once a second whether it's
+still alive, for checking the tool never disturbs it:
 
 ```sh
 STATUS_FILE=/tmp/status.log elixir --sname rt -pa _build/prod/lib/recon/ebin \

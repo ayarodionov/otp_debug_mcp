@@ -6,6 +6,11 @@
   and the CLI) and Claude Desktop, with commands that turn the playbook
   into a Cursor rule or Copilot instructions.
 - `examples/lfe`: demo targets in LFE (Lisp Flavoured Erlang).
+- The Elixir demos moved from `scripts/` to `examples/elixir`, with a
+  `run.sh` and README like the other languages' (nodes `shop_ex`,
+  `payments_ex`, `ex_a`..`ex_c`, and the `demo_shop` release). `scripts/`
+  now holds only test tooling. The README has a "Demo targets" section
+  for all four languages.
 - `binary_leak` also lists the processes holding the most binary memory,
   and for the largest, samples the binaries in its state to tell slices
   pinning larger binaries (fix: `binary:copy/1`) from whole binaries

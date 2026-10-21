@@ -1,12 +1,8 @@
-# A demo node with a crash loop: the payments gateway parses its port from
-# a malformed URL a second after each start, raises, and is restarted by
-# its supervisor, about once a second, just under the restart limit (15
+# An application whose payments gateway parses its port from a malformed
+# URL a second after each start, raises, and is restarted by its
+# supervisor, about once a second, just under the restart limit (15
 # restarts in 10s). Payments fail intermittently and nothing else looks
-# wrong. Start it with:
-#
-#     elixir --sname payments --no-halt scripts/crash_loop_target.exs
-#
-# and ask an agent: "payments@yourhost fails payments now and then; find out why."
+# wrong.
 
 defmodule Payments.Ledger do
   use GenServer

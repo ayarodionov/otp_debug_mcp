@@ -36,10 +36,10 @@ jobs:
 
       - name: Smoke test the release
         run: |
-          elixir --sname shop --no-halt scripts/buggy_target.exs &
-          sleep 5
+          examples/elixir/run.sh shop
+          sleep 3
           python3 scripts/mcp_smoke.py _build/prod/rel/otp_debug_mcp/bin/otp_debug_mcp \
-            "shop@$(hostname -s)" Shop.PriceCache
+            "shop_ex@$(hostname -s)" Shop.PriceCache
 
       - name: Show the libraries the runtime links to
         run: |
