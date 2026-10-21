@@ -12,6 +12,10 @@
   the skill `skills/otp-debug` in the checkout). They also say what to do
   when `otp-debug` is already registered. `docs/clients.md` gives both
   paths.
+- The README has an "Install with Claude Code" section: one prompt that
+  has Claude Code download the release for your machine, verify its
+  checksum, register it and install the skill, asking before each
+  command.
 
 ## 0.3.0
 

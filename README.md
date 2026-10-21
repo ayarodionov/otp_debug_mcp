@@ -74,6 +74,25 @@ die.
 
 ## Setup
 
+### Install with Claude Code
+
+Claude Code can do the whole installation: download the release for your
+machine, verify it, register it and install the skill. It asks before each
+command, so you see everything it does. In a terminal:
+
+```sh
+claude "Install otp_debug_mcp from https://github.com/ayarodionov/otp_debug_mcp \
+by following its README: download the latest release for this machine, \
+verify its checksum, register it with Claude Code for all projects \
+(replacing any existing otp-debug registration), and install the skill. \
+Check that each step worked."
+```
+
+To build from source instead, ask for that, and say where to clone it.
+Then quit Claude Code and start it again: it loads MCP servers when it
+starts, and `/mcp` should list `otp-debug` as connected. Or install by
+hand, as below.
+
 ### Download a release
 
 [Releases](https://github.com/ayarodionov/otp_debug_mcp/releases) bundle
