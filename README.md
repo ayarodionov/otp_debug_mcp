@@ -7,7 +7,8 @@
 > same machine, over TLS distribution and across machines, with a test suite
 > and CI on every push. Still young: the TODO list below has the known gaps.
 
-An MCP server that lets AI agents (Claude Code, Claude Desktop, Cursor, …)
+An MCP server that lets AI agents (Claude Code, Claude Desktop, Cursor,
+GitHub Copilot, …; see [docs/clients.md](docs/clients.md))
 connect to a **running** Erlang/Elixir/OTP node and debug it: not just raw
 introspection primitives, but an encoded diagnostic playbook in the spirit of
 [recon](https://ferd.github.io/recon/) and *Erlang in Anger*.
@@ -129,6 +130,9 @@ Or as a `.mcp.json` entry:
   }
 }
 ```
+
+For Cursor, GitHub Copilot or Claude Desktop, see
+[docs/clients.md](docs/clients.md).
 
 Install the skill too (it's in the release archive as well), so Claude
 follows the debugging playbook:

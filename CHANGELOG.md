@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- `docs/clients.md`: setting the tool up in Cursor, GitHub Copilot (VS Code
+  and the CLI) and Claude Desktop, with commands that turn the playbook
+  into a Cursor rule or Copilot instructions.
+
 ## 0.2.1
 
 A faster `diagnose`, and a more exact measure of the tool's own footprint.
