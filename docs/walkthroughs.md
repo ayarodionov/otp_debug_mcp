@@ -1,6 +1,6 @@
 # Walkthroughs
 
-Three debugging sessions against the demo nodes in `examples/`, start to
+Four debugging sessions against the demo nodes in `examples/`, start to
 finish, for following along on your own machine. Each one gives the
 command that starts the demo, the prompt, every tool call the agent made
 with the part of its result that mattered, and the conclusion. The
@@ -21,7 +21,8 @@ Contents:
 1. [A mailbox that never drains](#1-a-mailbox-that-never-drains)
 2. [A crash loop under the restart limit](#2-a-crash-loop-under-the-restart-limit)
 3. [One bad node in a cluster](#3-one-bad-node-in-a-cluster)
-4. [Cleaning up](#cleaning-up)
+4. [Trying the fix on the live node](#4-trying-the-fix-on-the-live-node)
+5. [Cleaning up](#cleaning-up)
 
 ---
 
@@ -254,11 +255,13 @@ showed itself.
   `{:error, ":"}`. Don't use `URI.parse/1`: on this URL it quietly
   returns port 443, the default for `https`, so a mistyped port would
   go unnoticed and the gateway would connect to a port nobody
-  configured.
+  configured. And cover a URL that parses but has no host:
+  `URI.new("foo")` returns `{:ok, %URI{host: nil, ...}}`.
 
   ```elixir
   case URI.new(url) do
     {:ok, %URI{host: host, port: port}} when is_binary(host) -> {:ok, host, port}
+    {:ok, _no_host} -> {:error, {:bad_gateway_url, url, :no_host}}
     {:error, part} -> {:error, {:bad_gateway_url, url, part}}
   end
   ```
@@ -355,6 +358,122 @@ A cluster adds questions of its own:
   the process memory of its peers is worth a look before it crosses any
   absolute limit. Comparing each node with the median of the others,
   as `cluster compare` does, catches this early.
+
+---
+
+## 4. Trying the fix on the live node
+
+This one picks up where [walkthrough 2](#2-a-crash-loop-under-the-restart-limit)
+ends: the crash is found, and there's a fix to try on the node before
+it's deployed. `examples/elixir/fixes/payments_gateway.ex` is that fix,
+the `Payments.Gateway` from the demo with its URL parsed by `URI.new/1`.
+A bad URL is logged, and the gateway stays up instead of crashing. Start
+the demo and compile the fix:
+
+```sh
+examples/elixir/run.sh payments
+elixirc -o _build/payments_fix examples/elixir/fixes/payments_gateway.ex
+```
+
+> `payments_ex@yourhost` crash-loops in Payments.Gateway: the port in its
+> URL is malformed. I've compiled a fix to
+> `_build/payments_fix/Elixir.Payments.Gateway.beam`. Try it on the node
+> and check that the crashes stop.
+
+**`connect`**, then **`diagnose`**, as in walkthrough 2:
+`supervisor_restarts` has `Payments.Gateway` dying on
+`binary_to_integer(<<"443x">>)` at `payments.exs` line 26, with 11
+restarts in the window against a limit of 15. The agent said it was
+about to load the fix, that an approval dialog would come, and that the
+load lasts only until the node restarts.
+
+**`load_module(path: ".../Elixir.Payments.Gateway.beam")`**. Nothing is
+loaded yet. The tool asks Claude Code to show you a form:
+
+```
+MCP server "otp-debug" requests your input
+Load new code for Payments.Gateway on payments_ex@yourhost?
+New code: md5 13d019f38b7e547daf963f6a44724b0e, .../_build/payments_fix/Elixir.Payments.Gateway.beam
+Running now: md5 efd7f714cf290664ba674b7ab72ad7d0, no file: compiled in memory
+❯ * Load it: ☐
+      Every process at once, until the node restarts
+  Accept    Decline
+```
+
+The md5s say exactly which code replaces which. "No file" is because the
+demo compiles its modules from an `.exs` script, in memory. Tick the box
+(Space) and accept. Claude Code then repeats the call with your answer,
+and only then does the code load:
+
+```json
+{"loaded": "Payments.Gateway", "node": "payments_ex@yourhost",
+ "md5": "13d019f38b7e547daf963f6a44724b0e",
+ "replaced": {"md5": "efd7f714cf290664ba674b7ab72ad7d0",
+              "file": "no file: compiled in memory"},
+ "lasts": "until the node restarts: its files aren't changed. The node has no
+   Payments.Gateway on its code path, so revert can't undo it; a restart does."}
+```
+
+Declining, or pressing Esc, loads nothing, and the agent is told not to
+ask again unless you say so. That holds even though `load_module` was
+allowed in Claude Code's permissions in this session: the form comes from
+the server, every time.
+
+**`run_check(check: "supervisor_restarts")`**, three seconds later:
+
+```json
+{"supervisor": "Payments.Supervisor", "restarts_in_window": 8,
+ "last_restart_seconds_ago": 3, "restarting_children": []}
+```
+
+No child died during the 2-second sample. The 8 restarts are the old
+ones, still inside the 10-second window.
+
+**`process_info(pid: "Payments.Gateway", include_state: true)`**
+
+```
+pid: "<0.568.0>", status: :waiting,
+current_stacktrace: [{:gen_server, :loop, 5, ...}, ...]
+message_queue_len: 0
+state: %{
+  error: {:bad_gateway_url, "https://pay.example.com:443x/v2"},
+  url: "https://pay.example.com:443x/v2"
+}
+```
+
+The gateway that started after the load ran the new code. It rejected the
+URL, recorded the error, and is idle.
+
+**`run_check(check: "supervisor_restarts")`** again, nine seconds after
+the last restart: `restarts_in_window` is down to 2, and still nothing
+restarting. The crash loop is over.
+
+**The answer.** The fix stops the crashes. Payments still don't go
+through, because `GATEWAY_URL` is still wrong: the gateway now says so
+in its state and its log instead of dying every second. The agent's
+summary also noted:
+
+- The load is temporary. Restarting the node brings back the old code,
+  and so the crash loop, until the fix is deployed.
+- Here, `revert` can't undo it. The original was compiled in memory, so
+  the node has no copy of it on its code path, and only a restart goes
+  back. For a module loaded from a release's or a Mix project's `.beam`
+  files, `load_module(revert: "Payments.Gateway")` reloads that version,
+  again only once you approve.
+
+**Fixes.**
+
+- **Deploy the fix.** Put it in the source, here
+  `examples/elixir/src/payments.exs`, and deploy as usual. Loading it was
+  a way to check it on the real node, not a release.
+- **Correct the URL as well.** The fix makes a bad URL visible instead of
+  fatal, but only the right value makes payments work. See walkthrough 2.
+- **Cover every result of the parse.** An earlier version of this fix
+  matched `{:ok, %URI{host: host}} when is_binary(host)` and
+  `{:error, _}` only. The agent pointed out that `URI.new("foo")`
+  succeeds with no host, which neither clause matches, so the gateway
+  would crash again on a URL like that. The fix now handles anything
+  that isn't a URL with a host as a bad one.
 
 ---
 

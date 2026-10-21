@@ -5,6 +5,11 @@ defmodule OtpDebugMcp.Application do
 
   @impl true
   def start(_type, _args) do
+    # load_module's approvals come back in a signed request state, so sign
+    # with a key of this run's own.
+    unless Application.get_env(:anubis_mcp, :request_state_secret),
+      do: Application.put_env(:anubis_mcp, :request_state_secret, :crypto.strong_rand_bytes(32))
+
     children =
       [OtpDebugMcp.Target, OtpDebugMcp.Snapshotter] ++
         if Application.get_env(:otp_debug_mcp, :mcp_server, true) do

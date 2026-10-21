@@ -372,10 +372,10 @@ defmodule OtpDebugMcp.Tracer do
     exprs
   end
 
-  # Modules arrive as "Elixir.MyApp.Worker", "MyApp.Worker" (Elixir) or "ets" (Erlang).
-  defp resolve_module("Elixir." <> _ = m), do: String.to_atom(m)
+  @doc ~S|A module named as "Elixir.MyApp.Worker", "MyApp.Worker" (Elixir) or "ets" (Erlang).|
+  def resolve_module("Elixir." <> _ = m), do: String.to_atom(m)
 
-  defp resolve_module(m) do
+  def resolve_module(m) do
     if m =~ ~r/^[A-Z]/, do: Module.concat([m]), else: String.to_atom(m)
   end
 

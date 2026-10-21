@@ -563,4 +563,277 @@ defmodule OtpDebugMcp.Tools do
     defp describe_error({:badrpc, :timeout}), do: "evaluation timed out after 15s"
     defp describe_error(other), do: Format.inspect(other)
   end
+
+  defmodule LoadModule do
+    @moduledoc """
+    Load a fixed module onto the target, replacing the version it runs, to
+    try a fix on the live node; or revert one. The user is asked to approve
+    every load, in a dialog from their MCP client: this tool can't load
+    anything without that. The node's files aren't changed, so the new code
+    lasts until the node restarts. Compile the fix first (mix compile,
+    rebar3 compile, erlc) and pass the .beam file.
+    """
+    use Anubis.Server.Component,
+      type: :tool,
+      annotations: %{"readOnlyHint" => false, "destructiveHint" => true}
+
+    require Logger
+
+    alias Anubis.Protocol.Registry
+    alias Anubis.Server.{Frame, InputRequired}
+    alias OtpDebugMcp.{CodeLoad, Format, Target, Tools, Tracer}
+
+    schema do
+      field(:path, :string,
+        description:
+          "Absolute path of the fixed module's .beam file on the machine running this server, " <>
+            "compiled by the target's OTP major version or an older one"
+      )
+
+      field(:revert, :string,
+        description:
+          "Instead of path: a module to reload from the node's own code path, " <>
+            "undoing an earlier load, e.g. Elixir.MyApp.Worker or my_worker"
+      )
+    end
+
+    @impl true
+    def execute(params, frame) do
+      with :ok <- can_ask(frame),
+           {:ok, target} <- Target.target(),
+           {:ok, change} <- change(params),
+           {:ok, plan} <- CodeLoad.plan(change.module),
+           {:ok, change} <- complete(change, plan) do
+        case approval(frame, target, change) do
+          :approved -> load(frame, target, change, plan)
+          :ask -> ask(frame, target, change, plan)
+          {:declined, how} -> Tools.error_response(frame, declined(change, how))
+        end
+      else
+        {:done, result} -> Tools.json_response(frame, result)
+        {:error, reason} -> Tools.error_response(frame, reason)
+      end
+    end
+
+    # The approval is the user's answer to a form the client shows them,
+    # which only clients of the stateless protocol era (MCP 2026-07-28) can
+    # be sent mid-call. Without one there's no way to ask, so no loading.
+    defp can_ask(frame) do
+      if Registry.era(frame.context.protocol_version || "") == {:ok, :stateless} and
+           Frame.client_supports?(frame, "elicitation") do
+        :ok
+      else
+        {:error,
+         "load_module needs an MCP client that can ask the user to approve each load " <>
+           "(form elicitation, MCP 2026-07-28), and this one can't. Nothing was loaded."}
+      end
+    end
+
+    defp change(%{path: path}) when is_binary(path) do
+      with {:ok, beam} <- CodeLoad.read_beam(path) do
+        {:ok,
+         %{module: beam.module, md5: beam.md5, source: {beam.file, beam.binary}, file: beam.file}}
+      end
+    end
+
+    defp change(%{revert: mod}) when is_binary(mod),
+      do: {:ok, %{module: mod |> String.trim("'") |> Tracer.resolve_module(), source: :on_disk}}
+
+    defp change(_), do: {:error, "give either path (a .beam file to load) or revert (a module)"}
+
+    defp complete(%{module: mod}, %{sticky: true}) do
+      {:error,
+       "#{name(mod)} is one of OTP's own modules (in a sticky directory); " <>
+         "this tool doesn't replace those"}
+    end
+
+    defp complete(%{source: :on_disk} = change, plan) do
+      case plan do
+        %{on_disk: :none} ->
+          {:error,
+           "#{name(change.module)} isn't on the node's code path, so there's no version to revert to"}
+
+        %{on_disk: {_file, md5}, loaded: {_, md5}} ->
+          {:done,
+           %{
+             module: name(change.module),
+             unchanged: "the node already runs the version on its code path"
+           }}
+
+        %{on_disk: {file, md5}} ->
+          {:ok, Map.merge(change, %{md5: md5, file: to_string(file)})}
+      end
+    end
+
+    defp complete(%{md5: md5} = change, %{loaded: {_, md5}}),
+      do:
+        {:done,
+         %{module: name(change.module), unchanged: "the node already runs this code (same md5)"}}
+
+    defp complete(change, _plan), do: {:ok, change}
+
+    # Approved means the user accepted a form for this very code on this
+    # node: the state the form went out with says which, signed and bound
+    # to this call's arguments. If the file has changed since, ask again.
+    defp approval(frame, target, change) do
+      case Frame.input_response(frame, "approve") do
+        %{"action" => "accept", "content" => %{"load" => true}} ->
+          if Frame.request_state(frame) == {target, change.module, change.md5},
+            do: :approved,
+            else: :ask
+
+        %{"action" => "accept"} ->
+          {:declined, "accepted without ticking the box"}
+
+        %{"action" => action} when action in ["decline", "cancel"] ->
+          {:declined, action}
+
+        _ ->
+          :ask
+      end
+    end
+
+    defp ask(frame, target, change, plan) do
+      form = %{
+        "type" => "object",
+        "properties" => %{
+          "load" => %{
+            "type" => "boolean",
+            "title" => if(change.source == :on_disk, do: "Revert it", else: "Load it"),
+            "description" => "Every process at once, until the node restarts"
+          }
+        },
+        "required" => ["load"]
+      }
+
+      input =
+        InputRequired.new()
+        |> InputRequired.elicit("approve", question(target, change, plan), form)
+        |> InputRequired.state({target, change.module, change.md5})
+
+      {:reply, input, frame}
+    end
+
+    # Clients show only the first lines of the message, and may cut long
+    # ones short: so the most important facts first, one per line, each
+    # md5 before its path.
+    defp question(target, change, plan) do
+      {verb, label} =
+        if change.source == :on_disk,
+          do: {"Revert", "Back to"},
+          else: {"Load new code for", "New code"}
+
+      now =
+        case plan.loaded do
+          :not_loaded -> "not loaded on the node"
+          {file, md5} -> "md5 #{CodeLoad.hex(md5)}, #{CodeLoad.file_name(file)}"
+        end
+
+      running =
+        case plan.running do
+          {0, _} -> ""
+          {1, _} -> "\n1 process is executing it right now."
+          {n, _} -> "\n#{n} processes are executing it right now."
+        end
+
+      """
+      #{verb} #{name(change.module)} on #{target}?
+      #{label}: md5 #{CodeLoad.hex(change.md5)}, #{change.file}
+      Running now: #{now}#{running}\
+      """
+    end
+
+    defp load(frame, target, change, plan) do
+      case CodeLoad.load(change.module, change.source, change.md5) do
+        {:ok, %{file: file, old_code_users: {n, pids}}} ->
+          Logger.notice(
+            "load_module: approved by the user, loaded #{name(change.module)} " <>
+              "(md5 #{CodeLoad.hex(change.md5)}, #{file}) on #{target}"
+          )
+
+          Tools.json_response(
+            frame,
+            %{
+              loaded: name(change.module),
+              node: target,
+              file: file,
+              md5: CodeLoad.hex(change.md5),
+              replaced: replaced(plan.loaded),
+              lasts: lasts(change, plan),
+              still_on_old_code: old_code(n, pids),
+              hint: "Check the fix: run diagnose, or trace_calls on the fixed function."
+            }
+            |> Map.reject(fn {_k, v} -> is_nil(v) end)
+          )
+
+        {:error, reason} ->
+          Tools.error_response(frame, failed(change, reason, plan))
+      end
+    end
+
+    defp replaced(:not_loaded), do: nil
+    defp replaced({file, md5}), do: %{file: CodeLoad.file_name(file), md5: CodeLoad.hex(md5)}
+
+    defp lasts(%{source: :on_disk}, _plan), do: "this is the node's own version again"
+
+    defp lasts(change, %{on_disk: :none}) do
+      "until the node restarts: its files aren't changed. The node has no " <>
+        "#{name(change.module)} on its code path, so revert can't undo it; a restart does."
+    end
+
+    defp lasts(change, _plan) do
+      "until the node restarts: its files aren't changed. " <>
+        "load_module with revert: #{name(change.module)} undoes it."
+    end
+
+    defp old_code(0, _pids), do: nil
+
+    defp old_code(n, pids) do
+      %{
+        processes: n,
+        pids: Enum.map(pids, &Format.inspect/1),
+        why:
+          "they're in a function of the old version and switch only on their next fully " <>
+            "qualified call (Module:function); until then, another load of this module is refused"
+      }
+    end
+
+    defp declined(change, how) do
+      "The user didn't approve (#{how}), so #{name(change.module)} wasn't loaded. " <>
+        "Don't ask again unless the user asks for it."
+    end
+
+    defp failed(change, {:old_code_in_use, pids}, _plan) do
+      "Processes still run code from an earlier load of #{name(change.module)} " <>
+        "(#{Enum.map_join(pids, ", ", &Format.inspect/1)}), and loading again would kill them. " <>
+        "They switch on their next fully qualified call. Nothing was loaded."
+    end
+
+    defp failed(change, :changed, _plan),
+      do:
+        "#{name(change.module)}'s code changed after the user approved it, so nothing was loaded."
+
+    defp failed(change, :not_on_code_path, _plan),
+      do: "#{name(change.module)} is no longer on the node's code path, so nothing was loaded."
+
+    defp failed(_change, :sticky, _plan),
+      do: "The module is in a sticky directory, so nothing was loaded."
+
+    defp failed(_change, :badfile, plan) do
+      "The node (OTP #{plan.otp_release}) rejected the file, usually because a newer OTP " <>
+        "compiled it. Nothing was loaded."
+    end
+
+    defp failed(_change, :on_load_failure, _plan),
+      do: "The module's -on_load function failed, so the node kept the version it had."
+
+    defp failed(_change, reason, _plan), do: "Loading failed: #{Format.inspect(reason)}"
+
+    defp name(mod) do
+      case Atom.to_string(mod) do
+        "Elixir." <> elixir -> elixir
+        erlang -> erlang
+      end
+    end
+  end
 end

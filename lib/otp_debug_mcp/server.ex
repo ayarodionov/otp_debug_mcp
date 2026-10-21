@@ -24,6 +24,7 @@ defmodule OtpDebugMcp.Server do
   component(Tools.Cluster)
   component(Tools.Snapshot)
   component(Tools.RemoteEval)
+  component(Tools.LoadModule)
 
   @impl true
   def init(_client_info, frame), do: {:ok, frame}

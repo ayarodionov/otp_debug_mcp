@@ -2,10 +2,22 @@
 
 ## Unreleased
 
-- `docs/walkthroughs.md`: three recorded sessions against the Elixir
+- `load_module`: hot-load a fixed module's `.beam` onto the target to try
+  a fix, or `revert` to the node's own version. Every load asks the user
+  in a dialog from their MCP client, with the md5 and path of the new code
+  and of the version running now. That approval comes from the user, not
+  the agent, and is needed even when the tool is allowed in the client's
+  permissions. Clients that can't ask (no MCP 2026-07-28 form
+  elicitation) get a refusal. The approval covers that exact code on that
+  node: if the file changes, the user is asked again. Code still running
+  is never purged, so no process is killed, and OTP's own modules aren't
+  replaced.
+- `docs/walkthroughs.md`: four recorded sessions against the Elixir
   demos to follow along with (the mailbox that never drains, the crash
-  loop, the cluster with one bad node), each with the prompt, every tool
-  call and its real result, trimmed, and the conclusion.
+  loop, the cluster with one bad node, and trying the crash loop's fix on
+  the node with `load_module`), each with the prompt, every tool call and
+  its real result, trimmed, and the conclusion. The fix for the last one
+  is in `examples/elixir/fixes/`.
 - The install steps in the README work when pasted into zsh, macOS's
   default shell: a trailing `# comment` on a command line isn't a comment
   there, so the first line failed and the download addresses came out

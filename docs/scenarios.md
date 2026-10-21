@@ -23,11 +23,12 @@ Contents:
   9. [Finding the bug in the code, not just the node](#9-finding-the-bug-in-the-code-not-just-the-node)
   10. [Seeing what a function really receives](#10-seeing-what-a-function-really-receives)
   11. [Verifying a fix or a deploy](#11-verifying-a-fix-or-a-deploy)
-  12. [Watching a load test](#12-watching-a-load-test)
-  13. [Getting to know an unfamiliar system](#13-getting-to-know-an-unfamiliar-system)
+  12. [Trying a fix on the live node](#12-trying-a-fix-on-the-live-node)
+  13. [Watching a load test](#13-watching-a-load-test)
+  14. [Getting to know an unfamiliar system](#14-getting-to-know-an-unfamiliar-system)
 - **Other kinds of targets**
-  14. [Erlang products you didn't write](#14-erlang-products-you-didnt-write)
-  15. [Your own node during development](#15-your-own-node-during-development)
+  15. [Erlang products you didn't write](#15-erlang-products-you-didnt-write)
+  16. [Your own node during development](#16-your-own-node-during-development)
 - [Before pointing it at production](#before-pointing-it-at-production)
 - [Not supported yet](#not-supported-yet)
 
@@ -247,7 +248,37 @@ or so apart. A fixed leak shows near-zero deltas under the same load that
 used to produce growth. The same before-and-after comparison works for
 config changes, such as a new pool size.
 
-### 12. Watching a load test
+### 12. Trying a fix on the live node
+
+**Situation.** You have a fix and want to see it work on the node before
+going through a deploy, or you need a stopgap now.
+
+> I've compiled the fix for the gateway crash to
+> `_build/default/lib/payments/ebin`. Load `payments_gateway` onto
+> `payments@staging` and check that the crashes stop.
+
+**What the agent does.** `load_module` with the `.beam` file. You get a
+dialog showing the new code's md5 and path and the running version's, and
+nothing loads until you approve. Then `supervisor_restarts` or
+`trace_calls` to show the crashes have stopped. Tested on the Erlang
+payments demo, the restarts went from 10 in the supervisor's window to 0.
+Later, `load_module(revert: ...)` puts back the node's own version, again
+only with your approval. [Walkthrough 4](walkthroughs.md#4-trying-the-fix-on-the-live-node)
+is a recorded session of it on the Elixir payments demo.
+
+**Watch out.**
+- It lasts until the node restarts. The node's files aren't changed, so
+  deploy the fix properly as well.
+- Compile it with the node's OTP major version or an older one. A newer
+  one may produce code the node rejects.
+- State is kept as it is: there's no `code_change`. If the fix changes the
+  shape of a gen_server's state, the running processes will have the old
+  shape.
+- Processes in a function of an older version (a plain `receive` loop
+  calling itself without its module name) keep running it. While they do,
+  the tool refuses to load that module again, rather than kill them.
+
+### 13. Watching a load test
 
 **Situation.** You're load testing and want to know what breaks first and
 why.
@@ -260,7 +291,7 @@ why.
 the point where schedulers saturate, is your capacity limit, and
 `process_info` says which code it's in.
 
-### 13. Getting to know an unfamiliar system
+### 14. Getting to know an unfamiliar system
 
 **Situation.** You've inherited a system, or are onboarding, and want to see
 how it's actually put together at runtime.
@@ -280,7 +311,7 @@ have been restarting.
 
 ## Other kinds of targets
 
-### 14. Erlang products you didn't write
+### 15. Erlang products you didn't write
 
 **Situation.** A third-party system built on the BEAM misbehaves: a message
 broker, a database, an XMPP server, anything written in Erlang, Elixir, Gleam
@@ -302,7 +333,7 @@ is used as-is.
 too, such as RabbitMQ's `rabbitmq-diagnostics`; use both. Locate the cookie
 with care: it grants full control of the node.
 
-### 15. Your own node during development
+### 16. Your own node during development
 
 **Situation.** You're developing locally and want runtime answers while you
 code.
@@ -330,6 +361,9 @@ that on a dev machine.
 - **The cookie is full access.** Anyone with the cookie can run any code on
   the node. Giving it to the tool gives that power to the agent driving it.
 - **Keep `remote_eval` off** (the default) for production nodes.
+- **`load_module` changes running code.** Each load needs your approval in
+  a dialog, and lasts until the node restarts. Read the dialog: it says
+  which code goes onto which node.
 - **Tool output goes to the AI provider.** That includes process state,
   traced arguments and ETS contents. Mind secrets and personal data.
 - **Tracing on pre-27 nodes is one at a time.** There `trace_calls` won't

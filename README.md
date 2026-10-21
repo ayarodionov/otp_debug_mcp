@@ -40,6 +40,10 @@ introspection primitives, but an encoded diagnostic playbook in the spirit of
   duration and stops early if calls arrive too fast; every rpc has a
   timeout; arbitrary `remote_eval` is disabled unless
   `OTP_DEBUG_MCP_ALLOW_EVAL=true`.
+- **Nothing changes the node's code without you.** `load_module` asks you
+  to approve every load in a dialog from your MCP client, even when you've
+  allowed the tool in the client's permissions. A client that can't show
+  the dialog gets a refusal.
 - **Tracing never disturbs someone else's.** On OTP 27+ targets,
   `trace_calls` runs in its own isolated trace session
   (`trace:session_create/3`), so other tracing on the node (an operator's
@@ -63,6 +67,7 @@ introspection primitives, but an encoded diagnostic playbook in the spirit of
 | `cluster` | Every node of the target's cluster at once: compare them (outliers, partitions), diagnose them all, or snapshot them all to see which grows |
 | `snapshot` | Take / diff system snapshots — trends beat point-in-time numbers; diffs exclude the atoms and code this tool itself adds |
 | `remote_eval` | Arbitrary Erlang eval on the target (opt-in, off by default) |
+| `load_module` | Hot-load a fixed module's `.beam` onto the node to try a fix, or revert it, each time only with your approval |
 
 The diagnostic checks live in `lib/otp_debug_mcp/checks.ex`; each returns
 structured findings plus an interpretation telling the agent what the numbers
@@ -71,6 +76,52 @@ reads every supervisor's own restart history (including `DynamicSupervisor`),
 flags supervisors one crash away from giving up, and names the children
 restarting right now, with the exit reason and stack trace of one seen to
 die.
+
+### Trying a fix on the live node
+
+Compile the fix as usual (`mix compile`, `rebar3 compile`, `erlc`) and ask
+the agent to load it:
+
+> I've fixed `payments_gateway.erl` and compiled it to
+> `_build/default/lib/payments/ebin`. Load it onto `payments@staging`, then
+> check that the crashes stop.
+
+`load_module` reads the `.beam` file and asks you, in your client, to
+approve that exact code on that node. The dialog shows the md5 and path of
+the new code and of the version running now. In Claude Code it looks like
+this:
+
+```
+MCP server "otp-debug" requests your input
+Load new code for payments_gateway on payments@staging?
+New code: md5 2097d2e9edaf7d52e3bf00103def52e3, /home/you/payments/_build/...
+Running now: md5 247da95dfc69d91ae70a39b0ee346b88, /opt/payments/lib/payments-1.4.0/ebin/...
+❯ * Load it: ☐
+      Every process at once, until the node restarts
+  Accept    Decline
+```
+
+Tick the box and accept to load it. Declining, or pressing Esc, loads
+nothing, and the agent is told not to ask again unless you say so. If the
+file changes after the dialog appears, you're asked again. The approval
+can't come from the agent: it's your answer to a form your client shows
+you, and the tool can't be called around it.
+
+The load works like `nl/1` in a shell. Every process switches to the new
+code on its next call into the module, and the node's own files aren't
+changed, so a restart brings back the old version.
+`load_module(revert: "payments_gateway")` goes back to the version on the
+node's code path, also only once you approve. The tool doesn't purge code
+that's still running, so it never kills a process. A process still in a
+function of an older version blocks the next load of that module, and the
+tool says which processes those are. It doesn't replace OTP's own modules,
+like `lists` or `gen_server`.
+
+The dialog needs a client that can ask you mid-call: one using MCP
+2026-07-28 with form elicitation, as Claude Code does. Other clients get a
+refusal and nothing is loaded. In `claude -p` there's nobody to answer, so
+loads are always refused. [Walkthrough 4](docs/walkthroughs.md#4-trying-the-fix-on-the-live-node)
+is a whole recorded session of it.
 
 ## Setup
 
@@ -254,7 +305,8 @@ doesn't support yet.
 [docs/walkthroughs.md](docs/walkthroughs.md) has whole sessions to
 follow along with on the demo nodes below: the prompt, every tool call
 with its real result, and the conclusion, for a mailbox that never
-drains, a crash loop, and one bad node in a cluster.
+drains, a crash loop, one bad node in a cluster, and trying the crash
+loop's fix on the node with `load_module`.
 
 ## Demo targets
 

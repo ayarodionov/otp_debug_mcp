@@ -56,6 +56,13 @@ raw introspection when a purpose-built tool exists.
 - Do not use `remote_eval` unless the purpose-built tools can't answer AND
   the user has enabled it; never eval anything that mutates state without
   the user explicitly approving that exact expression.
+- Use `load_module` only when the user asks to try a fix on the node.
+  Compile it first, with the target's OTP major version or an older one,
+  and pass the `.beam`. The server shows the user an approval dialog. Tell
+  them it's coming, and that the change lasts until the node restarts. If
+  they decline, don't call it again unless they ask. After a load, check
+  the fix with `diagnose`, `run_check` or `trace_calls`. Remind them that
+  the real fix still needs deploying, and that `revert` undoes the load.
 - `binary_leak` force-GCs processes — cheap, but mention it when running
   against production.
 

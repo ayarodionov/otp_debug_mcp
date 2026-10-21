@@ -149,6 +149,10 @@ directory as a skill if your plan has skills.
   tool. Allowing the read-only ones (`diagnose`, `run_check`,
   `process_info`, `supervision_tree`, `snapshot`, `cluster`) saves clicks;
   keep `trace_calls` on ask for production nodes.
+- **`load_module` asks you to approve each load** in a dialog, using MCP
+  2026-07-28 form elicitation. A client that can't do that gets a
+  refusal, and nothing is loaded. Claude Code can; check your client's
+  release notes for MCP 2026-07-28 and elicitation support.
 - **`remote_eval` stays off** (the default) unless it's a development node:
   it's enabled only by `OTP_DEBUG_MCP_ALLOW_EVAL=true` in the server's
   environment.

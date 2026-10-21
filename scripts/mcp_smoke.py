@@ -63,6 +63,14 @@ def call(i, name, args):
 err, text = call(3, "connect", {"node": target})
 print("connect ->", "ERROR" if err else "ok", text[:200])
 
+# This client can't ask the user to approve anything, so no loading.
+send({"jsonrpc": "2.0", "id": 8, "method": "tools/call",
+      "params": {"name": "load_module", "arguments": {"revert": "erlang"}}})
+r = recv(8)["result"]
+print("load_module ->", r["content"][0]["text"][:120])
+if not r.get("isError") or "Nothing was loaded" not in r["content"][0]["text"]:
+    failures.append("load_module: didn't refuse a client that can't ask the user")
+
 err, text = call(4, "diagnose", {})
 if err:
     print("diagnose -> ERROR", text[:500])
