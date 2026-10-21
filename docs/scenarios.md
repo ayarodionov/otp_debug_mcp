@@ -305,8 +305,9 @@ that on a dev machine.
   because it would end it. Only force it if you know whose trace that is.
   OTP 27+ nodes have isolated trace sessions, and this doesn't apply.
 - **Network.** Erlang distribution needs epmd (port 4369) and the
-  distribution port range reachable from wherever the tool runs. Connecting
-  to another machine hasn't been tested yet.
+  target's distribution port reachable from wherever the tool runs; see
+  [production.md](production.md) for firewalls, loopback-only targets and
+  TLS.
 
 ## Not supported yet
 

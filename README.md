@@ -252,8 +252,11 @@ an old one missing functions) keep their running recon sessions across
 repeat connects and checks; on OTP 28, `trace_calls` traces the same
 function as an operator's `recon_trace` session without disturbing it; on
 an OTP 26 target, recon is compiled on the target and every check works,
-and `trace_calls` refuses while `dbg` is tracing unless forced. Not yet
-verified: a target on another machine.
+and `trace_calls` refuses while `dbg` is tracing unless forced; the whole
+test suite over TLS distribution; a target on another Mac over the local
+network (OTP 29, newer than the tool's OTP 28), reached by IP with a fixed
+distribution port, where the smoke test and every tool passed and the
+target saw the tool only as a hidden node.
 
 `scripts/crash_loop_target.exs` runs a payment gateway in a crash loop
 just under its supervisor's restart limit, failing intermittently. Asked
@@ -306,5 +309,11 @@ publishing.
 
 Open items:
 
-- [ ] Verify against a target on another machine (firewalls, epmd port 4369,
-      the distribution port range)
+- [ ] Targets on an older OTP release than the tool, without the `compiler`
+      application (common in slim rebar3 releases), get no recon: ship recon
+      precompiled for older releases
+- [ ] trace_calls on OTP 26 and earlier still goes through recon_trace, which
+      ends other tracing (with permission): a small tracer of our own
+- [ ] Multi-node: compare or correlate several nodes of one cluster
+- [ ] Verify the SSH tunnel and TLS recipes in docs/production.md across two
+      machines (both are tested on one)
