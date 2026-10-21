@@ -3,9 +3,12 @@
 Elixir nodes, each with a bug for otp_debug_mcp to find, plus a Mix
 release for trying release-specific things. They need Elixir.
 
+Start a demo by its command in the table below, e.g. `shop`, and stop
+them all with `stop`:
+
 ```sh
-examples/elixir/run.sh shop        # start one (see below)
-examples/elixir/run.sh stop        # stop them all
+examples/elixir/run.sh shop
+examples/elixir/run.sh stop
 ```
 
 `run.sh` starts each node in the background with `elixir --sname` on this

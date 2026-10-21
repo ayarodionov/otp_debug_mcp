@@ -84,14 +84,20 @@ for:
 - Linux on x86_64 and arm64 (`linux-x86_64`, `linux-arm64`), with glibc
   from Ubuntu 22.04 or later and OpenSSL 3 (`libcrypto.so.3`)
 
+Set `target` to `macos-arm64`, `linux-x86_64` or `linux-arm64`:
+
 ```sh
-vsn=0.3.0 target=macos-arm64   # or linux-x86_64, linux-arm64
+vsn=0.3.0
+target=macos-arm64
 base=https://github.com/ayarodionov/otp_debug_mcp/releases/download/v$vsn
-curl -LO "$base/otp_debug_mcp-$vsn-$target.tar.gz"
-curl -LO "$base/otp_debug_mcp-$vsn-$target.tar.gz.sha256"
+curl -fLO "$base/otp_debug_mcp-$vsn-$target.tar.gz"
+curl -fLO "$base/otp_debug_mcp-$vsn-$target.tar.gz.sha256"
 shasum -a 256 -c "otp_debug_mcp-$vsn-$target.tar.gz.sha256"
 mkdir -p ~/.local && tar -xzf "otp_debug_mcp-$vsn-$target.tar.gz" -C ~/.local
+ls ~/.local/otp_debug_mcp/bin
 ```
+
+`shasum` should print `OK`, and `ls` should list `otp_debug_mcp`.
 
 The server is then `~/.local/otp_debug_mcp/bin/otp_debug_mcp`. The
 binaries aren't signed: on macOS, an archive downloaded with a browser
@@ -303,8 +309,10 @@ python3 scripts/mcp_call.py _build/prod/rel/otp_debug_mcp/bin/otp_debug_mcp "[
   [\"connect\", {\"node\": \"rt@$(hostname -s)\"}], [\"diagnose\", {}],
   [\"connect\", {\"node\": \"rt@$(hostname -s)\"}]
 ]"
-tail -1 /tmp/status.log   # operator_trace=alive
+tail -1 /tmp/status.log
 ```
+
+The last line should read `operator_trace=alive`.
 
 An older OTP release runs best in Docker. Distribution through a published
 port works without epmd: the target listens on a fixed port, and the tool

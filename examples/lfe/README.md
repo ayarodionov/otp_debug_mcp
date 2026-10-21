@@ -3,9 +3,12 @@
 LFE (Lisp Flavoured Erlang) services, each with a bug for otp_debug_mcp to
 find. They're plain OTP: gen_servers, a supervisor, an application.
 
+Start a demo by its command in the table below, e.g. `shop`, and stop
+them all with `stop`:
+
 ```sh
-examples/lfe/run.sh shop        # start one (see below)
-examples/lfe/run.sh stop        # stop them all
+examples/lfe/run.sh shop
+examples/lfe/run.sh stop
 ```
 
 `run.sh` compiles `src/` with `lfec` into `ebin/`, then starts each node in
@@ -13,11 +16,12 @@ the background with `erl`. Compiled LFE needs nothing from LFE at runtime,
 only Erlang. Nodes get `-sname` on this host and the cookie in
 `~/.erlang.cookie`, which is also the tool's default. `lfec` has to be on
 the `PATH`, or set `LFE` to an LFE install or checkout (with `lfec` in its
-`bin/`). To build LFE itself:
+`bin/`). To build LFE itself, and run a demo with it:
 
 ```sh
 git clone --depth 1 --branch v2.2.2 https://github.com/lfe/lfe.git
-make -C lfe compile          # then: LFE=$PWD/lfe examples/lfe/run.sh shop
+make -C lfe compile
+LFE=$PWD/lfe examples/lfe/run.sh shop
 ```
 
 | Command | Node | The bug | What finds it |

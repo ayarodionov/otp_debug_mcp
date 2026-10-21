@@ -3,9 +3,12 @@
 Plain Erlang/OTP nodes, no Elixir, each with a bug for otp_debug_mcp to
 find. They need only Erlang (`erl` and `erlc` on the `PATH`).
 
+Start a demo by its command in the table below, e.g. `shop`, and stop
+them all with `stop`:
+
 ```sh
-examples/erlang/run.sh shop        # start one (see below)
-examples/erlang/run.sh stop        # stop them all
+examples/erlang/run.sh shop
+examples/erlang/run.sh stop
 ```
 
 `run.sh` compiles `src/` into `ebin/` and starts each node in the

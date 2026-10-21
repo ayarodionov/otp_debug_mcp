@@ -308,8 +308,10 @@ with care: it grants full control of the node.
 code.
 
 ```sh
-iex --sname dev -S mix          # or: iex --sname dev -S mix phx.server
+iex --sname dev -S mix
 ```
+
+(or `iex --sname dev -S mix phx.server` for a Phoenix app)
 
 > Connect to `dev@<your-host>`. Did my new `Notifications.Supervisor`
 > start all its workers? Then trace `Notifications.Worker.handle_info/2`

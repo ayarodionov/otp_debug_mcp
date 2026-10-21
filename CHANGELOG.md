@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- The install steps in the README work when pasted into zsh, macOS's
+  default shell: a trailing `# comment` on a command line isn't a comment
+  there, so the first line failed and the download addresses came out
+  wrong. No shell example in the docs has an inline comment any more.
+
 ## 0.3.0
 
 Binary leaks through slices found by `diagnose`, LFE demo targets, and

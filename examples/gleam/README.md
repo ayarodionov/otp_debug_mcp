@@ -4,9 +4,12 @@ Gleam services on the BEAM, each with a bug for otp_debug_mcp to find. They
 use the standard `gleam_otp` actors and supervisors, and need Gleam and
 Erlang (`gleam`, `erl` on the `PATH`).
 
+Start a demo by its command in the table below, e.g. `shop`, and stop
+them all with `stop`:
+
 ```sh
-examples/gleam/run.sh shop        # start one (see below)
-examples/gleam/run.sh stop        # stop them all
+examples/gleam/run.sh shop
+examples/gleam/run.sh stop
 ```
 
 `run.sh` runs `gleam build`, then starts each node in the background with
@@ -25,11 +28,11 @@ module `shop`, so `trace_calls` takes `shop` and a function name such as
 `handle_message`. Values appear as Erlang sees them, e.g. a custom type
 `Update(sku: 1, price: 2)` as `{update,1,2}`.
 
-To run one in the foreground instead:
+To run one in the foreground instead, stopping it with Ctrl-C twice:
 
 ```sh
 cd examples/gleam
-gleam run -m jobs      # Ctrl-C twice to stop
+gleam run -m jobs
 ```
 
 That node has no name; for the tool to reach it, start it as `run.sh` does,
