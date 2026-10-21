@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.2.1
+
+A faster `diagnose`, and a more exact measure of the tool's own footprint.
 
 - `diagnose` runs its checks in parallel, in two phases, so the checks
   that measure load and atom growth don't see the others' work: about
