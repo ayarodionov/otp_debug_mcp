@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
+
+Trying a fix on the live node with `load_module`, only with the user's
+approval each time, recorded walkthroughs, and installing with Claude
+Code.
+
+### Trying a fix on the live node
 
 - `load_module`: hot-load a fixed module's `.beam` onto the target to try
   a fix, or `revert` to the node's own version. Every load asks the user
@@ -12,6 +18,9 @@
   node: if the file changes, the user is asked again. Code still running
   is never purged, so no process is killed, and OTP's own modules aren't
   replaced.
+
+### Docs
+
 - `docs/walkthroughs.md`: four recorded sessions against the Elixir
   demos to follow along with (the mailbox that never drains, the crash
   loop, the cluster with one bad node, and trying the crash loop's fix on
