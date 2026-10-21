@@ -265,6 +265,12 @@ both recipes in [docs/production.md](docs/production.md): an SSH tunnel to
 a target listening only on loopback, and TLS distribution, which refused
 plain-TCP connections and certificates from another CA.
 
+[examples/erlang](examples/erlang) has the same kinds of demo in plain
+Erlang/OTP, with no Elixir: a mailbox that never drains, an OTP
+application in a crash loop, a session store leaking atoms and ETS rows,
+and a cluster with one bad node. `examples/erlang/run.sh` builds and
+starts them; CI smoke-tests the release against the Erlang shop too.
+
 `scripts/cluster_demo.sh start` runs a three-node cluster on this host in
 which only `shop_b` has the cache bug. Pointed at the healthy `shop_a`, a
 headless Claude Code session ran `cluster` first and went straight to
