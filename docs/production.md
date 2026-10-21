@@ -77,10 +77,11 @@ ssh -N -L 9100:127.0.0.1:9100 prod-host
 and run the server with `ERL_FLAGS="-erl_epmd_port 9100"`.
 `-erl_epmd_port` makes it dial port 9100 directly instead of asking epmd,
 so `connect` to `app@127.0.0.1` reaches the target through the tunnel.
-This was tested without the SSH hop, against a target configured as
-above, with the cookie in `OTP_DEBUG_MCP_COOKIE`. The CI tests against an
-OTP 26 node in Docker dial the same way, through a published port that
-works like the tunnel.
+This was tested between two Macs on a local network: with the target
+configured as above, it was unreachable from the network, and the smoke
+test passed through the tunnel, with the cookie in `OTP_DEBUG_MCP_COOKIE`.
+The CI tests against an OTP 26 node in Docker dial the same way, through a
+published port that works like the tunnel.
 
 ## TLS distribution
 
@@ -127,10 +128,13 @@ Things to get right:
 - **Cookie.** TLS doesn't replace it; both are checked.
 
 `scripts/tls_dist_certs.sh DIR` makes a throwaway CA, one certificate for
-every node, and an options file, for trying this locally. CI runs the
-whole test suite over TLS distribution with them, and
+every node, and an options file, for trying this out; copy the directory
+to the target's machine and fix the paths in its options file. CI runs
+the whole test suite over TLS distribution with them, and
 `test/otp_debug_mcp/tls_dist_test.exs` checks that the target sees the
-connection as TLS. `connect`'s error mentions a TLS mismatch as one of the
+connection as TLS. Between two Macs, the smoke test passed with both ends
+on TLS, the target reported the connection as TLS, and a plain-TCP tool
+and a tool whose certificate came from another CA were both refused. `connect`'s error mentions a TLS mismatch as one of the
 likely causes when it fails.
 
 ## Passing VM flags to the server

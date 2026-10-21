@@ -258,7 +258,10 @@ and `trace_calls` refuses while `dbg` is tracing unless forced; the whole
 test suite over TLS distribution; a target on another Mac over the local
 network (OTP 29, newer than the tool's OTP 28), reached by IP with a fixed
 distribution port, where the smoke test and every tool passed and the
-target saw the tool only as a hidden node.
+target saw the tool only as a hidden node; and, between the same two Macs,
+both recipes in [docs/production.md](docs/production.md): an SSH tunnel to
+a target listening only on loopback, and TLS distribution, which refused
+plain-TCP connections and certificates from another CA.
 
 `scripts/crash_loop_target.exs` runs a payment gateway in a crash loop
 just under its supervisor's restart limit, failing intermittently. Asked
@@ -317,5 +320,3 @@ Open items:
 - [ ] trace_calls on OTP 26 and earlier still goes through recon_trace, which
       ends other tracing (with permission): a small tracer of our own
 - [ ] Multi-node: compare or correlate several nodes of one cluster
-- [ ] Verify the SSH tunnel and TLS recipes in docs/production.md across two
-      machines (both are tested on one)
