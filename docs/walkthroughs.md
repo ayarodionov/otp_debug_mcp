@@ -122,9 +122,63 @@ snapshot was a guess; the diff is the evidence. The node had reached
 them by `GenServer.cast`, which never waits, from a producer sending
 far faster. Its mailbox grows without bound, which is where the memory
 goes, and any `GenServer.call` to it waits behind the whole queue,
-which is why the node gets slower. Fixes: backpressure (`call` instead
-of `cast`), a faster handler (or writes straight to ETS), or coalescing
-updates per SKU.
+which is why the node gets slower.
+
+**Fixes.** Any one of these stops the growth. Which one fits depends on
+whether the producer can afford to wait, and whether every update
+matters or only the latest price.
+
+- **Backpressure.** Send with `GenServer.call` instead of `cast`. The
+  producer then waits for each update to finish, so it can never get
+  ahead of the cache, and the mailbox holds at most one message per
+  producer. The cost is the producer's throughput, here about 170
+  updates a second. A call also times out after 5 seconds by default,
+  so a cache that slows down shows up as errors in the producer instead
+  of as memory, which is easier to notice.
+- **Make the update cheap.** Whatever the 5 ms stands for (a database
+  write, an HTTP request, a computation) doesn't belong in a process
+  that every caller goes through. Hand it to a task
+  (`Task.Supervisor.async_nolink/3`) or a worker pool. Or drop the
+  GenServer and keep prices in a public ETS table, which the producer
+  writes and readers read directly, with no process in between:
+
+  ```elixir
+  :ets.new(:prices, [:named_table, :public, read_concurrency: true, write_concurrency: true])
+  :ets.insert(:prices, {sku, price})
+  ```
+
+- **Coalesce updates.** The producer cycles through 1,000 SKUs, so of
+  the 1.6 million queued updates, every one but the newest for each SKU
+  is overwritten anyway. Keep the latest price per SKU in a map, on the
+  producer's side or in the cache (merging in `handle_cast` without
+  doing the slow work), and flush it on a timer set with
+  `Process.send_after/3`. The slow work then runs at most once per SKU
+  per interval, however fast updates arrive.
+- **Spread the work.** If every update really needs its 5 ms, run
+  several caches and send each SKU to one of them, e.g. with
+  `PartitionSupervisor` (Elixir 1.14 and later) and
+  `{:via, PartitionSupervisor, {Shop.PriceCaches, sku}}`. N partitions
+  handle N times the rate, and the updates for one SKU stay in order.
+- **Let the consumer set the pace.** When updates come from a source you
+  don't control, such as a message queue or a feed, GenStage or
+  Broadway have consumers ask for work instead of having it pushed at
+  them, and Broadway adds batching and concurrency settings.
+- **Shed load.** If stale prices can be dropped, the producer can look
+  at the mailbox first and skip the update when it's long:
+
+  ```elixir
+  {:message_queue_len, n} = Process.info(Process.whereis(Shop.PriceCache), :message_queue_len)
+  if n < 10_000, do: GenServer.cast(Shop.PriceCache, {:update, sku, price})
+  ```
+
+  That's a safety valve, not a fix, and `Process.info/2` works only on
+  local processes.
+
+Whichever you choose, start the cache under a supervisor: here a script
+starts it with a plain `start_link`, and `process_info` reported that
+nothing would restart it. Also alert on its `message_queue_len`, so a
+mailbox that starts growing again is noticed in minutes, not when the
+node runs out of memory.
 
 ---
 
@@ -186,9 +240,48 @@ result above because they change with every crash, about once a second.
 `https://pay.example.com:443x/v2` with a regex and calls
 `String.to_integer("443x")`, which raises. It does that a second after
 every start, so it crashes about once a second, just under the
-supervisor's limit. The fix is in the configured URL and in
-`payments.exs` line 26: take the port from `URI.parse/1` and handle a
-bad one.
+supervisor's limit.
+
+**Fixes.** The bad value is in the configuration and the crash is in the
+code, so there's something to fix in both, and in how the failure
+showed itself.
+
+- **Correct the URL.** It comes from `GATEWAY_URL`, falling back to a
+  default in `init/1`. Setting `GATEWAY_URL` to
+  `https://pay.example.com:443/v2` and restarting the node stops the
+  crashes at once, with no change to the code.
+- **Parse it properly.** Use `URI.new/1`, which rejects this URL with
+  `{:error, ":"}`. Don't use `URI.parse/1`: on this URL it quietly
+  returns port 443, the default for `https`, so a mistyped port would
+  go unnoticed and the gateway would connect to a port nobody
+  configured.
+
+  ```elixir
+  case URI.new(url) do
+    {:ok, %URI{host: host, port: port}} when is_binary(host) -> {:ok, host, port}
+    {:error, part} -> {:error, {:bad_gateway_url, url, part}}
+  end
+  ```
+
+- **Check the configuration at start, not a second later.** Here the
+  URL is parsed in `handle_info/2`, after `init/1` has returned, so
+  every start looks successful and the crash comes a second later.
+  Parse it in `init/1` and return `{:stop, reason}` when it's bad, or
+  check it in `config/runtime.exs`. Then the application refuses to boot
+  with an error that names the URL, instead of running half-broken.
+- **Don't crash on failures that aren't bugs.** A gateway that's
+  unreachable or answers with an error is an expected condition: log
+  it, retry with backoff (`Process.send_after/3` with a growing delay),
+  and give callers `{:error, :gateway_unavailable}` instead of an exit
+  from a process that's dead. Let it crash is for bugs; a supervisor
+  restarting a process every second doesn't fix the network.
+- **Make crash loops loud.** 15 restarts in 10 seconds is a generous
+  limit. With the `Supervisor` defaults, 3 restarts in 5 seconds, this
+  loop would have hit the limit within seconds and stopped the
+  application: loud, instead of intermittent. Raise the limit only for
+  faults you know are transient. Alert on crash reports too: each
+  restart logs one, so counting them catches a loop that stays under
+  the limit, as `diagnose`'s `supervisor_restarts` check did here.
 
 ---
 
@@ -243,6 +336,25 @@ here the session is [walkthrough 1](#1-a-mailbox-that-never-drains):
 
 **The answer.** `ex_b` alone has the bug. On the healthy node you were
 pointed at, `diagnose` would have found nothing.
+
+**Fixes.** The fix for the code is the one in
+[walkthrough 1](#1-a-mailbox-that-never-drains), deployed to every node.
+A cluster adds questions of its own:
+
+- **Why only one node?** When every node runs the same code, the
+  difference is in what reaches them. Here, only `ex_b` runs the shop
+  script. In production, look for load that isn't spread evenly: a
+  singleton or a `:global`-registered process, sticky routing, a hot
+  partition key, or a scheduled job that runs on one node. Also look
+  for a node on a different configuration or release version.
+  `cluster(action: "compare")` shows each node's `otp_release`.
+- **Contain it while the fix ships.** Take `ex_b` out of the load
+  balancer, or restart it to buy time. A restart empties the mailbox,
+  but the queued updates are lost and the mailbox starts growing again.
+- **Alert on outliers, not only on thresholds.** A node with four times
+  the process memory of its peers is worth a look before it crosses any
+  absolute limit. Comparing each node with the median of the others,
+  as `cluster compare` does, catches this early.
 
 ---
 
