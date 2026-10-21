@@ -2,7 +2,7 @@ defmodule OtpDebugMcp.ChecksTest do
   use ExUnit.Case, async: false
 
   alias OtpDebugMcp.{Checks, Snapshotter, TestTarget}
-  alias OtpDebugMcp.Fixtures.{AtomLeak, Mailbox, ProcLeak, SliceKeeper}
+  alias OtpDebugMcp.Fixtures.{AtomLeak, Fussy, Mailbox, ProcLeak, SliceKeeper}
 
   setup_all do
     target = TestTarget.start()
@@ -81,6 +81,18 @@ defmodule OtpDebugMcp.ChecksTest do
     assert %{sampled: 2000, looks_like: "slices" <> _} = top.held_binaries
     # GC can't free live references.
     assert f.released_by_gc == []
+  end
+
+  test "binary_leak never sends sys:get_state to a process that isn't an OTP behaviour" do
+    target = TestTarget.start()
+    on_exit(fn -> TestTarget.stop(target) end)
+    {:ok, _} = TestTarget.connect(target)
+    :ok = TestTarget.call(target, Fussy, :start, [:fussy, 80])
+
+    assert %{findings: %{largest_holders: [top | _]}} = Checks.run(:binary_leak)
+    assert top.info.registered_name =~ "fussy"
+    refute Map.has_key?(top, :held_binaries)
+    assert is_pid(TestTarget.call(target, :erlang, :whereis, [:fussy]))
   end
 
   test "binary_leak tells whole binaries piling up from slices" do

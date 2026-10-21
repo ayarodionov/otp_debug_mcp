@@ -349,3 +349,37 @@ defmodule OtpDebugMcp.Fixtures.SliceKeeper do
     {:ok, kept}
   end
 end
+
+defmodule OtpDebugMcp.Fixtures.Fussy do
+  @moduledoc """
+  A registered plain process, not an OTP behaviour, holding `mb` megabytes
+  of binaries and crashing on any message it doesn't expect, as some
+  processes do (recon's trace processes, for one).
+  """
+
+  def start(name, mb) do
+    caller = self()
+
+    pid =
+      spawn(fn ->
+        kept = for i <- 1..(mb * 64), do: :binary.copy(<<i::32>>, 4096)
+        send(caller, :ready)
+        loop(kept)
+      end)
+
+    Process.register(pid, name)
+
+    receive do
+      :ready -> :ok
+    after
+      30_000 -> {:error, :timeout}
+    end
+  end
+
+  defp loop(kept) do
+    receive do
+      :expected -> loop(kept)
+      other -> exit({:unexpected_message, other})
+    end
+  end
+end

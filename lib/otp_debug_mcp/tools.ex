@@ -152,7 +152,7 @@ defmodule OtpDebugMcp.Tools do
     """
     use Anubis.Server.Component, type: :tool
 
-    alias OtpDebugMcp.{ProcessContext, Target, Tools}
+    alias OtpDebugMcp.{Checks, ProcessContext, Target, Tools}
 
     schema do
       field(:pid, {:required, :string},
@@ -176,21 +176,17 @@ defmodule OtpDebugMcp.Tools do
            {:ok, context} <- context(pid),
            {:ok, info} <- Target.rpc(:recon, :info, [pid]) do
         {state, state_summary} =
-          if params[:include_state] do
-            case Target.rpc(:sys, :get_state, [pid, 2_000], 3_000) do
-              {:ok, s} ->
-                {Format.inspect(s, limit: 100, pretty: true), summarize(s)}
+          cond do
+            !params[:include_state] ->
+              {"not requested: set include_state to fetch it", nil}
 
-              {:error, {:badrpc, {:EXIT, {:timeout, _}}}} ->
-                {"unavailable: the process did not answer sys:get_state within 2s. " <>
-                   "This is a symptom, not a tool failure: the process is blocked " <>
-                   "or its mailbox is backed up, so system messages wait in line too.", nil}
+            not sys_safe?(pid) ->
+              {"skipped: the process isn't waiting in the loop of an OTP behaviour " <>
+                 "(gen_server, gen_statem, gen_event) or a Gleam actor, so it may not " <>
+                 "understand sys:get_state, and asking could crash it", nil}
 
-              {:error, e} ->
-                {"unavailable: #{Format.inspect(e)}", nil}
-            end
-          else
-            {"not requested: set include_state to fetch it", nil}
+            true ->
+              fetch_state(pid)
           end
 
         binary_bytes =
@@ -213,6 +209,26 @@ defmodule OtpDebugMcp.Tools do
         )
       else
         err -> Tools.error_response(frame, err)
+      end
+    end
+
+    defp sys_safe?(pid) do
+      code = Checks.sys_safe_fun() <> "SysSafe(Pid)."
+      Checks.remote_eval(code, Pid: pid) == {:ok, true}
+    end
+
+    defp fetch_state(pid) do
+      case Target.rpc(:sys, :get_state, [pid, 2_000], 3_000) do
+        {:ok, s} ->
+          {Format.inspect(s, limit: 100, pretty: true), summarize(s)}
+
+        {:error, {:badrpc, {:EXIT, {:timeout, _}}}} ->
+          {"unavailable: the process did not answer sys:get_state within 2s. " <>
+             "This is a symptom, not a tool failure: the process is blocked " <>
+             "or its mailbox is backed up, so system messages wait in line too.", nil}
+
+        {:error, e} ->
+          {"unavailable: #{Format.inspect(e)}", nil}
       end
     end
 

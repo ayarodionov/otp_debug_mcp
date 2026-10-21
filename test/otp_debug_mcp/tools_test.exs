@@ -133,6 +133,15 @@ defmodule OtpDebugMcp.ToolsTest do
                result
     end
 
+    test "won't ask a process that isn't an OTP behaviour for its state", %{target: target} do
+      :ok = TestTarget.call(target, OtpDebugMcp.Fixtures.Fussy, :start, [:fussy, 1])
+
+      assert {:ok, %{"state" => "skipped: " <> _}} =
+               call_tool_json(Tools.ProcessInfo, %{pid: "fussy", include_state: true})
+
+      assert is_pid(TestTarget.call(target, :erlang, :whereis, [:fussy]))
+    end
+
     test "summarizes the state it fetches" do
       assert {:ok, %{"state_summary" => %{"kind" => _, "words" => _}}} =
                call_tool_json(Tools.ProcessInfo, %{pid: "ticker", include_state: true})

@@ -262,10 +262,28 @@ defmodule OtpDebugMcp.Checks do
   # GC frees nothing, so the largest holders of binary memory are listed.
   @binary_holder_mb 50
 
+  # Whether Pid can be asked sys:get_state: it's waiting in the loop of an
+  # OTP behaviour, or of a Gleam actor, which answer system messages. Any
+  # other process may not understand one, and some crash on it (recon's
+  # trace processes do, ending the trace).
+  @sys_safe ~S"""
+  SysSafe = fun(P) ->
+    Loops = [gen_server, gen_statem, gen_event, 'gleam@otp@actor'],
+    case erlang:process_info(P, [current_function, dictionary]) of
+      [{current_function, {erlang, hibernate, 3}}, {dictionary, D}] ->
+        lists:keymember('$initial_call', 1, D);
+      [{current_function, {M, _, _}}, _] ->
+        lists:member(M, Loops);
+      _ ->
+        false
+    end
+  end,
+  """
+
   # The binaries in a process's state, up to 2000: their own size against
   # the size of the binaries they point into. Slices (sub-binaries) pin far
-  # more than they keep; whole binaries pin what they keep. Needs a process
-  # that answers sys:get_state.
+  # more than they keep; whole binaries pin what they keep. Only for a
+  # process that can answer sys:get_state.
   @held_binaries ~S"""
   Walk = fun W(_, {N, _, _} = Acc) when N >= 2000 -> Acc;
              W(B, {N, Kept, Pinned}) when is_binary(B) ->
@@ -275,12 +293,12 @@ defmodule OtpDebugMcp.Checks do
              W(M, Acc) when is_map(M) -> W(maps:values(M), Acc);
              W(_, Acc) -> Acc
          end,
-  case catch sys:get_state(Pid, 1000) of
+  case SysSafe(Pid) andalso (catch sys:get_state(Pid, 1000)) of
+    false -> unavailable;
     {'EXIT', _} -> unavailable;
     State -> Walk(State, {0, 0, 0})
   end.
   """
-
   def run(:binary_leak) do
     with {:ok, leaks} <- Target.rpc(:recon, :bin_leak, [5], 15_000),
          {:ok, holders} <- Target.rpc(:recon, :proc_count, [:binary_memory, 5]),
@@ -672,6 +690,9 @@ defmodule OtpDebugMcp.Checks do
   @doc "Erlang funs InitialCall/1 and History/1, for code evaluated on the target."
   def supervisor_funs, do: @supervisor_funs
 
+  @doc "Erlang fun SysSafe/1, for code evaluated on the target."
+  def sys_safe_fun, do: @sys_safe
+
   @doc """
   The registered name, strategy and summarized restart history of
   supervisor `sup`, for supervision_tree. Without the history if its state
@@ -793,7 +814,7 @@ defmodule OtpDebugMcp.Checks do
   defp atom_count, do: Target.rpc(:erlang, :system_info, [:atom_count])
 
   defp held_binaries([{pid, _bytes, _info} | _]) do
-    case remote_eval(@held_binaries, Pid: pid) do
+    case remote_eval(@sys_safe <> @held_binaries, Pid: pid) do
       {:ok, {n, kept, pinned}} when n > 0 ->
         %{
           held_binaries: %{

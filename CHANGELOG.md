@@ -16,6 +16,9 @@
   with `include_state`, a summary of the state's shape and size.
 - Traced arguments and return values are cut at 300 characters each, so
   one big state doesn't fill every event.
+- `sys:get_state` is only sent to processes waiting in an OTP behaviour's
+  loop (gen_server, gen_statem, gen_event) or a Gleam actor's: other
+  processes may not understand it, and some crash on it.
 
 ## 0.2.1
 
