@@ -22,7 +22,10 @@ Each client needs two things:
    for a downloaded release; for a source build, point it at your
    checkout's copy instead.
 
-The examples below use the downloaded release's paths.
+The examples below use the downloaded release's paths. For a build from
+source, put the full path of your checkout's
+`_build/prod/rel/otp_debug_mcp/bin/otp_debug_mcp` in each `command`, and
+set `skill` to its `skills/otp-debug/SKILL.md`.
 
 These setups follow each client's documented configuration; the tool has
 been tested end to end from Claude Code only.

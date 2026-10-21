@@ -152,13 +152,18 @@ it with `claude mcp remove otp-debug --scope user` and add it again. A
 build from source runs whatever was built last, so run `mix release`
 again after updating the checkout.
 
-Or as a `.mcp.json` entry, with the full path to the server:
+Or as a `.mcp.json` entry. JSON expands neither `~` nor variables, so
+`command` must be the server's full path, the one `server` holds above
+(`echo "$server"` prints it):
+`/Users/you/.local/otp_debug_mcp/bin/otp_debug_mcp` for a downloaded
+release, or `/path/to/otp_debug_mcp/_build/prod/rel/otp_debug_mcp/bin/otp_debug_mcp`
+for a build from source. For a downloaded release:
 
 ```json
 {
   "mcpServers": {
     "otp-debug": {
-      "command": "/home/you/.local/otp_debug_mcp/bin/otp_debug_mcp",
+      "command": "/Users/you/.local/otp_debug_mcp/bin/otp_debug_mcp",
       "args": ["start"],
       "env": { "OTP_DEBUG_MCP_ALLOW_EVAL": "false" }
     }
