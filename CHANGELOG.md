@@ -1,6 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
+
+Whole clusters at once, `diagnose` catching atom and process leaks, and
+Erlang and Gleam targets on an equal footing with Elixir ones.
+
+### New
 
 - `cluster`: every node of the target's cluster at once. `compare` puts key
   metrics side by side, flags the nodes that stand out from the others, and
@@ -8,34 +13,48 @@
   the full diagnose on every node; `snapshot_take` and `snapshot_diff` show
   which node grows. Members are discovered through each node's own view,
   so a node partitioned from the current target is still found.
-- `connect` says when the node is in a cluster.
-- `process_info` names the parent of a process no supervisor started, and
-  says nothing restarts it; its age explanation says what the estimate is
-  based on.
-- Better advice: `message_queues` says to trace the sending side to find
-  who floods a mailbox, and `top_reductions` that a busy process matters
-  even when the schedulers aren't saturated.
+  `connect` says when the node is in a cluster.
+- Demo targets in plain Erlang/OTP (`examples/erlang`) and in Gleam with
+  `gleam_otp` (`examples/gleam`), next to the Elixir ones, each with a bug
+  to find. CI smoke-tests the release against all three.
+
+### `diagnose` finds more
+
 - `atom_table` measures atom growth over a second (not counting the tool's
   own atoms) and how long until the table is full: critical if within a
-  day, a warning for any growth. `diagnose` used to call a node leaking
-  hundreds of atoms a second healthy.
-- Terms from plain Erlang nodes are shown in Erlang syntax; Elixir nodes
-  keep Elixir syntax.
-- Trace timestamps are in UTC, marked `Z`, like snapshot times.
-- `memory_breakdown` explains `other_system`, and `allocator_fragmentation`
-  marks `ll_alloc`'s slack as normal.
-- `examples/erlang`: demo targets in plain Erlang/OTP; `examples/gleam`:
-  demo targets in Gleam, with `gleam_otp` actors and supervisors.
+  day, a warning for any growth. It used to call a node leaking hundreds of
+  atoms a second healthy.
 - `process_count` measures growth over a second and the time until the
   process limit, and groups every process by initial call and current
   function, with a sample's stack for the largest groups: a process leak
   shows up as one big group whose stack names the code.
+
+### Clearer output
+
+- Terms from plain Erlang nodes (Erlang and Gleam) are shown in Erlang
+  syntax; Elixir nodes keep Elixir syntax.
 - Offender lists show the real initial call of proc_lib processes (every
   gen_server, supervisor, Gleam actor) instead of proc_lib's wrapper.
-- `trace_calls` says what stopped it (`stopped_by`); `process_info` says
-  when state wasn't requested.
+- `process_info` names the parent of a process no supervisor started and
+  says nothing restarts it, says when state wasn't requested, and its age
+  explanation says what the estimate rests on.
+- `trace_calls` says what stopped it (`stopped_by`), and its timestamps
+  are in UTC, marked `Z`, like snapshot times.
+- Better advice: `message_queues` says to trace the sending side to find
+  who floods a mailbox; `top_reductions` that a busy process matters even
+  when the schedulers aren't saturated; `memory_breakdown` explains
+  `other_system`; `allocator_fragmentation` marks `ll_alloc`'s slack as
+  normal.
+
+### Fixes
+
 - Snapshot diffs no longer count modules a first trace loads (when it
   formats its first event) as the node's own growth.
+
+### Tested
+
+- Against a target on another machine, OTP 29, including the SSH tunnel
+  and TLS recipes in `docs/production.md`.
 
 ## 0.1.0
 
