@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/ayarodionov/otp_debug_mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/ayarodionov/otp_debug_mcp/actions/workflows/ci.yml)
 
-> **Status: 0.2.1. [Releases](https://github.com/ayarodionov/otp_debug_mcp/releases).**
+> **Status: 0.3.0. [Releases](https://github.com/ayarodionov/otp_debug_mcp/releases).**
 > Tested from Claude Code against live nodes on Erlang/OTP 26 to 29, on the
 > same machine, over TLS distribution and across machines, with a test suite
 > and CI on every push. Still young: the TODO list below has the known gaps.
@@ -85,7 +85,7 @@ for:
   from Ubuntu 22.04 or later and OpenSSL 3 (`libcrypto.so.3`)
 
 ```sh
-vsn=0.2.1 target=macos-arm64   # or linux-x86_64, linux-arm64
+vsn=0.3.0 target=macos-arm64   # or linux-x86_64, linux-arm64
 base=https://github.com/ayarodionov/otp_debug_mcp/releases/download/v$vsn
 curl -LO "$base/otp_debug_mcp-$vsn-$target.tar.gz"
 curl -LO "$base/otp_debug_mcp-$vsn-$target.tar.gz.sha256"

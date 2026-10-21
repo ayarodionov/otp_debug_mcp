@@ -1,29 +1,43 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
 
-- `docs/clients.md`: setting the tool up in Cursor, GitHub Copilot (VS Code
-  and the CLI) and Claude Desktop, with commands that turn the playbook
-  into a Cursor rule or Copilot instructions.
+Binary leaks through slices found by `diagnose`, LFE demo targets, and
+setup guides for Cursor, GitHub Copilot and Claude Desktop.
+
+### `diagnose` finds more
+
+- `binary_leak` also lists the processes holding the most binary memory,
+  and for the largest, samples the binaries in its state to tell slices
+  pinning larger binaries (fix: `binary:copy/1`) from whole binaries
+  piling up. Live references were invisible to it before: garbage
+  collection frees nothing.
+
+### Clearer output
+
+- `process_info` takes quoted names (`'log-index'`), answers with the pid
+  even when given a name, and reports the process's binary memory and,
+  with `include_state`, a summary of the state's shape and size.
+- Traced arguments and return values are cut at 300 characters each, so
+  one big state doesn't fill every event.
+
+### Safety
+
+- `sys:get_state` is only sent to processes waiting in an OTP behaviour's
+  loop (gen_server, gen_statem, gen_event) or a Gleam actor's: other
+  processes may not understand it, and some crash on it.
+
+### Demos and docs
+
 - `examples/lfe`: demo targets in LFE (Lisp Flavoured Erlang).
 - The Elixir demos moved from `scripts/` to `examples/elixir`, with a
   `run.sh` and README like the other languages' (nodes `shop_ex`,
   `payments_ex`, `ex_a`..`ex_c`, and the `demo_shop` release). `scripts/`
   now holds only test tooling. The README has a "Demo targets" section
   for all four languages.
-- `binary_leak` also lists the processes holding the most binary memory,
-  and for the largest, samples the binaries in its state to tell slices
-  pinning larger binaries (fix: `binary:copy/1`) from whole binaries
-  piling up. Live references were invisible to it before: garbage
-  collection frees nothing.
-- `process_info` takes quoted names (`'log-index'`), answers with the pid
-  even when given a name, and reports the process's binary memory and,
-  with `include_state`, a summary of the state's shape and size.
-- Traced arguments and return values are cut at 300 characters each, so
-  one big state doesn't fill every event.
-- `sys:get_state` is only sent to processes waiting in an OTP behaviour's
-  loop (gen_server, gen_statem, gen_event) or a Gleam actor's: other
-  processes may not understand it, and some crash on it.
+- `docs/clients.md`: setting the tool up in Cursor, GitHub Copilot (VS Code
+  and the CLI) and Claude Desktop, with commands that turn the playbook
+  into a Cursor rule or Copilot instructions.
 
 ## 0.2.1
 
