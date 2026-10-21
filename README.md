@@ -106,14 +106,18 @@ run `xattr -dr com.apple.quarantine ~/.local/otp_debug_mcp`.
 
 ### Build from source
 
-Needs Elixir 1.19 and Erlang/OTP 27 or later:
+Needs Elixir 1.19 and Erlang/OTP 27 or later. Clone the repository
+anywhere you like, then build in it:
 
 ```sh
+git clone https://github.com/ayarodionov/otp_debug_mcp.git
+cd otp_debug_mcp
 mix deps.get
 MIX_ENV=prod mix release
 ```
 
-The server is then `_build/prod/rel/otp_debug_mcp/bin/otp_debug_mcp`.
+The server is then `_build/prod/rel/otp_debug_mcp/bin/otp_debug_mcp` in
+that directory.
 
 ### Register it with Claude Code
 
@@ -124,11 +128,11 @@ server=~/.local/otp_debug_mcp/bin/otp_debug_mcp
 skill=~/.local/otp_debug_mcp/skills/otp-debug
 ```
 
-For a build from source, set `checkout` to where you cloned the
-repository:
+For a build from source, set `checkout` to the directory you cloned and
+built in, replacing `/path/to/otp_debug_mcp`:
 
 ```sh
-checkout=~/prj/otp_debug_mcp
+checkout=/path/to/otp_debug_mcp
 server=$checkout/_build/prod/rel/otp_debug_mcp/bin/otp_debug_mcp
 skill=$checkout/skills/otp-debug
 ```
