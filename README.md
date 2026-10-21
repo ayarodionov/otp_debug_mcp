@@ -2,8 +2,10 @@
 
 [![CI](https://github.com/ayarodionov/otp_debug_mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/ayarodionov/otp_debug_mcp/actions/workflows/ci.yml)
 
-> **Status: early.** Tested end to end from Claude Code against live nodes,
-> but young: expect rough edges. See the TODO list below.
+> **Status: 0.1.0, the first [release](https://github.com/ayarodionov/otp_debug_mcp/releases).**
+> Tested from Claude Code against live nodes on Erlang/OTP 26 to 29, on the
+> same machine, over TLS distribution and across machines, with a test suite
+> and CI on every push. Still young: the TODO list below has the known gaps.
 
 An MCP server that lets AI agents (Claude Code, Claude Desktop, Cursor, …)
 connect to a **running** Erlang/Elixir/OTP node and debug it: not just raw
