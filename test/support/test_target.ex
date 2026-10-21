@@ -54,10 +54,13 @@ defmodule OtpDebugMcp.TestTarget do
           Enum.flat_map(paths, &[~c"-pa", &1]) ++ Keyword.get(opts, :args, [])
     }
 
+    # Always say which: otherwise :peer takes the name mode of the test
+    # node, which is longnames after a longnames test, and a long name from
+    # the hostname depends on DNS resolving it.
     peer_opts =
       if opts[:longnames],
         do: Map.merge(peer_opts, %{longnames: true, host: ~c"127.0.0.1"}),
-        else: peer_opts
+        else: Map.put(peer_opts, :longnames, false)
 
     {:ok, peer, node} = :peer.start(peer_opts)
     target = %__MODULE__{peer: peer, node: node, cookie: cookie, name: name, opts: opts}
