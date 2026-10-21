@@ -37,6 +37,10 @@ defmodule OtpDebugMcp.Target do
   @footprint :otp_debug_mcp_footprint
   # Each node's language, :elixir or :erlang, for printing its terms.
   @syntax :otp_debug_mcp_syntax
+  # Measured calls still running on each node, whose footprint isn't
+  # logged yet, and the lock that makes them take turns.
+  @in_flight :otp_debug_mcp_in_flight
+  @measuring :otp_debug_mcp_measuring
 
   # The current target, and every connected node's recon status.
   defstruct current: nil, nodes: %{}
@@ -178,6 +182,11 @@ defmodule OtpDebugMcp.Target do
   sent before, the target's atom count and code memory are read before and
   after, and the difference is logged for `footprint_since/2`, which
   snapshot diffs subtract. Repeat calls cost nothing extra.
+
+  A first call is measured even into a loaded module, since the call may
+  load others. Measuring a long call (a 1s sample) counts whatever the node
+  itself does meanwhile as this tool's, so measurements of growth, like
+  the atom check's, shouldn't overlap one.
   """
   def with_footprint(target, signature, term, fun) do
     new_atoms =
@@ -185,14 +194,95 @@ defmodule OtpDebugMcp.Target do
 
     first_call? = :ets.insert_new(@called, {{target, signature}})
 
-    if first_call? or new_atoms != [] do
-      before = footprint_reading(target)
-      result = fun.()
-      for atom <- new_atoms, do: :ets.insert(@known_atoms, {{target, atom}})
-      record_footprint(target, before, footprint_reading(target))
-      result
+    # Atoms new to us may still exist there, e.g. function names of loaded
+    # modules; only the missing ones would be created.
+    missing = Enum.reject(new_atoms, &exists_on?(target, &1))
+
+    measure? = missing != [] or first_call?
+
+    unless measure?, do: for(atom <- new_atoms, do: :ets.insert(@known_atoms, {{target, atom}}))
+
+    if measure? do
+      :ets.update_counter(@in_flight, target, 1, {target, 0})
+      :ets.update_counter(@in_flight, {:started, target}, 1, {{:started, target}, 0})
+
+      try do
+        # One measured call at a time per node: overlapping windows would
+        # each count the other's atoms.
+        with_measuring_lock(target, fn ->
+          before = footprint_reading(target)
+          result = fun.()
+          for atom <- new_atoms, do: :ets.insert(@known_atoms, {{target, atom}})
+          record_footprint(target, before, footprint_reading(target))
+          result
+        end)
+      after
+        :ets.update_counter(@in_flight, target, -1, {target, 0})
+      end
     else
       fun.()
+    end
+  end
+
+  # A lock held by this process; a process holding it can measure inside it
+  # again (a measured call that makes another).
+  defp with_measuring_lock(target, fun) do
+    case :ets.lookup(@measuring, target) do
+      [{^target, holder}] when holder == self() ->
+        fun.()
+
+      _ ->
+        acquire(target)
+
+        try do
+          fun.()
+        after
+          :ets.delete_object(@measuring, {target, self()})
+        end
+    end
+  end
+
+  defp acquire(target) do
+    unless :ets.insert_new(@measuring, {target, self()}) do
+      case :ets.lookup(@measuring, target) do
+        # Taken over from a holder that died without letting go.
+        [{^target, holder}] ->
+          if Process.alive?(holder),
+            do: Process.sleep(5),
+            else: :ets.delete_object(@measuring, {target, holder})
+
+        [] ->
+          :ok
+      end
+
+      acquire(target)
+    end
+  end
+
+  @doc """
+  How many measured calls have started on `target` so far: a measurement
+  of growth that sees this change during its window overlapped one.
+  """
+  def measured_calls(target) do
+    case :ets.lookup(@in_flight, {:started, target}) do
+      [{_, n}] -> n
+      [] -> 0
+    end
+  end
+
+  @doc """
+  Wait, up to `timeout` ms, until every measured call on `target` has
+  finished and logged its footprint, so `footprint_since/2` covers all this
+  tool did there so far. For measurements taken while other calls run.
+  """
+  def await_footprint(target, timeout \\ 5_000) do
+    case :ets.lookup(@in_flight, target) do
+      [{^target, n}] when n > 0 and timeout > 0 ->
+        Process.sleep(20)
+        await_footprint(target, timeout - 20)
+
+      _ ->
+        :ok
     end
   end
 
@@ -208,6 +298,10 @@ defmodule OtpDebugMcp.Target do
       %{atoms: acc.atoms + atoms, code_bytes: acc.code_bytes + code}
     end)
   end
+
+  # Sends a binary, so the check itself creates nothing.
+  defp exists_on?(target, atom),
+    do: raw_call(target, :erlang, :binary_to_existing_atom, [Atom.to_string(atom), :utf8]) == atom
 
   defp footprint_reading(target) do
     with atoms when is_integer(atoms) <- raw_call(target, :erlang, :system_info, [:atom_count]),
@@ -270,6 +364,8 @@ defmodule OtpDebugMcp.Target do
 
     :ets.new(@footprint, [:named_table, :public, :ordered_set])
     :ets.new(@syntax, [:named_table, :public, :set, read_concurrency: true])
+    :ets.new(@in_flight, [:named_table, :public, :set, write_concurrency: true])
+    :ets.new(@measuring, [:named_table, :public, :set])
     {:ok, %__MODULE__{}}
   end
 

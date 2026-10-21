@@ -28,11 +28,53 @@ defmodule OtpDebugMcp.Checks do
 
   def all_checks, do: @checks
 
+  # run_all runs the checks in parallel, in two phases. The second measures
+  # load (scheduler usage, the busiest processes) and atom growth, so it
+  # runs once the first phase's scans of the node are over: otherwise this
+  # tool's own work would show up as load, its rpc processes as the busiest.
+  # (The atom check also keeps clear of this tool's first calls by itself.)
+  @phases [
+    [
+      :message_queues,
+      :supervisor_restarts,
+      :binary_leak,
+      :memory_breakdown,
+      :allocator_fragmentation,
+      :process_count,
+      :ets_tables,
+      :ports
+    ],
+    [:schedulers, :top_reductions, :atom_table]
+  ]
+
+  # A check that takes longer than this is reported as failed.
+  @check_timeout 60_000
+
   @doc "Run every check; findings ranked worst-first."
   def run_all do
-    @checks
-    |> Enum.map(&run/1)
-    |> Enum.sort_by(fn %{status: s} -> status_rank(s) end)
+    # The tasks below are new processes: carry over the node Target.on/2
+    # may have set for this one.
+    node = Target.connected_node()
+
+    @phases
+    |> Enum.flat_map(&run_parallel(&1, node))
+    |> Enum.sort_by(fn %{status: s, check: c} ->
+      {status_rank(s), Enum.find_index(@checks, &(&1 == c))}
+    end)
+  end
+
+  defp run_parallel(checks, node) do
+    checks
+    |> Task.async_stream(fn check -> Target.on(node, fn -> run(check) end) end,
+      timeout: @check_timeout,
+      on_timeout: :kill_task,
+      max_concurrency: length(checks)
+    )
+    |> Enum.zip(checks)
+    |> Enum.map(fn
+      {{:ok, result}, _check} -> result
+      {{:exit, reason}, check} -> error_result(check, {:did_not_finish, reason})
+    end)
   end
 
   defp status_rank(:critical), do: 0
@@ -425,43 +467,51 @@ defmodule OtpDebugMcp.Checks do
   end
 
   # Atom table pressure — atoms are never GC'd; exhaustion kills the node.
-  # Atoms only ever accumulate, so two counts a second apart show whether
-  # something is creating them now, and how long until the table is full;
-  # what this tool itself added in between doesn't count.
-  @atom_sample_ms 1_000
+  # Atoms only ever accumulate, so counts across a second show whether
+  # something is creating them now, and how long until the table is full.
+  # This tool's own atoms don't count: the sample starts once this tool's
+  # measured calls in flight are done, and is taken again if one starts
+  # during it (a long one would count the node's own atoms as this tool's;
+  # see Target.with_footprint/4). The second is split in two: growth in
+  # both halves is a steady leak; growth in one may be a one-off, such as a
+  # module loading.
+  @atom_half_ms 500
 
   def run(:atom_table) do
-    started = System.monotonic_time(:microsecond)
-
     with {:ok, node} <- Target.target(),
-         {:ok, count0} <- Target.rpc(:erlang, :system_info, [:atom_count]),
          {:ok, limit} <- Target.rpc(:erlang, :system_info, [:atom_limit]),
-         :ok <- Process.sleep(@atom_sample_ms),
-         {:ok, count} <- Target.rpc(:erlang, :system_info, [:atom_count]) do
-      seconds = (System.monotonic_time(:microsecond) - started) / 1_000_000
-      ours = Target.footprint_since(node, started).atoms
-      rate = max(count - count0 - ours, 0) / seconds
+         {:ok, sample} <- atom_sample(node, 1) do
+      %{first_half: first_half, second_half: second_half, seconds: seconds, count: count} = sample
+      growth = max(first_half, 0) + max(second_half, 0)
+      steady? = first_half > 0 and second_half > 0
+      rate = growth / seconds
       seconds_left = if rate > 0, do: round((limit - count) / rate)
 
       status =
         cond do
           count / limit > 0.5 -> :critical
-          seconds_left && seconds_left < 86_400 -> :critical
-          rate > 0 -> :warning
+          steady? and seconds_left < 86_400 -> :critical
+          growth > 0 -> :warning
           true -> :ok
         end
 
       findings =
-        %{count: count, limit: limit, growth_per_second: Float.round(rate, 1)}
+        %{
+          count: count,
+          limit: limit,
+          growth_per_second: Float.round(rate, 1),
+          growing_throughout: steady?
+        }
         |> Map.merge(if seconds_left, do: %{seconds_until_full: seconds_left}, else: %{})
 
       result(:atom_table, status, findings, """
       Atoms are never garbage collected, and the node dies when the table is
-      full. growth_per_second is measured over 1s, not counting atoms this
-      tool added; any growth means something is creating atoms right now
-      (list_to_atom or binary_to_atom on input, String.to_atom/1,
-      binary_to_term without safe), and seconds_until_full is when the node
-      dies at that rate. Loading code adds atoms too, so confirm a leak with
+      full. growth_per_second is measured over about 1s, not counting atoms
+      this tool added. growing_throughout means atoms were created in both
+      halves of that second: a steady leak (list_to_atom or binary_to_atom
+      on input, String.to_atom/1, binary_to_term without safe), and
+      seconds_until_full is when the node dies at that rate. Growth in only
+      one half may be a one-off, such as a module loading. Confirm with
       snapshot diffs, then trace_calls on erlang list_to_atom or
       binary_to_atom to find the caller.
       """)
@@ -646,6 +696,40 @@ defmodule OtpDebugMcp.Checks do
     |> Enum.sort_by(& &1.unused_bytes, :desc)
     |> Enum.take(5)
   end
+
+  # Atom growth in two halves of about a second, less this tool's own,
+  # sampled once none of this tool's measured calls are running; taken
+  # again (once) if one started during it.
+  defp atom_sample(node, retries) do
+    Target.await_footprint(node, 10_000)
+    calls = Target.measured_calls(node)
+    started = System.monotonic_time(:microsecond)
+
+    with {:ok, count0} <- atom_count(),
+         :ok <- Process.sleep(@atom_half_ms),
+         {:ok, count1} <- atom_count(),
+         mid = System.monotonic_time(:microsecond),
+         :ok <- Process.sleep(@atom_half_ms),
+         {:ok, count2} <- atom_count() do
+      if Target.measured_calls(node) != calls and retries > 0 do
+        atom_sample(node, retries - 1)
+      else
+        Target.await_footprint(node)
+        ours_total = Target.footprint_since(node, started).atoms
+        ours_second = Target.footprint_since(node, mid).atoms
+
+        {:ok,
+         %{
+           first_half: count1 - count0 - (ours_total - ours_second),
+           second_half: count2 - count1 - ours_second,
+           seconds: (System.monotonic_time(:microsecond) - started) / 1_000_000,
+           count: count2
+         }}
+      end
+    end
+  end
+
+  defp atom_count, do: Target.rpc(:erlang, :system_info, [:atom_count])
 
   defp app_name({:ok, app}), do: app
   defp app_name(_), do: nil

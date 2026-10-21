@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- `diagnose` runs its checks in parallel, in two phases, so the checks
+  that measure load and atom growth don't see the others' work: about
+  twice as fast on a node it has seen before (2 to 3 seconds instead of 4
+  to 6), a little faster the first time.
+- `atom_table` samples its second in two halves: growth in both is a
+  steady leak, and only that can be critical; growth in one, such as a
+  module loading, is a warning.
+- The tool's own footprint is measured more exactly: atoms it sends that
+  already exist on the node aren't counted, its first-time calls are
+  measured one at a time (overlapping ones were double-counted), and the
+  atom sample waits for them.
+
 ## 0.2.0
 
 Whole clusters at once, `diagnose` catching atom and process leaks, and
