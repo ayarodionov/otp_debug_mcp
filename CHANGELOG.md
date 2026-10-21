@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `docs/walkthroughs.md`: three recorded sessions against the Elixir
+  demos to follow along with (the mailbox that never drains, the crash
+  loop, the cluster with one bad node), each with the prompt, every tool
+  call and its real result, trimmed, and the conclusion.
 - The install steps in the README work when pasted into zsh, macOS's
   default shell: a trailing `# comment` on a command line isn't a comment
   there, so the first line failed and the download addresses came out

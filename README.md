@@ -251,6 +251,11 @@ example prompt, the tools involved, and what to watch out for:
 It ends with a checklist for production use and the scenarios the tool
 doesn't support yet.
 
+[docs/walkthroughs.md](docs/walkthroughs.md) has whole sessions to
+follow along with on the demo nodes below: the prompt, every tool call
+with its real result, and the conclusion, for a mailbox that never
+drains, a crash loop, and one bad node in a cluster.
+
 ## Demo targets
 
 `examples/` has demo nodes in each BEAM language, each with a bug for the
