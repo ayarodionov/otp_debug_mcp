@@ -51,8 +51,6 @@ defmodule OtpDebugMcp.Tracer do
   trace:process(S, all, true, [call, timestamp]),
   trace:process(S, self(), false, [call, timestamp]),
   N = trace:function(S, {M, F, '_'}, MatchSpec, [local]),
-  Owner ! {trace_started, self(), N},
-  Deadline = erlang:monotonic_time(millisecond) + Duration,
   Time = fun({_, _, Us} = TS) ->
     {_, {H, Mi, Sec}} = calendar:now_to_universal_time(TS),
     io_lib:format("~2..0w:~2..0w:~2..0w.~6..0wZ", [H, Mi, Sec, Us])
@@ -69,6 +67,14 @@ defmodule OtpDebugMcp.Tracer do
     (_) ->
       skip
   end,
+  %% Format one event of each kind now, so whatever formatting loads
+  %% (calendar, io_lib_pretty, epp...) loads while the start still counts
+  %% toward this tool's footprint, not on the first real event.
+  _ = [Line(E) || E <- [{trace_ts, self(), call, {M, F, [x]}, os:timestamp()},
+                        {trace_ts, self(), return_from, {M, F, 1}, x, os:timestamp()},
+                        {trace_ts, self(), exception_from, {M, F, 1}, {error, x}, os:timestamp()}]],
+  Owner ! {trace_started, self(), N},
+  Deadline = erlang:monotonic_time(millisecond) + Duration,
   Loop = fun L(Count) ->
     Left = max(0, Deadline - erlang:monotonic_time(millisecond)),
     receive
@@ -110,6 +116,10 @@ defmodule OtpDebugMcp.Tracer do
   @recon_holder """
   group_leader(Collector, self()),
   N = recon_trace:calls(Spec, Max, Opts),
+  %% As in the session holder: let formatting load what it needs now.
+  {M, F, _} = Spec,
+  _ = [catch recon_trace:format(E) || E <- [{trace, self(), call, {M, F, [x]}},
+                                            {trace, self(), return_from, {M, F, 1}, x}]],
   Owner ! {trace_started, self(), N},
   receive stop -> ok after Duration -> ok end,
   recon_trace:clear().

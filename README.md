@@ -270,8 +270,12 @@ plain-TCP connections and certificates from another CA.
 [examples/erlang](examples/erlang) has the same kinds of demo in plain
 Erlang/OTP, with no Elixir: a mailbox that never drains, an OTP
 application in a crash loop, a session store leaking atoms and ETS rows,
-and a cluster with one bad node. `examples/erlang/run.sh` builds and
-starts them; CI smoke-tests the release against the Erlang shop too.
+and a cluster with one bad node. [examples/gleam](examples/gleam) has
+Gleam ones, with `gleam_otp` actors and supervisors: a mailbox that never
+drains, a supervised actor whose `let assert` panics in a loop, and a job
+runner leaking processes. Each directory's `run.sh` builds and starts
+them, and CI smoke-tests the release against the Erlang and Gleam shops
+too.
 
 `scripts/cluster_demo.sh start` runs a three-node cluster on this host in
 which only `shop_b` has the cache bug. Pointed at the healthy `shop_a`, a

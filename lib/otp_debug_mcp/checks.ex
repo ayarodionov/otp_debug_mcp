@@ -49,7 +49,7 @@ defmodule OtpDebugMcp.Checks do
     with {:ok, top} <- Target.rpc(:recon, :proc_count, [:message_queue_len, 10]) do
       offenders =
         for {pid, qlen, info} <- top, qlen > 1_000 do
-          %{pid: Format.inspect(pid), queue_len: qlen, info: format_proc_info(info)}
+          %{pid: Format.inspect(pid), queue_len: qlen, info: format_proc_info(pid, info)}
         end
 
       status =
@@ -220,7 +220,7 @@ defmodule OtpDebugMcp.Checks do
     with {:ok, leaks} <- Target.rpc(:recon, :bin_leak, [5], 15_000) do
       offenders =
         for {pid, freed, info} <- leaks, freed < -1_000 do
-          %{pid: Format.inspect(pid), binaries_freed: -freed, info: format_proc_info(info)}
+          %{pid: Format.inspect(pid), binaries_freed: -freed, info: format_proc_info(pid, info)}
         end
 
       status = if Enum.any?(offenders, &(&1.binaries_freed > 100_000)), do: :warning, else: :ok
@@ -321,23 +321,103 @@ defmodule OtpDebugMcp.Checks do
     end
   end
 
-  # Process count vs the node's process limit.
+  # Process count vs the node's process limit, and how fast it's moving:
+  # two counts a second apart (each read's own rpc process is in both, so
+  # it cancels out). Plus where the processes are: grouped by initial call
+  # and current function, the largest groups with a sample's stack, since a
+  # leak is one group that keeps growing, and its stack names the code.
+  @process_sample_ms 1_000
+  @process_groups ~S"""
+  %% proc_lib's '$initial_call' names the real entry point; {dictionary,
+  %% Key} is OTP 26.2+.
+  InitialCall = fun(P) ->
+    PI =
+      try erlang:process_info(P, {dictionary, '$initial_call'}) of
+        {_, V} -> V;
+        _ -> undefined
+      catch error:badarg ->
+        case erlang:process_info(P, dictionary) of
+          {dictionary, D} -> proplists:get_value('$initial_call', D);
+          _ -> undefined
+        end
+      end,
+    case PI of
+      undefined ->
+        case erlang:process_info(P, initial_call) of
+          {initial_call, IC} -> IC;
+          _ -> undefined
+        end;
+      _ ->
+        PI
+    end
+  end,
+  Groups = lists:foldl(
+    fun(P, Acc) ->
+      case erlang:process_info(P, current_function) of
+        {current_function, CF} ->
+          Key = {InitialCall(P), CF},
+          {N, Sample} = maps:get(Key, Acc, {0, P}),
+          Acc#{Key => {N + 1, Sample}};
+        _ -> Acc
+      end
+    end, #{}, erlang:processes()),
+  Top = lists:sublist(lists:reverse(lists:keysort(2,
+          [{K, N, S} || {K, {N, S}} <- maps:to_list(Groups)])), 5),
+  [{IC, CF, N, S,
+    case erlang:process_info(S, current_stacktrace) of
+      {current_stacktrace, Stack} -> lists:sublist(Stack, 4);
+      _ -> []
+    end} || {{IC, CF}, N, S} <- Top].
+  """
+
   def run(:process_count) do
-    with {:ok, count} <- Target.rpc(:erlang, :system_info, [:process_count]),
-         {:ok, limit} <- Target.rpc(:erlang, :system_info, [:process_limit]) do
-      ratio = count / limit
+    started = System.monotonic_time(:microsecond)
+
+    with {:ok, count0} <- Target.rpc(:erlang, :system_info, [:process_count]),
+         {:ok, limit} <- Target.rpc(:erlang, :system_info, [:process_limit]),
+         :ok <- Process.sleep(@process_sample_ms),
+         {:ok, count} <- Target.rpc(:erlang, :system_info, [:process_count]),
+         {:ok, groups} <- remote_eval(@process_groups) do
+      seconds = (System.monotonic_time(:microsecond) - started) / 1_000_000
+      rate = (count - count0) / seconds
+      seconds_left = if rate > 0, do: round((limit - count) / rate)
 
       status =
         cond do
-          ratio > 0.9 -> :critical
-          ratio > 0.5 -> :warning
+          count / limit > 0.9 -> :critical
+          seconds_left && seconds_left < 3_600 -> :critical
+          count / limit > 0.5 -> :warning
+          rate >= 50 -> :warning
           true -> :ok
         end
 
-      result(:process_count, status, %{count: count, limit: limit}, """
-      Near the limit the node dies with `system_limit`. A steadily growing
-      count usually means process leaks: spawned workers that never terminate.
-      Use the snapshot/diff tool to confirm growth over time.
+      findings =
+        %{
+          count: count,
+          limit: limit,
+          growth_per_second: Float.round(rate * 1.0, 1),
+          largest_groups:
+            for {initial_call, current_function, n, sample, stack} <- groups do
+              %{
+                processes: n,
+                initial_call: Format.inspect(initial_call),
+                current_function: Format.inspect(current_function),
+                sample: Format.inspect(sample),
+                sample_stack: Format.inspect(stack)
+              }
+            end
+        }
+        |> Map.merge(if seconds_left, do: %{seconds_until_limit: seconds_left}, else: %{})
+
+      result(:process_count, status, findings, """
+      Near the limit the node dies with `system_limit`. growth_per_second is
+      the net change over 1s: a steady climb (confirm with snapshot diffs)
+      means a process leak, workers spawned and never exiting, and
+      seconds_until_limit is when the node dies at that rate. largest_groups
+      groups every process by initial call and current function: a leak is
+      one large group that keeps growing, and its sample_stack names the code
+      that spawned or is holding the processes; process_info on the sample
+      shows more. A large group of a pool's workers is normal.
       """)
     else
       err -> error_result(:process_count, err)
@@ -461,7 +541,7 @@ defmodule OtpDebugMcp.Checks do
     with {:ok, top} <- Target.rpc(:recon, :proc_window, [:reductions, 5, 1_000], 10_000) do
       hogs =
         for {pid, reds, info} <- top do
-          %{pid: Format.inspect(pid), reductions_per_s: reds, info: format_proc_info(info)}
+          %{pid: Format.inspect(pid), reductions_per_s: reds, info: format_proc_info(pid, info)}
         end
 
       result(:top_reductions, :ok, hogs, """
@@ -670,8 +750,22 @@ defmodule OtpDebugMcp.Checks do
   end
 
   # recon's attribute list mixes {key, value} pairs with a bare registered
-  # name atom as the first element.
-  defp format_proc_info(info) when is_list(info) do
+  # name atom as the first element. Its initial_call for a proc_lib process
+  # (every gen_server, supervisor, Task, Gleam actor...) is proc_lib's own
+  # wrapper, so it's replaced by the real one.
+  defp format_proc_info(pid, info) when is_list(info) do
+    info =
+      case List.keyfind(info, :initial_call, 0) do
+        {:initial_call, {:proc_lib, _, _}} ->
+          case Target.rpc(:proc_lib, :translate_initial_call, [pid]) do
+            {:ok, real} -> List.keystore(info, :initial_call, 0, {:initial_call, real})
+            _ -> info
+          end
+
+        _ ->
+          info
+      end
+
     Enum.reduce(info, %{}, fn
       {k, v}, acc when is_atom(k) -> Map.put(acc, k, Format.inspect(v))
       name, acc when is_atom(name) -> Map.put(acc, :registered_name, Format.inspect(name))
@@ -679,7 +773,7 @@ defmodule OtpDebugMcp.Checks do
     end)
   end
 
-  defp format_proc_info(other), do: Format.inspect(other)
+  defp format_proc_info(_pid, other), do: Format.inspect(other)
 
   defp result(check, status, findings, interpretation) do
     %{

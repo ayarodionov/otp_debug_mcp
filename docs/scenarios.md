@@ -291,8 +291,8 @@ or LFE.
 > and are any mailboxes backing up?
 
 **What the agent does.** The same checks as for your own code, on Erlang
-nodes as on Elixir ones (see [examples/erlang](../examples/erlang) for
-Erlang demo targets). Nothing has to be installed on the target, because the tool attaches over Erlang
+and Gleam nodes as on Elixir ones (see [examples/erlang](../examples/erlang)
+and [examples/gleam](../examples/gleam) for demo targets). Nothing has to be installed on the target, because the tool attaches over Erlang
 distribution as a hidden node. If the product ships its own recon, that copy
 is used as-is.
 

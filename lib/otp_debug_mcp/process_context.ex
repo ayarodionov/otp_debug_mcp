@@ -116,7 +116,8 @@ defmodule OtpDebugMcp.ProcessContext do
       how:
         "An estimate: BEAM doesn't record when a process started. Pids are numbered " <>
           "in spawn order: #{since} processes were spawned after this one, #{ours} of " <>
-          "them by this tool's own calls; " <>
+          "them by this tool's own calls (each remote call runs in a short-lived " <>
+          "process, gone as soon as it returns); " <>
           basis(since, ours, rate, average, own) <>
           " Reliable for telling a fresh process from an old one; rough for old ones. " <>
           if(younger_than,

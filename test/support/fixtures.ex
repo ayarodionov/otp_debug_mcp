@@ -298,3 +298,21 @@ defmodule OtpDebugMcp.Fixtures.AtomLeak do
     loop(n + 1, ms)
   end
 end
+
+defmodule OtpDebugMcp.Fixtures.ProcLeak do
+  @moduledoc "Spawns a worker every `ms` milliseconds that waits forever."
+
+  def start(ms), do: spawn(fn -> loop(ms) end)
+
+  defp loop(ms) do
+    spawn(fn -> wait_forever() end)
+    Process.sleep(ms)
+    loop(ms)
+  end
+
+  defp wait_forever do
+    receive do
+      :never -> :ok
+    end
+  end
+end

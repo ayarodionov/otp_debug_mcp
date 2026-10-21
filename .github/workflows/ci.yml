@@ -104,6 +104,7 @@ jobs:
         with:
           otp-version: "28"
           elixir-version: "1.19"
+          gleam-version: "1.19.2"
       - uses: actions/cache@v6
         with:
           path: |
@@ -124,3 +125,9 @@ jobs:
           sleep 3
           python3 scripts/mcp_smoke.py _build/prod/rel/otp_debug_mcp/bin/otp_debug_mcp \
             "shop_erl@$(hostname -s)" price_cache
+      - name: Smoke test against the Gleam demo node
+        run: |
+          examples/gleam/run.sh shop
+          sleep 3
+          python3 scripts/mcp_smoke.py _build/prod/rel/otp_debug_mcp/bin/otp_debug_mcp \
+            "shop_gleam@$(hostname -s)" shop

@@ -24,7 +24,18 @@
 - Trace timestamps are in UTC, marked `Z`, like snapshot times.
 - `memory_breakdown` explains `other_system`, and `allocator_fragmentation`
   marks `ll_alloc`'s slack as normal.
-- `examples/erlang`: demo targets in plain Erlang/OTP.
+- `examples/erlang`: demo targets in plain Erlang/OTP; `examples/gleam`:
+  demo targets in Gleam, with `gleam_otp` actors and supervisors.
+- `process_count` measures growth over a second and the time until the
+  process limit, and groups every process by initial call and current
+  function, with a sample's stack for the largest groups: a process leak
+  shows up as one big group whose stack names the code.
+- Offender lists show the real initial call of proc_lib processes (every
+  gen_server, supervisor, Gleam actor) instead of proc_lib's wrapper.
+- `trace_calls` says what stopped it (`stopped_by`); `process_info` says
+  when state wasn't requested.
+- Snapshot diffs no longer count modules a first trace loads (when it
+  formats its first event) as the node's own growth.
 
 ## 0.1.0
 

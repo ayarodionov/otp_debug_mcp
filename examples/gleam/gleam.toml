@@ -1,0 +1,8 @@
+name = "otp_debug_demos"
+version = "1.0.0"
+description = "Demo targets with bugs, for otp_debug_mcp"
+
+[dependencies]
+gleam_stdlib = ">= 1.0.0 and < 2.0.0"
+gleam_erlang = ">= 1.3.0 and < 2.0.0"
+gleam_otp = ">= 1.3.0 and < 2.0.0"

@@ -126,6 +126,11 @@ defmodule OtpDebugMcp.ToolsTest do
                sup
     end
 
+    test "says when state wasn't requested" do
+      assert {:ok, %{"state" => "not requested" <> _}} =
+               call_tool_json(Tools.ProcessInfo, %{pid: "ticker"})
+    end
+
     test "fetches gen_server state" do
       assert {:ok, %{"state" => state}} =
                call_tool_json(Tools.ProcessInfo, %{pid: "ticker", include_state: true})
@@ -185,6 +190,7 @@ defmodule OtpDebugMcp.ToolsTest do
              })
 
     assert %{"events" => [_, _], "backend" => "isolated trace session"} = result
+    assert result["stopped_by"] =~ "max_events"
     refute Map.has_key?(result, "stopped_other_tracing")
   end
 

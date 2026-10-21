@@ -2,7 +2,7 @@ defmodule OtpDebugMcp.ChecksTest do
   use ExUnit.Case, async: false
 
   alias OtpDebugMcp.{Checks, Snapshotter, TestTarget}
-  alias OtpDebugMcp.Fixtures.{AtomLeak, Mailbox}
+  alias OtpDebugMcp.Fixtures.{AtomLeak, Mailbox, ProcLeak}
 
   setup_all do
     target = TestTarget.start()
@@ -47,6 +47,24 @@ defmodule OtpDebugMcp.ChecksTest do
     assert status == :critical
     assert rate > 100
     assert left > 0 and left < 86_400
+  end
+
+  test "process_count measures growth and names the group that grows" do
+    target = TestTarget.start()
+    on_exit(fn -> TestTarget.stop(target) end)
+    {:ok, _} = TestTarget.connect(target)
+    TestTarget.call(target, ProcLeak, :start, [2])
+    Process.sleep(1_000)
+
+    # Critical once the limit is under an hour away, at a fast enough leak.
+    assert %{status: status, findings: f} = Checks.run(:process_count)
+    assert status in [:warning, :critical]
+    assert f.growth_per_second > 100
+    assert f.seconds_until_limit > 0
+
+    assert [%{processes: n, sample_stack: stack} | _] = f.largest_groups
+    assert n > 300
+    assert stack =~ "OtpDebugMcp.Fixtures.ProcLeak"
   end
 
   test "memory_breakdown is a partition of the total" do

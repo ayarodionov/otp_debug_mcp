@@ -186,6 +186,8 @@ defmodule OtpDebugMcp.Tools do
               {:error, e} ->
                 "unavailable: #{Format.inspect(e)}"
             end
+          else
+            "not requested: set include_state to fetch it"
           end
 
         Tools.json_response(
@@ -348,15 +350,33 @@ defmodule OtpDebugMcp.Tools do
       case Tracer.trace(
              mod,
              params[:function],
-             (params[:max_events] || 20) |> min(100) |> max(1),
+             max_events(params),
              (params[:duration_ms] || 10_000) |> min(60_000) |> max(100),
              force: params[:force] == true
            ) do
         {:ok, result} ->
-          Tools.json_response(frame, Map.reject(result, fn {_k, v} -> is_nil(v) end))
+          result =
+            result
+            |> Map.reject(fn {_k, v} -> is_nil(v) end)
+            |> Map.put(:stopped_by, stopped_by(result.events, max_events(params)))
+
+          Tools.json_response(frame, result)
 
         {:error, reason} ->
           Tools.error_response(frame, reason)
+      end
+    end
+
+    defp max_events(params), do: (params[:max_events] || 20) |> min(100) |> max(1)
+
+    # The events say which limit ended the trace: a call and its return or
+    # exception are two events.
+    defp stopped_by(events, max) do
+      cond do
+        Enum.any?(events, &String.starts_with?(&1, "trace stopped early")) -> "overload"
+        Enum.any?(events, &(&1 =~ "rate limit tripped")) -> "overload"
+        length(events) >= max -> "max_events (a call and its return count as two)"
+        true -> "duration"
       end
     end
   end
