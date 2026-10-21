@@ -5,6 +5,17 @@
 - `docs/clients.md`: setting the tool up in Cursor, GitHub Copilot (VS Code
   and the CLI) and Claude Desktop, with commands that turn the playbook
   into a Cursor rule or Copilot instructions.
+- `examples/lfe`: demo targets in LFE (Lisp Flavoured Erlang).
+- `binary_leak` also lists the processes holding the most binary memory,
+  and for the largest, samples the binaries in its state to tell slices
+  pinning larger binaries (fix: `binary:copy/1`) from whole binaries
+  piling up. Live references were invisible to it before: garbage
+  collection frees nothing.
+- `process_info` takes quoted names (`'log-index'`), answers with the pid
+  even when given a name, and reports the process's binary memory and,
+  with `include_state`, a summary of the state's shape and size.
+- Traced arguments and return values are cut at 300 characters each, so
+  one big state doesn't fill every event.
 
 ## 0.2.1
 

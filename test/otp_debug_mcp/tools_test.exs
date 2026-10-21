@@ -126,6 +126,18 @@ defmodule OtpDebugMcp.ToolsTest do
                sup
     end
 
+    test "takes a quoted name, and answers with the pid and binary memory" do
+      assert {:ok, result} = call_tool_json(Tools.ProcessInfo, %{pid: "'stuck_mailbox'"})
+
+      assert %{"pid" => "<0." <> _, "name" => "'stuck_mailbox'", "binary_memory_bytes" => _} =
+               result
+    end
+
+    test "summarizes the state it fetches" do
+      assert {:ok, %{"state_summary" => %{"kind" => _, "words" => _}}} =
+               call_tool_json(Tools.ProcessInfo, %{pid: "ticker", include_state: true})
+    end
+
     test "says when state wasn't requested" do
       assert {:ok, %{"state" => "not requested" <> _}} =
                call_tool_json(Tools.ProcessInfo, %{pid: "ticker"})

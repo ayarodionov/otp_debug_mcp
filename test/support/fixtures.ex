@@ -316,3 +316,36 @@ defmodule OtpDebugMcp.Fixtures.ProcLeak do
     end
   end
 end
+
+defmodule OtpDebugMcp.Fixtures.SliceKeeper do
+  @moduledoc """
+  A registered GenServer keeping, of each of `n` 16 KB binaries, either a
+  256-byte slice (`:slices`, each pinning its whole binary) or the binary
+  itself (`:whole`).
+  """
+  use GenServer
+
+  def start(name, n, mode), do: GenServer.start(__MODULE__, {n, mode}, name: name) |> ok()
+
+  defp ok({:ok, _}), do: :ok
+  defp ok(other), do: other
+
+  @impl true
+  def init({n, mode}) do
+    kept =
+      for i <- 1..n do
+        record = :binary.copy(<<i::32>>, 4096)
+
+        case mode do
+          :slices ->
+            <<slice::binary-size(256), _::binary>> = record
+            slice
+
+          :whole ->
+            record
+        end
+      end
+
+    {:ok, kept}
+  end
+end

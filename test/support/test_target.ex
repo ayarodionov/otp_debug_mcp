@@ -22,7 +22,8 @@ defmodule OtpDebugMcp.TestTarget do
     OtpDebugMcp.Fixtures.Fragmenter,
     OtpDebugMcp.Fixtures.Hog,
     OtpDebugMcp.Fixtures.AtomLeak,
-    OtpDebugMcp.Fixtures.ProcLeak
+    OtpDebugMcp.Fixtures.ProcLeak,
+    OtpDebugMcp.Fixtures.SliceKeeper
   ]
 
   defstruct [:peer, :node, :cookie, :name, :opts]

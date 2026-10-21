@@ -254,23 +254,84 @@ defmodule OtpDebugMcp.Checks do
     end
   end
 
-  # Refc-binary leak detection — the classic hidden BEAM memory leak: processes
-  # holding references to large off-heap binaries that GC won't reclaim because
-  # the holding process rarely runs. `recon:bin_leak/1` GCs candidates and
-  # reports who released the most.
+  # Refc-binary leaks, the classic hidden BEAM memory leak, come in two
+  # kinds. Garbage references: a long-lived process that rarely runs holds
+  # dead references GC would free; `recon:bin_leak/1` GCs every process and
+  # reports who released the most. Live references: a process keeps a
+  # slice of each large binary (a sub-binary), which pins the whole binary;
+  # GC frees nothing, so the largest holders of binary memory are listed.
+  @binary_holder_mb 50
+
+  # The binaries in a process's state, up to 2000: their own size against
+  # the size of the binaries they point into. Slices (sub-binaries) pin far
+  # more than they keep; whole binaries pin what they keep. Needs a process
+  # that answers sys:get_state.
+  @held_binaries ~S"""
+  Walk = fun W(_, {N, _, _} = Acc) when N >= 2000 -> Acc;
+             W(B, {N, Kept, Pinned}) when is_binary(B) ->
+               {N + 1, Kept + byte_size(B), Pinned + binary:referenced_byte_size(B)};
+             W([H | T], Acc) -> W(T, W(H, Acc));
+             W(T, Acc) when is_tuple(T) -> W(tuple_to_list(T), Acc);
+             W(M, Acc) when is_map(M) -> W(maps:values(M), Acc);
+             W(_, Acc) -> Acc
+         end,
+  case catch sys:get_state(Pid, 1000) of
+    {'EXIT', _} -> unavailable;
+    State -> Walk(State, {0, 0, 0})
+  end.
+  """
+
   def run(:binary_leak) do
-    with {:ok, leaks} <- Target.rpc(:recon, :bin_leak, [5], 15_000) do
-      offenders =
+    with {:ok, leaks} <- Target.rpc(:recon, :bin_leak, [5], 15_000),
+         {:ok, holders} <- Target.rpc(:recon, :proc_count, [:binary_memory, 5]),
+         {:ok, total} <- Target.rpc(:erlang, :memory, [:binary]) do
+      released =
         for {pid, freed, info} <- leaks, freed < -1_000 do
           %{pid: Format.inspect(pid), binaries_freed: -freed, info: format_proc_info(pid, info)}
         end
 
-      status = if Enum.any?(offenders, &(&1.binaries_freed > 100_000)), do: :warning, else: :ok
+      largest =
+        for {pid, bytes, info} <- holders, bytes > 0 do
+          %{
+            pid: Format.inspect(pid),
+            binary_bytes: bytes,
+            share_of_binary_memory: if(total > 0, do: Float.round(bytes / total, 2), else: 0.0),
+            info: format_proc_info(pid, info)
+          }
+        end
+        |> List.update_at(0, &Map.merge(&1, held_binaries(holders)))
 
-      result(:binary_leak, status, offenders, """
-      Processes that released many refc binaries when force-GC'd. Large values
-      suggest a binary leak: long-lived processes touching large binaries
-      without copying sub-binaries (binary:copy/1) or hibernating.
+      hoarder? =
+        Enum.any?(largest, fn h ->
+          h.binary_bytes >= @binary_holder_mb * 1_048_576 and h.share_of_binary_memory >= 0.5
+        end)
+
+      status =
+        if hoarder? or Enum.any?(released, &(&1.binaries_freed > 100_000)),
+          do: :warning,
+          else: :ok
+
+      findings = %{
+        binary_memory_bytes: total,
+        released_by_gc: released,
+        largest_holders: largest
+      }
+
+      result(:binary_leak, status, findings, """
+      Two kinds of refc binary leak. released_by_gc lists processes that let
+      go of many binaries when force-GC'd (which this check does to every
+      process): long-lived processes touching large binaries but rarely
+      collecting; hibernating them or GCing after big work fixes it.
+      largest_holders lists the processes referencing the most binary
+      memory now; one holding most of it, and more over time in snapshot
+      diffs, is the leak. For the largest, held_binaries samples the
+      binaries in its state and tells two causes apart: slices
+      (sub-binaries) of larger binaries, each pinning the whole binary it
+      points into, fixed by binary:copy/1 on the slice before keeping it
+      (the runtime copies slices of 64 bytes or less itself); or whole
+      binaries accumulating, fixed by bounding what's kept. A cache holding
+      binaries on purpose looks the same; check what the process is with
+      process_info.
       """)
     else
       err -> error_result(:binary_leak, err)
@@ -730,6 +791,30 @@ defmodule OtpDebugMcp.Checks do
   end
 
   defp atom_count, do: Target.rpc(:erlang, :system_info, [:atom_count])
+
+  defp held_binaries([{pid, _bytes, _info} | _]) do
+    case remote_eval(@held_binaries, Pid: pid) do
+      {:ok, {n, kept, pinned}} when n > 0 ->
+        %{
+          held_binaries: %{
+            sampled: n,
+            bytes_kept: kept,
+            bytes_pinned: pinned,
+            looks_like:
+              if(pinned > 4 * kept,
+                do:
+                  "slices pinning larger binaries: binary:copy/1 the slices before keeping them",
+                else: "whole binaries accumulating: bound what the process keeps"
+              )
+          }
+        }
+
+      _ ->
+        %{}
+    end
+  end
+
+  defp held_binaries(_), do: %{}
 
   defp app_name({:ok, app}), do: app
   defp app_name(_), do: nil

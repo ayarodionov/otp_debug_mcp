@@ -290,9 +290,10 @@ or LFE.
 > `/var/lib/rabbitmq/.erlang.cookie`. Which processes use the most memory,
 > and are any mailboxes backing up?
 
-**What the agent does.** The same checks as for your own code, on Erlang
-and Gleam nodes as on Elixir ones (see [examples/erlang](../examples/erlang)
-and [examples/gleam](../examples/gleam) for demo targets). Nothing has to be installed on the target, because the tool attaches over Erlang
+**What the agent does.** The same checks as for your own code, on Erlang,
+Gleam and LFE nodes as on Elixir ones (see the demo targets in
+[examples/erlang](../examples/erlang), [examples/gleam](../examples/gleam)
+and [examples/lfe](../examples/lfe)). Nothing has to be installed on the target, because the tool attaches over Erlang
 distribution as a hidden node. If the product ships its own recon, that copy
 is used as-is.
 

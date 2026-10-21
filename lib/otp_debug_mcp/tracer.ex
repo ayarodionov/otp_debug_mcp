@@ -59,9 +59,10 @@ defmodule OtpDebugMcp.Tracer do
   Line = fun
     ({trace_ts, P, call, {Mod, Fun, Args}, TS}) ->
       Fmt("~s ~p ~tp:~tp(~ts)",
-          [Time(TS), P, Mod, Fun, lists:join(", ", [io_lib:format("~9999tP", [A, 20]) || A <- Args])]);
+          [Time(TS), P, Mod, Fun, lists:join(", ", [io_lib:format("~9999tP", [A, 20], [{chars_limit, 300}]) || A <- Args])]);
     ({trace_ts, P, return_from, {Mod, Fun, Arity}, R, TS}) ->
-      Fmt("~s ~p ~tp:~tp/~p --> ~9999tP", [Time(TS), P, Mod, Fun, Arity, R, 20]);
+      Fmt("~s ~p ~tp:~tp/~p --> ~ts", [Time(TS), P, Mod, Fun, Arity,
+                                       io_lib:format("~9999tP", [R, 20], [{chars_limit, 300}])]);
     ({trace_ts, P, exception_from, {Mod, Fun, Arity}, {Class, Reason}, TS}) ->
       Fmt("~s ~p ~tp:~tp/~p raised ~p:~9999tP", [Time(TS), P, Mod, Fun, Arity, Class, Reason, 20]);
     (_) ->

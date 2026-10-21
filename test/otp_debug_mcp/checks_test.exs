@@ -2,7 +2,7 @@ defmodule OtpDebugMcp.ChecksTest do
   use ExUnit.Case, async: false
 
   alias OtpDebugMcp.{Checks, Snapshotter, TestTarget}
-  alias OtpDebugMcp.Fixtures.{AtomLeak, Mailbox, ProcLeak}
+  alias OtpDebugMcp.Fixtures.{AtomLeak, Mailbox, ProcLeak, SliceKeeper}
 
   setup_all do
     target = TestTarget.start()
@@ -65,6 +65,32 @@ defmodule OtpDebugMcp.ChecksTest do
     assert [%{processes: n, sample_stack: stack} | _] = f.largest_groups
     assert n > 300
     assert stack =~ "OtpDebugMcp.Fixtures.ProcLeak"
+  end
+
+  test "binary_leak names a process pinning binaries through slices" do
+    target = TestTarget.start()
+    on_exit(fn -> TestTarget.stop(target) end)
+    {:ok, _} = TestTarget.connect(target)
+    :ok = TestTarget.call(target, SliceKeeper, :start, [:slice_keeper, 4_000, :slices])
+
+    assert %{status: :warning, findings: f} = Checks.run(:binary_leak)
+    assert [top | _] = f.largest_holders
+    assert top.binary_bytes > 60 * 1_048_576
+    assert top.share_of_binary_memory > 0.9
+    assert top.info.registered_name =~ "slice_keeper"
+    assert %{sampled: 2000, looks_like: "slices" <> _} = top.held_binaries
+    # GC can't free live references.
+    assert f.released_by_gc == []
+  end
+
+  test "binary_leak tells whole binaries piling up from slices" do
+    target = TestTarget.start()
+    on_exit(fn -> TestTarget.stop(target) end)
+    {:ok, _} = TestTarget.connect(target)
+    :ok = TestTarget.call(target, SliceKeeper, :start, [:whole_keeper, 4_000, :whole])
+
+    assert %{findings: %{largest_holders: [top | _]}} = Checks.run(:binary_leak)
+    assert %{looks_like: "whole binaries" <> _} = top.held_binaries
   end
 
   test "memory_breakdown is a partition of the total" do

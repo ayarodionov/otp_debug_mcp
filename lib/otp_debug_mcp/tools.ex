@@ -128,7 +128,8 @@ defmodule OtpDebugMcp.Tools do
     schema do
       field(:check, {:required, :string},
         description:
-          "One of: message_queues, supervisor_restarts, binary_leak, memory_breakdown, " <>
+          "One of: message_queues, supervisor_restarts, binary_leak (force-GCs every " <>
+            "process), memory_breakdown, " <>
             "allocator_fragmentation, process_count, atom_table, ets_tables, ports, " <>
             "schedulers, top_reductions"
       )
@@ -155,7 +156,9 @@ defmodule OtpDebugMcp.Tools do
 
     schema do
       field(:pid, {:required, :string},
-        description: "Pid as printed, e.g. <0.123.0>, or a registered name, e.g. MyApp.Worker"
+        description:
+          "Pid as printed, e.g. <0.123.0>, or a registered name, e.g. MyApp.Worker, " <>
+            "my_server or 'my-server'"
       )
 
       field(:include_state, :boolean,
@@ -172,35 +175,59 @@ defmodule OtpDebugMcp.Tools do
       with {:ok, pid} <- resolve(pid_str),
            {:ok, context} <- context(pid),
            {:ok, info} <- Target.rpc(:recon, :info, [pid]) do
-        state =
+        {state, state_summary} =
           if params[:include_state] do
             case Target.rpc(:sys, :get_state, [pid, 2_000], 3_000) do
               {:ok, s} ->
-                Format.inspect(s, limit: 100, pretty: true)
+                {Format.inspect(s, limit: 100, pretty: true), summarize(s)}
 
               {:error, {:badrpc, {:EXIT, {:timeout, _}}}} ->
-                "unavailable: the process did not answer sys:get_state within 2s. " <>
-                  "This is a symptom, not a tool failure: the process is blocked " <>
-                  "or its mailbox is backed up, so system messages wait in line too."
+                {"unavailable: the process did not answer sys:get_state within 2s. " <>
+                   "This is a symptom, not a tool failure: the process is blocked " <>
+                   "or its mailbox is backed up, so system messages wait in line too.", nil}
 
               {:error, e} ->
-                "unavailable: #{Format.inspect(e)}"
+                {"unavailable: #{Format.inspect(e)}", nil}
             end
           else
-            "not requested: set include_state to fetch it"
+            {"not requested: set include_state to fetch it", nil}
+          end
+
+        binary_bytes =
+          case Target.rpc(:recon, :info, [pid, :binary_memory]) do
+            {:ok, {:binary_memory, bytes}} -> bytes
+            _ -> nil
           end
 
         Tools.json_response(
           frame,
-          Map.merge(context, %{
-            pid: pid_str,
+          context
+          |> Map.merge(%{
+            pid: Format.inspect(pid),
             info: Format.inspect(info, limit: :infinity, pretty: true),
+            binary_memory_bytes: binary_bytes,
             state: state
           })
+          |> Map.merge(if pid_str =~ ~r/^[^<#]/, do: %{name: pid_str}, else: %{})
+          |> Map.merge(if state_summary, do: %{state_summary: state_summary}, else: %{})
         )
       else
         err -> Tools.error_response(frame, err)
       end
+    end
+
+    # The state's shape and size, which a printout cut off at a depth hides.
+    defp summarize(state) do
+      kind =
+        cond do
+          is_list(state) -> %{kind: "list", length: length(state)}
+          is_map(state) -> %{kind: "map", size: map_size(state)}
+          is_tuple(state) -> %{kind: "tuple", size: tuple_size(state)}
+          is_binary(state) -> %{kind: "binary", bytes: byte_size(state)}
+          true -> %{kind: "other"}
+        end
+
+      Map.put(kind, :words, :erts_debug.flat_size(state))
     end
 
     # A process that exited is reported by recon:info right after.
@@ -225,6 +252,14 @@ defmodule OtpDebugMcp.Tools do
       {:ok, :erlang.list_to_pid(String.to_charlist(pid_str))}
     rescue
       ArgumentError -> {:error, {:invalid_pid, pid_str}}
+    end
+
+    # A name may come quoted, as Erlang prints atoms like 'log-index'.
+    defp resolve("'" <> quoted) do
+      case String.split(quoted, "'") do
+        [name, ""] -> resolve(name)
+        _ -> {:error, {:no_such_process, "'" <> quoted}}
+      end
     end
 
     defp resolve(name) do
