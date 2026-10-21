@@ -124,11 +124,13 @@ server=~/.local/otp_debug_mcp/bin/otp_debug_mcp
 skill=~/.local/otp_debug_mcp/skills/otp-debug
 ```
 
-For a build from source, from the root of your checkout:
+For a build from source, set `checkout` to where you cloned the
+repository:
 
 ```sh
-server=$PWD/_build/prod/rel/otp_debug_mcp/bin/otp_debug_mcp
-skill=$PWD/skills/otp-debug
+checkout=~/prj/otp_debug_mcp
+server=$checkout/_build/prod/rel/otp_debug_mcp/bin/otp_debug_mcp
+skill=$checkout/skills/otp-debug
 ```
 
 Then register the server (`--scope user` makes it available in every

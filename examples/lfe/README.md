@@ -16,12 +16,13 @@ the background with `erl`. Compiled LFE needs nothing from LFE at runtime,
 only Erlang. Nodes get `-sname` on this host and the cookie in
 `~/.erlang.cookie`, which is also the tool's default. `lfec` has to be on
 the `PATH`, or set `LFE` to an LFE install or checkout (with `lfec` in its
-`bin/`). To build LFE itself, and run a demo with it:
+`bin/`). To build LFE itself, here in `~/src/lfe`, and run a demo with it
+from the root of this repository:
 
 ```sh
-git clone --depth 1 --branch v2.2.2 https://github.com/lfe/lfe.git
-make -C lfe compile
-LFE=$PWD/lfe examples/lfe/run.sh shop
+git clone --depth 1 --branch v2.2.2 https://github.com/lfe/lfe.git ~/src/lfe
+make -C ~/src/lfe compile
+LFE=~/src/lfe examples/lfe/run.sh shop
 ```
 
 | Command | Node | The bug | What finds it |
