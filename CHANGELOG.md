@@ -6,6 +6,12 @@
   default shell: a trailing `# comment` on a command line isn't a comment
   there, so the first line failed and the download addresses came out
   wrong. No shell example in the docs has an inline comment any more.
+- The README's registration steps work for a build from source too: they
+  used the downloaded release's `~/.local` paths only, which don't exist
+  then (the server is `_build/prod/rel/otp_debug_mcp/bin/otp_debug_mcp`,
+  the skill `skills/otp-debug` in the checkout). They also say what to do
+  when `otp-debug` is already registered. `docs/clients.md` gives both
+  paths.
 
 ## 0.3.0
 

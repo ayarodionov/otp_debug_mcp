@@ -6,15 +6,23 @@ and Claude Desktop; the README covers Claude Code.
 
 Each client needs two things:
 
-1. **The server**, registered by its full path. JSON configs don't expand
-   `~`, so write `/Users/you/...` or `/home/you/...`. The release bundles
-   its own Erlang runtime, so it needs nothing on the `PATH`, which matters
-   for apps started from the Dock or a desktop launcher.
-2. **The playbook** in `skills/otp-debug/SKILL.md` (also in the release
-   archive): connect, `diagnose` first, drill in, confirm trends with
-   snapshots, and the safety rules. Claude Code reads it as a skill; the
-   other clients need it in their own instruction format, which the
-   commands below produce.
+1. **The server**, registered by its full path:
+   `~/.local/otp_debug_mcp/bin/otp_debug_mcp` for a downloaded release, or
+   `_build/prod/rel/otp_debug_mcp/bin/otp_debug_mcp` in your checkout if you
+   built it from source. JSON configs don't expand `~`, so write
+   `/Users/you/...` or `/home/you/...`. The release bundles its own Erlang
+   runtime, so it needs nothing on the `PATH`, which matters for apps
+   started from the Dock or a desktop launcher.
+2. **The playbook** in `skills/otp-debug/SKILL.md`: connect, `diagnose`
+   first, drill in, confirm trends with snapshots, and the safety rules.
+   It's at `~/.local/otp_debug_mcp/skills/otp-debug/SKILL.md` in a
+   downloaded release, or `skills/otp-debug/SKILL.md` in your checkout.
+   Claude Code reads it as a skill; the other clients need it in their own
+   instruction format, which the commands below produce. They set `skill`
+   for a downloaded release; for a source build, point it at your
+   checkout's copy instead.
+
+The examples below use the downloaded release's paths.
 
 These setups follow each client's documented configuration; the tool has
 been tested end to end from Claude Code only.

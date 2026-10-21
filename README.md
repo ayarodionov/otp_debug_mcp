@@ -117,13 +117,36 @@ The server is then `_build/prod/rel/otp_debug_mcp/bin/otp_debug_mcp`.
 
 ### Register it with Claude Code
 
-`--scope user` makes it available in every project:
+First say where the server and the skill are. For a downloaded release:
 
 ```sh
-claude mcp add otp-debug --scope user -- ~/.local/otp_debug_mcp/bin/otp_debug_mcp start
+server=~/.local/otp_debug_mcp/bin/otp_debug_mcp
+skill=~/.local/otp_debug_mcp/skills/otp-debug
 ```
 
-Or as a `.mcp.json` entry:
+For a build from source, from the root of your checkout:
+
+```sh
+server=$PWD/_build/prod/rel/otp_debug_mcp/bin/otp_debug_mcp
+skill=$PWD/skills/otp-debug
+```
+
+Then register the server (`--scope user` makes it available in every
+project) and install the skill, so Claude follows the debugging playbook:
+
+```sh
+claude mcp add otp-debug --scope user -- "$server" start
+mkdir -p ~/.claude/skills && cp -R "$skill" ~/.claude/skills/
+```
+
+`claude mcp get otp-debug` should show the server's path, and `/mcp` in
+Claude Code should list `otp-debug` as connected. If `claude mcp add` says
+`otp-debug` already exists, an earlier registration is in the way: remove
+it with `claude mcp remove otp-debug --scope user` and add it again. A
+build from source runs whatever was built last, so run `mix release`
+again after updating the checkout.
+
+Or as a `.mcp.json` entry, with the full path to the server:
 
 ```json
 {
@@ -139,13 +162,6 @@ Or as a `.mcp.json` entry:
 
 For Cursor, GitHub Copilot or Claude Desktop, see
 [docs/clients.md](docs/clients.md).
-
-Install the skill too (it's in the release archive as well), so Claude
-follows the debugging playbook:
-
-```sh
-mkdir -p ~/.claude/skills && cp -R ~/.local/otp_debug_mcp/skills/otp-debug ~/.claude/skills/
-```
 
 Notes:
 
