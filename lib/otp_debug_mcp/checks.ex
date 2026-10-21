@@ -157,7 +157,9 @@ defmodule OtpDebugMcp.Checks do
           |> Map.merge(restart_summary(now, intensity, period, restarts))
           # Every Supervisor.start_link(children, opts) has this callback
           # module, so it says nothing.
-          |> Map.merge(if mod == Supervisor.Default, do: %{}, else: %{module: inspect(mod)})
+          |> Map.merge(
+            if mod == Supervisor.Default, do: %{}, else: %{module: Format.inspect(mod)}
+          )
         end
         |> Enum.sort_by(& &1.last_restart_seconds_ago)
 
@@ -263,6 +265,11 @@ defmodule OtpDebugMcp.Checks do
       process_info memory field). High `binary` share with
       modest `processes` share points to refc binaries (see binary_leak
       check); high `ets` means a table is growing (see ets_tables check).
+      `other_system` is the runtime's own memory: its process and port
+      tables, distribution and driver buffers, literals and persistent
+      terms. It's often the largest category on a small or idle node, and
+      rarely where a leak is; watch it in snapshot diffs before suspecting
+      it.
       """)
     else
       err -> error_result(:memory_breakdown, err)
@@ -299,6 +306,9 @@ defmodule OtpDebugMcp.Checks do
       matters when unused_bytes is large. allocators names the allocators
       holding the most slack: binary_alloc after bursts of large binaries,
       eheap_alloc after process heap spikes, ets_alloc after table churn.
+      ll_alloc holds long-lived data (code, atoms, tables made at boot) and
+      keeps its carriers by design, so its slack isn't fragmentation to act
+      on.
       peak_allocated_bytes far above allocated_bytes means memory went back
       to the OS after a spike. Remedies are allocator flags, such as a
       different allocation strategy (+MBas aobf for binary_alloc) or smaller
@@ -335,16 +345,45 @@ defmodule OtpDebugMcp.Checks do
   end
 
   # Atom table pressure — atoms are never GC'd; exhaustion kills the node.
-  def run(:atom_table) do
-    with {:ok, count} <- Target.rpc(:erlang, :system_info, [:atom_count]),
-         {:ok, limit} <- Target.rpc(:erlang, :system_info, [:atom_limit]) do
-      ratio = count / limit
-      status = if ratio > 0.5, do: :critical, else: :ok
+  # Atoms only ever accumulate, so two counts a second apart show whether
+  # something is creating them now, and how long until the table is full;
+  # what this tool itself added in between doesn't count.
+  @atom_sample_ms 1_000
 
-      result(:atom_table, status, %{count: count, limit: limit}, """
-      Atoms are never garbage collected. Growth at runtime means something is
-      creating atoms dynamically (String.to_atom/1, :erlang.binary_to_term
-      without :safe, list_to_atom on user input).
+  def run(:atom_table) do
+    started = System.monotonic_time(:microsecond)
+
+    with {:ok, node} <- Target.target(),
+         {:ok, count0} <- Target.rpc(:erlang, :system_info, [:atom_count]),
+         {:ok, limit} <- Target.rpc(:erlang, :system_info, [:atom_limit]),
+         :ok <- Process.sleep(@atom_sample_ms),
+         {:ok, count} <- Target.rpc(:erlang, :system_info, [:atom_count]) do
+      seconds = (System.monotonic_time(:microsecond) - started) / 1_000_000
+      ours = Target.footprint_since(node, started).atoms
+      rate = max(count - count0 - ours, 0) / seconds
+      seconds_left = if rate > 0, do: round((limit - count) / rate)
+
+      status =
+        cond do
+          count / limit > 0.5 -> :critical
+          seconds_left && seconds_left < 86_400 -> :critical
+          rate > 0 -> :warning
+          true -> :ok
+        end
+
+      findings =
+        %{count: count, limit: limit, growth_per_second: Float.round(rate, 1)}
+        |> Map.merge(if seconds_left, do: %{seconds_until_full: seconds_left}, else: %{})
+
+      result(:atom_table, status, findings, """
+      Atoms are never garbage collected, and the node dies when the table is
+      full. growth_per_second is measured over 1s, not counting atoms this
+      tool added; any growth means something is creating atoms right now
+      (list_to_atom or binary_to_atom on input, String.to_atom/1,
+      binary_to_term without safe), and seconds_until_full is when the node
+      dies at that rate. Loading code adds atoms too, so confirm a leak with
+      snapshot diffs, then trace_calls on erlang list_to_atom or
+      binary_to_atom to find the caller.
       """)
     else
       err -> error_result(:atom_table, err)
@@ -366,7 +405,7 @@ defmodule OtpDebugMcp.Checks do
       top =
         for {name, mem_words, size, owner} <- tables do
           %{
-            name: inspect(name),
+            name: Format.inspect(name),
             bytes: mem_words * wordsize,
             rows: size,
             owner: Format.inspect(owner)
@@ -455,7 +494,7 @@ defmodule OtpDebugMcp.Checks do
   end
 
   defp registered(:undefined), do: %{}
-  defp registered(name), do: %{name: inspect(name)}
+  defp registered(name), do: %{name: Format.inspect(name)}
 
   defp history_fields({now, {kind, strategy, intensity, period, restarts}}) do
     %{kind: kind, strategy: strategy, restarts: restart_summary(now, intensity, period, restarts)}
@@ -518,6 +557,11 @@ defmodule OtpDebugMcp.Checks do
         unused_bytes: allocated - used,
         usage: if(allocated > 0, do: Float.round(used / allocated, 3), else: 1.0)
       }
+      |> Map.merge(
+        if alloc == :ll_alloc,
+          do: %{note: "long-lived data, which keeps its carriers by design: not fragmentation"},
+          else: %{}
+      )
     end)
     |> Enum.sort_by(& &1.unused_bytes, :desc)
     |> Enum.take(5)
@@ -593,8 +637,8 @@ defmodule OtpDebugMcp.Checks do
         {old_pid, _} = Map.get(before, id, {nil, nil}),
         pid != old_pid or pid == :restarting do
       %{
-        id: inspect(id),
-        modules: inspect(mods),
+        id: Format.inspect(id),
+        modules: Format.inspect(mods),
         pid_before: Format.inspect(old_pid),
         pid_now: Format.inspect(pid)
       }
@@ -630,7 +674,7 @@ defmodule OtpDebugMcp.Checks do
   defp format_proc_info(info) when is_list(info) do
     Enum.reduce(info, %{}, fn
       {k, v}, acc when is_atom(k) -> Map.put(acc, k, Format.inspect(v))
-      name, acc when is_atom(name) -> Map.put(acc, :registered_name, inspect(name))
+      name, acc when is_atom(name) -> Map.put(acc, :registered_name, Format.inspect(name))
       other, acc -> Map.put(acc, :extra, Format.inspect(other))
     end)
   end

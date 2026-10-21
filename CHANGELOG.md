@@ -15,6 +15,16 @@
 - Better advice: `message_queues` says to trace the sending side to find
   who floods a mailbox, and `top_reductions` that a busy process matters
   even when the schedulers aren't saturated.
+- `atom_table` measures atom growth over a second (not counting the tool's
+  own atoms) and how long until the table is full: critical if within a
+  day, a warning for any growth. `diagnose` used to call a node leaking
+  hundreds of atoms a second healthy.
+- Terms from plain Erlang nodes are shown in Erlang syntax; Elixir nodes
+  keep Elixir syntax.
+- Trace timestamps are in UTC, marked `Z`, like snapshot times.
+- `memory_breakdown` explains `other_system`, and `allocator_fragmentation`
+  marks `ll_alloc`'s slack as normal.
+- `examples/erlang`: demo targets in plain Erlang/OTP.
 
 ## 0.1.0
 

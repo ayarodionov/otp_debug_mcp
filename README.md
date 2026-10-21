@@ -156,6 +156,8 @@ Notes:
 - **Pids look the same everywhere.** Every tool prints the target's pids
   and ports the way the target itself does (`<0.107.0>`), matching trace
   output and `remote_eval`, and `process_info` accepts them as given.
+- **Erlang or Elixir syntax.** Terms from a plain Erlang node are shown in
+  Erlang syntax, from an Elixir node in Elixir syntax.
 - **stdout is the protocol stream.** All logging goes to stderr, and IO from
   the target during rpc calls and traces is redirected away from stdout.
 

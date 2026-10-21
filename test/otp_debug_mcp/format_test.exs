@@ -43,6 +43,19 @@ defmodule OtpDebugMcp.FormatTest do
     assert Format.inspect(self()) =~ ~r/^<#{Regex.escape(Atom.to_string(node()))}\.\d+\.\d+>$/
   end
 
+  test "prints a plain Erlang node's terms in Erlang syntax" do
+    target = TestTarget.start(erlang: true)
+    on_exit(fn -> TestTarget.stop(target) end)
+    {:ok, _} = TestTarget.connect(target)
+    pid = TestTarget.call(target, :erlang, :whereis, [:init])
+    printed = TestTarget.call(target, :erlang, :pid_to_list, [pid]) |> to_string()
+
+    assert Format.inspect(%{name: :init, pid: pid, text: "hi", list: [1, {:ok, pid}]}) ==
+             "\#{list => [1,{ok,#{printed}}],name => init,pid => #{printed},text => <<\"hi\">>}"
+
+    assert Format.inspect(:price_cache) == "price_cache"
+  end
+
   test "formats Erlang terms on the target", %{pid: pid, as_target_prints_it: printed} do
     assert Format.erlang(~c"~p", [{pid, :ok}]) == "{#{printed},ok}"
   end

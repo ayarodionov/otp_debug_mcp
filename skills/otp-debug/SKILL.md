@@ -66,8 +66,9 @@ raw introspection when a purpose-built tool exists.
   (registry, single db connection, ets owner doing writes).
 - `memory.binary` high and `binary_leak` finds big releases → refc binary
   leak; fix is `binary:copy/1` on retained sub-binaries or hibernation.
-- `atom_count` growing at all in a diff → dynamic atom creation from input
-  (diffs already exclude the atoms this tool itself sends); grep for
+- `atom_table` with `growth_per_second` > 0, or `atom_count` growing in a
+  diff → dynamic atom creation from input (both exclude the atoms this
+  tool itself sends); `seconds_until_full` is when the node dies. Grep for
   `String.to_atom`, `list_to_atom`, `binary_to_term` without `:safe`.
 - All schedulers ~1.0 → genuine CPU saturation. One scheduler pegged, rest
   idle → suspect a long-running NIF or a dirty-scheduler misconfiguration.

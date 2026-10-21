@@ -2,7 +2,7 @@ defmodule OtpDebugMcp.ChecksTest do
   use ExUnit.Case, async: false
 
   alias OtpDebugMcp.{Checks, Snapshotter, TestTarget}
-  alias OtpDebugMcp.Fixtures.Mailbox
+  alias OtpDebugMcp.Fixtures.{AtomLeak, Mailbox}
 
   setup_all do
     target = TestTarget.start()
@@ -25,6 +25,28 @@ defmodule OtpDebugMcp.ChecksTest do
 
     assert Enum.map(results, & &1.check) |> Enum.sort() == Enum.sort(Checks.all_checks())
     refute Enum.any?(results, &(&1.status == :error))
+  end
+
+  test "atom_table is ok when no atoms are being created" do
+    assert %{status: :ok, findings: %{growth_per_second: rate} = f} = Checks.run(:atom_table)
+    assert rate == 0.0
+    refute Map.has_key?(f, :seconds_until_full)
+  end
+
+  test "atom_table measures atom growth, and when the table will be full" do
+    target = TestTarget.start()
+    on_exit(fn -> TestTarget.stop(target) end)
+    {:ok, _} = TestTarget.connect(target)
+    TestTarget.call(target, AtomLeak, :start, [2])
+    Process.sleep(200)
+
+    assert %{status: status, findings: %{growth_per_second: rate, seconds_until_full: left}} =
+             Checks.run(:atom_table)
+
+    # About 500 a second: a million atoms fill in well under a day.
+    assert status == :critical
+    assert rate > 100
+    assert left > 0 and left < 86_400
   end
 
   test "memory_breakdown is a partition of the total" do

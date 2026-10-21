@@ -16,6 +16,10 @@ defmodule OtpDebugMcp.FragmentationTest do
     assert f.allocated_bytes == f.used_bytes + f.unused_bytes
     assert f.used_bytes > 0 and f.peak_allocated_bytes >= f.allocated_bytes
     assert [%{allocator: _, usage: _, unused_bytes: _} | _] = f.allocators
+
+    if ll = Enum.find(f.allocators, &(&1.allocator == :ll_alloc)),
+      do: assert(ll.note =~ "by design")
+
     assert is_binary(JSON.encode!(f))
   end
 

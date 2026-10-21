@@ -286,3 +286,15 @@ defmodule OtpDebugMcp.Fixtures.Hog do
     end
   end
 end
+
+defmodule OtpDebugMcp.Fixtures.AtomLeak do
+  @moduledoc "Creates an atom about every `ms` milliseconds, forever."
+
+  def start(ms), do: spawn(fn -> loop(0, ms) end)
+
+  defp loop(n, ms) do
+    _ = :erlang.list_to_atom(~c"leaked_atom_" ++ Integer.to_charlist(n))
+    Process.sleep(ms)
+    loop(n + 1, ms)
+  end
+end

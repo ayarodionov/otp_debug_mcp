@@ -35,6 +35,8 @@ defmodule OtpDebugMcp.Target do
   @known_atoms :otp_debug_mcp_known_atoms
   @called :otp_debug_mcp_called
   @footprint :otp_debug_mcp_footprint
+  # Each node's language, :elixir or :erlang, for printing its terms.
+  @syntax :otp_debug_mcp_syntax
 
   # The current target, and every connected node's recon status.
   defstruct current: nil, nodes: %{}
@@ -56,6 +58,18 @@ defmodule OtpDebugMcp.Target do
   """
   @spec attach(node(), atom() | nil) :: {:ok, map()} | {:error, term()}
   def attach(node, cookie \\ nil), do: GenServer.call(__MODULE__, {:attach, node, cookie}, 30_000)
+
+  @doc """
+  Whether `node` runs Elixir (`:elixir`) or only Erlang (`:erlang`), so its
+  terms can be shown in its own syntax; nil if it isn't connected.
+  """
+  @spec syntax(node() | nil) :: :elixir | :erlang | nil
+  def syntax(node) do
+    case :ets.lookup(@syntax, node) do
+      [{^node, syntax}] -> syntax
+      [] -> nil
+    end
+  end
 
   @doc "Every connected node, the current target first."
   @spec attached_nodes() :: [node()]
@@ -255,6 +269,7 @@ defmodule OtpDebugMcp.Target do
         do: :ets.new(table, [:named_table, :public, :set, read_concurrency: true])
 
     :ets.new(@footprint, [:named_table, :public, :ordered_set])
+    :ets.new(@syntax, [:named_table, :public, :set, read_concurrency: true])
     {:ok, %__MODULE__{}}
   end
 
@@ -438,6 +453,7 @@ defmodule OtpDebugMcp.Target do
   # running it, such as an operator's recon_trace session. This also makes
   # repeat connects and reconnects load nothing.
   defp inject_recon(target) do
+    detect_syntax(target)
     _ = Application.load(:recon)
 
     missing =
@@ -449,6 +465,19 @@ defmodule OtpDebugMcp.Target do
       {:ok, how} -> describe_recon(target, missing, how)
       {:error, reason} -> %{source: "unavailable", reason: reason}
     end
+  end
+
+  defp detect_syntax(target) do
+    syntax =
+      case call(target, :application, :which_applications, [], @rpc_timeout) do
+        apps when is_list(apps) ->
+          if List.keymember?(apps, :elixir, 0), do: :elixir, else: :erlang
+
+        _ ->
+          :elixir
+      end
+
+    :ets.insert(@syntax, {target, syntax})
   end
 
   defp describe_recon(target, injected, how) do

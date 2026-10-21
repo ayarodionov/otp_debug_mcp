@@ -72,6 +72,17 @@ defmodule OtpDebugMcp.ToolsTest do
     assert ticker_info =~ "registered_name: :ticker"
   end
 
+  test "process_info on a plain Erlang node answers in Erlang syntax" do
+    erlang = TestTarget.start(erlang: true)
+    on_exit(fn -> TestTarget.stop(erlang) end)
+    {:ok, _} = TestTarget.connect(erlang)
+
+    assert {:ok, %{"info" => info}} = call_tool_json(Tools.ProcessInfo, %{pid: "init"})
+    assert info =~ "{registered_name,init}"
+    refute info =~ "%{"
+    refute info =~ ":init"
+  end
+
   test "run_check rejects an unknown check" do
     assert {:error, text} = call_tool(Tools.RunCheck, %{check: "nope"})
     assert text =~ "unknown_check"

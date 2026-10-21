@@ -20,7 +20,8 @@ defmodule OtpDebugMcp.TestTarget do
     OtpDebugMcp.Fixtures.CrashSup,
     OtpDebugMcp.Fixtures.Spawner,
     OtpDebugMcp.Fixtures.Fragmenter,
-    OtpDebugMcp.Fixtures.Hog
+    OtpDebugMcp.Fixtures.Hog,
+    OtpDebugMcp.Fixtures.AtomLeak
   ]
 
   defstruct [:peer, :node, :cookie, :name, :opts]
@@ -28,7 +29,10 @@ defmodule OtpDebugMcp.TestTarget do
   @doc """
   Start a target node. Options: `:name`, `:cookie`, `longnames: true` (as
   `name@127.0.0.1`), `recon: true` (recon application loaded, as in a
-  release that depends on it), `:args` (more VM flags, as charlists).
+  release that depends on it), `:args` (more VM flags, as charlists),
+  `erlang: true` (the Elixir application isn't started, so the node looks
+  like a plain Erlang node; fixtures still load, but only those that need
+  no running Elixir work there).
   """
   def start(opts \\ []) do
     name =
@@ -55,7 +59,9 @@ defmodule OtpDebugMcp.TestTarget do
     {:ok, peer, node} = :peer.start(peer_opts)
     target = %__MODULE__{peer: peer, node: node, cookie: cookie, name: name, opts: opts}
 
-    {:ok, _} = call(target, :application, :ensure_all_started, [:elixir])
+    unless opts[:erlang],
+      do: {:ok, _} = call(target, :application, :ensure_all_started, [:elixir])
+
     if opts[:recon], do: :ok = call(target, :application, :load, [:recon])
 
     for mod <- @fixtures do

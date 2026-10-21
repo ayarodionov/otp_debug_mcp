@@ -98,7 +98,8 @@ defmodule OtpDebugMcp.ProcessContext do
     # Processes strictly between two pids: the probes themselves don't count.
     since = max(n1 - n - 1, 0)
     rate = max(n2 - n1 - 1, 0) / (@window_ms / 1000)
-    average = if serial == 0 and uptime_s > 0, do: n1 / uptime_s, else: 0
+    # Since boot, not counting this tool's own spawns (logged for the last hour).
+    average = if serial == 0 and uptime_s > 0, do: max(n1 - length(own), 0) / uptime_s, else: 0
     estimate = min(solve(since, rate, average, own, 0, 0.0), uptime_s)
     ours = Enum.count(own, &(&1 <= estimate))
     # A hard bound: had the process been older than our (since + 1)th most
@@ -173,9 +174,10 @@ defmodule OtpDebugMcp.ProcessContext do
     do: "the rest are spread at the node's current spawn rate, #{Float.round(rate * 1.0, 1)}/s."
 
   defp basis(since, _ours, _rate, average, own) when since > length(own) do
-    "nothing else spawned during the half-second measurement, so the rest are spread " <>
-      "at the average spawn rate since boot, #{Float.round(average * 1.0, 1)}/s, which " <>
-      "may be far off."
+    "nothing else spawned during the half-second measurement (node_spawn_rate_per_second " <>
+      "is that measurement), so the rest are spread at the node's average spawn rate " <>
+      "since boot, #{Float.round(average * 1.0, 1)}/s not counting this tool's, which may " <>
+      "be far off."
   end
 
   defp basis(_since, _ours, _rate, _average, _own),

@@ -66,6 +66,7 @@ defmodule OtpDebugMcp.TracerTest do
                Tracer.trace(@ticker, "handle_info", 4, 5_000)
 
       assert [call, ret, _, _] = events
+      assert call =~ ~r/^\d{2}:\d{2}:\d{2}\.\d{6}Z /
 
       assert call =~
                ~r/<0\.\d+\.0> 'Elixir.OtpDebugMcp.Fixtures.Ticker':handle_info\(tick, \d+\)$/

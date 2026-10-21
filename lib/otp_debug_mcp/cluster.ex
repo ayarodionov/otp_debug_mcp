@@ -198,7 +198,7 @@ defmodule OtpDebugMcp.Cluster do
 
       {:ok, [{pid, len, info}]} ->
         name = Enum.find(info, &is_atom/1)
-        %{length: len, pid: Format.inspect(pid), registered_name: name && inspect(name)}
+        %{length: len, pid: Format.inspect(pid), registered_name: name && Format.inspect(name)}
 
       _ ->
         nil

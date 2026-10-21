@@ -54,8 +54,8 @@ defmodule OtpDebugMcp.Tracer do
   Owner ! {trace_started, self(), N},
   Deadline = erlang:monotonic_time(millisecond) + Duration,
   Time = fun({_, _, Us} = TS) ->
-    {_, {H, Mi, Sec}} = calendar:now_to_local_time(TS),
-    io_lib:format("~2..0w:~2..0w:~2..0w.~6..0w", [H, Mi, Sec, Us])
+    {_, {H, Mi, Sec}} = calendar:now_to_universal_time(TS),
+    io_lib:format("~2..0w:~2..0w:~2..0w.~6..0wZ", [H, Mi, Sec, Us])
   end,
   Fmt = fun(Format, Args) -> io_lib:format(Format, Args, [{chars_limit, 1000}]) end,
   Line = fun
@@ -223,7 +223,7 @@ defmodule OtpDebugMcp.Tracer do
         stop_and_wait(holder, ref)
 
         {:error,
-         "no function in #{inspect(mod)} matches #{fun}. The module is loaded on the " <>
+         "no function in #{Format.inspect(mod)} matches #{fun}. The module is loaded on the " <>
            "target, so check the function name."}
 
       {:started, holder, ref, _matched} ->
