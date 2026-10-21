@@ -16,6 +16,9 @@ raw introspection when a purpose-built tool exists.
    or shortname/longname mismatch.
 2. **Always start with `diagnose`.** Findings come ranked worst-first with
    interpretations. Report the top findings to the user before drilling in.
+   If `connect` reports a `cluster`, run `cluster` (compare) first instead:
+   the node that stands out from the others is usually where the problem
+   is. `connect` to it, then `diagnose` there.
 3. **Drill into offenders**, don't re-scan:
    - Big message queue → `process_info` on that pid (with `include_state` for
      gen_servers); its `current_function` shows what it's stuck on. Then

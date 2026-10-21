@@ -1,6 +1,11 @@
 defmodule OtpDebugMcp.Target do
   @moduledoc """
-  Manages the connection to the target OTP node.
+  Manages the connections to target OTP nodes.
+
+  `connect/2` makes a node the current target, which every tool works on.
+  `attach/2` connects further nodes, such as the rest of a cluster, without
+  changing it, and `on/2` runs code against one of them: every remote call
+  made inside it goes to that node instead.
 
   We start our own node as a *hidden* node (`--hidden`), so connecting never
   changes the target's cluster topology: the target does not gossip our name
@@ -31,7 +36,10 @@ defmodule OtpDebugMcp.Target do
   @called :otp_debug_mcp_called
   @footprint :otp_debug_mcp_footprint
 
-  defstruct node: nil, connected: false, recon: nil
+  # The current target, and every connected node's recon status.
+  defstruct current: nil, nodes: %{}
+
+  @override {__MODULE__, :node}
 
   # -- Client API --------------------------------------------------------------
 
@@ -42,15 +50,43 @@ defmodule OtpDebugMcp.Target do
   def connect(node, cookie \\ nil), do: GenServer.call(__MODULE__, {:connect, node, cookie})
 
   @doc """
-  The connected target node. If the connection dropped (e.g. the target
-  restarted), one reconnect is attempted, re-injecting recon on success.
+  Connect `node` (an atom) alongside the current target, without changing
+  it. Uses `cookie`, or else the current target's. The node must use the
+  same name mode (shortnames or longnames) as the current target.
+  """
+  @spec attach(node(), atom() | nil) :: {:ok, map()} | {:error, term()}
+  def attach(node, cookie \\ nil), do: GenServer.call(__MODULE__, {:attach, node, cookie}, 30_000)
+
+  @doc "Every connected node, the current target first."
+  @spec attached_nodes() :: [node()]
+  def attached_nodes, do: GenServer.call(__MODULE__, :attached_nodes)
+
+  @doc """
+  Run `fun` with `node` as the target of every call in this process: rpcs,
+  checks, snapshots, traces. `node` must be connected or attached.
+  """
+  def on(node, fun) do
+    previous = Process.put(@override, node)
+
+    try do
+      fun.()
+    after
+      if previous, do: Process.put(@override, previous), else: Process.delete(@override)
+    end
+  end
+
+  @doc """
+  The target node: the one given to `on/2`, or else the current target. If
+  the connection dropped (e.g. the target restarted), one reconnect is
+  attempted, re-injecting recon on success.
   """
   @spec target() :: {:ok, node()} | {:error, :not_connected | {:connection_lost, node()}}
-  def target, do: GenServer.call(__MODULE__, :target)
+  def target, do: GenServer.call(__MODULE__, {:target, Process.get(@override)})
 
   @doc "The target node, or nil before the first connect. Never reconnects."
   @spec connected_node() :: node() | nil
-  def connected_node, do: GenServer.call(__MODULE__, :connected_node)
+  def connected_node,
+    do: Process.get(@override) || GenServer.call(__MODULE__, :connected_node)
 
   @doc """
   Run `mod.fun(args)` on the target node with a bounded timeout.
@@ -78,7 +114,7 @@ defmodule OtpDebugMcp.Target do
 
   @doc "Why a recon function is undefined on the target, given how recon got there."
   def missing_recon_message(m, f, arity) do
-    case GenServer.call(__MODULE__, :recon) do
+    case GenServer.call(__MODULE__, {:recon, connected_node()}) do
       %{source: "unavailable", reason: reason} ->
         "#{m}:#{f}/#{arity} is not available: #{reason}"
 
@@ -94,26 +130,26 @@ defmodule OtpDebugMcp.Target do
   end
 
   @doc """
-  Record that we spawned `n` processes on the target. Each rpc spawns one
+  Record that we spawned `n` processes on `target`. Each rpc spawns one
   there; `OtpDebugMcp.ProcessContext` discounts them when it estimates a
   process's age from the pids spawned since.
   """
-  def note_spawns(n \\ 1) do
+  def note_spawns(target, n \\ 1) do
     now = System.monotonic_time(:microsecond)
-    for i <- 1..n//1, do: :ets.insert(@spawns, {{now, i, make_ref()}})
+    for i <- 1..n//1, do: :ets.insert(@spawns, {{now, i, make_ref()}, target})
     :ok
   end
 
   @doc """
-  How many seconds before monotonic time `at_us` each of our spawns on the
-  target happened, most recent first; spawns up to `slack_us` after it
+  How many seconds before monotonic time `at_us` each of our spawns on
+  `target` happened, most recent first; spawns up to `slack_us` after it
   count as 0. Forgets spawns older than an hour.
   """
-  def own_spawn_ages(at_us, slack_us \\ 0) do
+  def own_spawn_ages(target, at_us, slack_us \\ 0) do
     cutoff = at_us - 3_600_000_000
-    :ets.select_delete(@spawns, [{{{:"$1", :_, :_}}, [{:<, :"$1", cutoff}], [true]}])
+    :ets.select_delete(@spawns, [{{{:"$1", :_, :_}, :_}, [{:<, :"$1", cutoff}], [true]}])
 
-    for {{t, _, _}} <- :ets.tab2list(@spawns), t <= at_us + slack_us do
+    for {{t, _, _}, ^target} <- :ets.tab2list(@spawns), t <= at_us + slack_us do
       max(at_us - t, 0) / 1_000_000
     end
     |> Enum.sort()
@@ -126,7 +162,7 @@ defmodule OtpDebugMcp.Target do
   receiving node; calling a module for the first time may load it. So the
   first time `signature` is used, or when `term` holds atoms we haven't
   sent before, the target's atom count and code memory are read before and
-  after, and the difference is logged for `footprint_since/1`, which
+  after, and the difference is logged for `footprint_since/2`, which
   snapshot diffs subtract. Repeat calls cost nothing extra.
   """
   def with_footprint(target, signature, term, fun) do
@@ -139,7 +175,7 @@ defmodule OtpDebugMcp.Target do
       before = footprint_reading(target)
       result = fun.()
       for atom <- new_atoms, do: :ets.insert(@known_atoms, {{target, atom}})
-      record_footprint(before, footprint_reading(target))
+      record_footprint(target, before, footprint_reading(target))
       result
     else
       fun.()
@@ -147,12 +183,12 @@ defmodule OtpDebugMcp.Target do
   end
 
   @doc """
-  What this tool added to the target since monotonic time `since_us`:
+  What this tool added to `target` since monotonic time `since_us`:
   `%{atoms: count, code_bytes: bytes}`.
   """
-  def footprint_since(since_us) do
+  def footprint_since(target, since_us) do
     :ets.select(@footprint, [
-      {{{:"$1", :_}, :"$2", :"$3"}, [{:>=, :"$1", since_us}], [{{:"$2", :"$3"}}]}
+      {{{:"$1", :_}, target, :"$2", :"$3"}, [{:>=, :"$1", since_us}], [{{:"$2", :"$3"}}]}
     ])
     |> Enum.reduce(%{atoms: 0, code_bytes: 0}, fn {atoms, code}, acc ->
       %{atoms: acc.atoms + atoms, code_bytes: acc.code_bytes + code}
@@ -168,13 +204,13 @@ defmodule OtpDebugMcp.Target do
     end
   end
 
-  defp record_footprint({atoms0, code0}, {atoms1, code1})
+  defp record_footprint(target, {atoms0, code0}, {atoms1, code1})
        when atoms1 > atoms0 or code1 > code0 do
     key = {System.monotonic_time(:microsecond), make_ref()}
-    :ets.insert(@footprint, {key, max(atoms1 - atoms0, 0), max(code1 - code0, 0)})
+    :ets.insert(@footprint, {key, target, max(atoms1 - atoms0, 0), max(code1 - code0, 0)})
   end
 
-  defp record_footprint(_, _), do: :ok
+  defp record_footprint(_target, _, _), do: :ok
 
   defp atoms_in(atom, acc) when is_atom(atom), do: MapSet.put(acc, atom)
   defp atoms_in([head | tail], acc), do: atoms_in(tail, atoms_in(head, acc))
@@ -226,6 +262,10 @@ defmodule OtpDebugMcp.Target do
   def handle_call({:connect, node_str, cookie}, _from, state) do
     target = String.to_atom(node_str)
 
+    # Switching between shortnames and longnames restarts distribution,
+    # which drops every connection.
+    state = if switches_mode?(target), do: %__MODULE__{}, else: state
+
     # An existing connection would make Node.connect succeed whatever the
     # cookie, so a wrong cookie would be reported as connected (and break
     # the next reconnect). Start over so the cookie is always checked.
@@ -237,23 +277,58 @@ defmodule OtpDebugMcp.Target do
          true <- Node.connect(target) || {:error, :connection_failed} do
       recon = inject_recon(target)
       Logger.info("connected to #{target} (hidden), recon: #{inspect(recon)}")
-      {:reply, {:ok, %{recon: recon}}, %{state | node: target, connected: true, recon: recon}}
+      state = %{state | current: target, nodes: Map.put(state.nodes, target, recon)}
+      {:reply, {:ok, %{recon: recon}}, state}
     else
-      # Keep the previous target only if a mode switch didn't drop it.
       {:error, _} = err ->
-        state = if state.node in Node.list(:hidden), do: state, else: %__MODULE__{}
-        {:reply, err, state}
+        # The previous current target stays, unless this was it.
+        nodes = Map.delete(state.nodes, target)
+        current = if state.current == target, do: nil, else: state.current
+        {:reply, err, %{state | current: current, nodes: nodes}}
     end
   end
 
-  def handle_call(:recon, _from, state), do: {:reply, state.recon, state}
-  def handle_call(:connected_node, _from, state), do: {:reply, state.node, state}
-
-  def handle_call(:target, _from, %{connected: false} = state),
+  def handle_call({:attach, _target, _cookie}, _from, %{current: nil} = state),
     do: {:reply, {:error, :not_connected}, state}
 
-  def handle_call(:target, _from, %{node: node} = state) do
+  def handle_call({:attach, target, cookie}, _from, state) do
     cond do
+      Map.has_key?(state.nodes, target) and target in Node.list(:hidden) ->
+        {:reply, {:ok, state.nodes[target]}, state}
+
+      switches_mode?(target) ->
+        {:reply, {:error, {:name_mode_differs, target}}, state}
+
+      true ->
+        Node.set_cookie(target, cookie || :erlang.get_cookie(state.current))
+
+        if Node.connect(target) do
+          forget_footprint(target)
+          recon = inject_recon(target)
+          Logger.info("attached #{target} (hidden), recon: #{inspect(recon)}")
+          {:reply, {:ok, recon}, %{state | nodes: Map.put(state.nodes, target, recon)}}
+        else
+          {:reply, {:error, :connection_failed}, state}
+        end
+    end
+  end
+
+  def handle_call(:attached_nodes, _from, state) do
+    others = state.nodes |> Map.keys() |> List.delete(state.current) |> Enum.sort()
+    {:reply, if(state.current, do: [state.current | others], else: others), state}
+  end
+
+  def handle_call({:recon, node}, _from, state), do: {:reply, state.nodes[node], state}
+  def handle_call(:connected_node, _from, state), do: {:reply, state.current, state}
+
+  def handle_call({:target, nil}, from, state),
+    do: handle_call({:target, state.current}, from, state)
+
+  def handle_call({:target, node}, _from, state) do
+    cond do
+      not Map.has_key?(state.nodes, node) ->
+        {:reply, {:error, :not_connected}, state}
+
       node in Node.list(:hidden) ->
         {:reply, {:ok, node}, state}
 
@@ -261,12 +336,14 @@ defmodule OtpDebugMcp.Target do
         forget_footprint(node)
         recon = inject_recon(node)
         Logger.info("reconnected to #{node}, recon: #{inspect(recon)}")
-        {:reply, {:ok, node}, %{state | recon: recon}}
+        {:reply, {:ok, node}, %{state | nodes: Map.put(state.nodes, node, recon)}}
 
       true ->
         {:reply, {:error, {:connection_lost, node}}, state}
     end
   end
+
+  defp switches_mode?(target), do: Node.alive?() and current_name_domain() != name_domain(target)
 
   # -- Internals ---------------------------------------------------------------
 
@@ -491,7 +568,7 @@ defmodule OtpDebugMcp.Target do
 
   # Every rpc spawns a process on the target to run it.
   defp raw_call(target, mod, fun, args, timeout \\ @rpc_timeout) do
-    note_spawns()
+    note_spawns(target)
     :rpc.call(target, mod, fun, args, timeout)
   end
 

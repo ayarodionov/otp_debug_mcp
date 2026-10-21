@@ -59,6 +59,7 @@ introspection primitives, but an encoded diagnostic playbook in the spirit of
 | `process_info` | Deep-inspect one process: recon:info, an age estimate, its supervisor's restart history, optional `sys:get_state` |
 | `supervision_tree` | Render an application's supervision tree, with each supervisor's strategy and restart history |
 | `trace_calls` | Rate-limited call tracing (isolated trace session on OTP 27+, recon_trace before) |
+| `cluster` | Every node of the target's cluster at once: compare them (outliers, partitions), diagnose them all, or snapshot them all to see which grows |
 | `snapshot` | Take / diff system snapshots — trends beat point-in-time numbers; diffs exclude the atoms and code this tool itself adds |
 | `remote_eval` | Arbitrary Erlang eval on the target (opt-in, off by default) |
 
@@ -164,7 +165,8 @@ Then, in Claude Code:
 
 ## Typical agent workflow
 
-1. `connect(node: "myapp@127.0.0.1")`
+1. `connect(node: "myapp@127.0.0.1")`; if the node is in a cluster, it says
+   so, and `cluster()` compares every node to find the one that differs
 2. `diagnose()` → ranked findings
 3. Drill in: `process_info` on offenders, `supervision_tree` for context,
    `trace_calls` to see live traffic
@@ -181,7 +183,7 @@ example prompt, the tools involved, and what to watch out for:
 
 - **Production problems:** memory growth, slow requests, high CPU, stuck
   processes and call timeouts, approaching system limits, crash loops and
-  intermittent failures, incident triage
+  intermittent failures, one bad node in a cluster, incident triage
 - **Understanding and verifying:** tracing a runtime problem to the code in
   your repo, seeing what a function really receives, verifying a fix or a
   deploy, watching a load test, learning an unfamiliar system
@@ -263,6 +265,11 @@ both recipes in [docs/production.md](docs/production.md): an SSH tunnel to
 a target listening only on loopback, and TLS distribution, which refused
 plain-TCP connections and certificates from another CA.
 
+`scripts/cluster_demo.sh start` runs a three-node cluster on this host in
+which only `shop_b` has the cache bug. Pointed at the healthy `shop_a`, a
+headless Claude Code session ran `cluster` first and went straight to
+`shop_b` and the cause.
+
 `scripts/crash_loop_target.exs` runs a payment gateway in a crash loop
 just under its supervisor's restart limit, failing intermittently. Asked
 *"payments@yourhost fails payments now and then; find out why"*, a headless
@@ -319,4 +326,3 @@ Open items:
       precompiled for older releases
 - [ ] trace_calls on OTP 26 and earlier still goes through recon_trace, which
       ends other tracing (with permission): a small tracer of our own
-- [ ] Multi-node: compare or correlate several nodes of one cluster

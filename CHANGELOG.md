@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+- `cluster`: every node of the target's cluster at once. `compare` puts key
+  metrics side by side, flags the nodes that stand out from the others, and
+  finds partitions (members that don't see each other); `diagnose` runs
+  the full diagnose on every node; `snapshot_take` and `snapshot_diff` show
+  which node grows. Members are discovered through each node's own view,
+  so a node partitioned from the current target is still found.
+- `connect` says when the node is in a cluster.
+- `process_info` names the parent of a process no supervisor started, and
+  says nothing restarts it; its age explanation says what the estimate is
+  based on.
+- Better advice: `message_queues` says to trace the sending side to find
+  who floods a mailbox, and `top_reductions` that a busy process matters
+  even when the schedulers aren't saturated.
+
 ## 0.1.0
 
 The first release.

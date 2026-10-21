@@ -56,6 +56,16 @@ defmodule OtpDebugMcp.ProcessContextTest do
     assert age.estimated_seconds > true_age / 2 and age.estimated_seconds < true_age * 2
   end
 
+  test "a process without a supervisor says so, and names its parent", %{target: target} do
+    pid = spawn_sleeper(target)
+
+    assert {:ok, %{supervisor: nil, parent: parent, supervision: note}} =
+             ProcessContext.describe(pid)
+
+    assert %{pid: "<0." <> _, alive: _} = parent
+    assert note =~ "nothing restarts this process"
+  end
+
   test "a long-running process is about as old as the node", %{target: target} do
     pid = TestTarget.call(target, :erlang, :whereis, [:init])
     {:ok, %{age: age, supervisor: nil}} = ProcessContext.describe(pid)

@@ -53,14 +53,37 @@ defmodule OtpDebugMcp.Tools do
     def execute(%{node: node} = params, frame) do
       case Target.connect(node, params[:cookie]) do
         {:ok, %{recon: recon}} ->
-          Tools.json_response(frame, %{
-            connected: node,
-            recon: recon,
-            hint: "Run the `diagnose` tool next for a full health check."
-          })
+          Tools.json_response(
+            frame,
+            Map.merge(
+              %{
+                connected: node,
+                recon: recon,
+                hint: "Run the `diagnose` tool next for a full health check."
+              },
+              cluster_hint()
+            )
+          )
 
         {:error, reason} ->
           Tools.error_response(frame, "#{inspect(reason)}. " <> connect_hints())
+      end
+    end
+
+    # A node in a cluster: say so, since comparing the members often finds
+    # the odd one out faster than diagnosing one.
+    defp cluster_hint do
+      case Target.rpc(:erlang, :nodes, []) do
+        {:ok, [_ | _] = others} ->
+          %{
+            cluster: %{
+              other_nodes: Enum.map(others, &Atom.to_string/1),
+              hint: "This node is in a cluster; the cluster tool compares all its nodes."
+            }
+          }
+
+        _ ->
+          %{}
       end
     end
 
@@ -304,7 +327,9 @@ defmodule OtpDebugMcp.Tools do
       field(:function, :string, description: "Function name; omit for all functions")
 
       field(:max_events, :integer,
-        description: "Stop after this many calls (default 20, max 100)"
+        description:
+          "Stop after this many events (default 20, max 100); a call and its " <>
+            "return or exception are two events"
       )
 
       field(:duration_ms, :integer,
@@ -334,6 +359,57 @@ defmodule OtpDebugMcp.Tools do
           Tools.error_response(frame, reason)
       end
     end
+  end
+
+  defmodule Cluster do
+    @moduledoc """
+    Look at every node of the current target's cluster at once: the nodes it
+    sees, and the nodes those see (or the nodes given). Actions:
+
+    - compare (default): one row of key metrics per node, the nodes that
+      stand out from the others, and partitions (members that don't see
+      each other)
+    - diagnose: the full diagnose on every node, keeping what isn't ok
+    - snapshot_take, then snapshot_diff: which node grows
+
+    Nodes are attached with the current target's cookie. To drill into one
+    node, connect to it and use the other tools.
+    """
+    use Anubis.Server.Component, type: :tool
+
+    alias OtpDebugMcp.Tools
+
+    schema do
+      field(:action, :string,
+        description: "compare (default), diagnose, snapshot_take or snapshot_diff"
+      )
+
+      field(:nodes, {:list, :string},
+        description: "Nodes to include; omit to use the current target's cluster"
+      )
+    end
+
+    @actions %{
+      "compare" => :compare,
+      "diagnose" => :diagnose,
+      "snapshot_take" => :snapshot_take,
+      "snapshot_diff" => :snapshot_diff
+    }
+
+    @impl true
+    def execute(params, frame) do
+      action = params[:action] || "compare"
+
+      with {:ok, fun} <- Map.fetch(@actions, action) |> or_unknown(action),
+           {:ok, result} <- apply(OtpDebugMcp.Cluster, fun, [params[:nodes]]) do
+        Tools.json_response(frame, result)
+      else
+        {:error, reason} -> Tools.error_response(frame, reason)
+      end
+    end
+
+    defp or_unknown(:error, action), do: {:error, {:unknown_action, action, Map.keys(@actions)}}
+    defp or_unknown(ok, _action), do: ok
   end
 
   defmodule Snapshot do

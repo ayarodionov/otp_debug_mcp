@@ -257,3 +257,32 @@ defmodule OtpDebugMcp.Fixtures.Fragmenter do
     end
   end
 end
+
+defmodule OtpDebugMcp.Fixtures.Hog do
+  @moduledoc "A registered process holding a binary of `mb` megabytes."
+
+  def start(name, mb) do
+    caller = self()
+
+    pid =
+      spawn(fn ->
+        bin = :binary.copy(<<0>>, mb * 1_048_576)
+        send(caller, :allocated)
+        hold(bin)
+      end)
+
+    Process.register(pid, name)
+
+    receive do
+      :allocated -> :ok
+    after
+      10_000 -> {:error, :timeout}
+    end
+  end
+
+  defp hold(bin) do
+    receive do
+      :never -> hold(bin)
+    end
+  end
+end

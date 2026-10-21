@@ -19,7 +19,8 @@ defmodule OtpDebugMcp.TestTarget do
     OtpDebugMcp.Fixtures.Crasher,
     OtpDebugMcp.Fixtures.CrashSup,
     OtpDebugMcp.Fixtures.Spawner,
-    OtpDebugMcp.Fixtures.Fragmenter
+    OtpDebugMcp.Fixtures.Fragmenter,
+    OtpDebugMcp.Fixtures.Hog
   ]
 
   defstruct [:peer, :node, :cookie, :name, :opts]
@@ -27,7 +28,7 @@ defmodule OtpDebugMcp.TestTarget do
   @doc """
   Start a target node. Options: `:name`, `:cookie`, `longnames: true` (as
   `name@127.0.0.1`), `recon: true` (recon application loaded, as in a
-  release that depends on it).
+  release that depends on it), `:args` (more VM flags, as charlists).
   """
   def start(opts \\ []) do
     name =
@@ -41,7 +42,9 @@ defmodule OtpDebugMcp.TestTarget do
     peer_opts = %{
       name: name,
       connection: :standard_io,
-      args: [~c"-setcookie", ~c"#{cookie}"] ++ Enum.flat_map(paths, &[~c"-pa", &1])
+      args:
+        [~c"-setcookie", ~c"#{cookie}"] ++
+          Enum.flat_map(paths, &[~c"-pa", &1]) ++ Keyword.get(opts, :args, [])
     }
 
     peer_opts =
@@ -61,6 +64,27 @@ defmodule OtpDebugMcp.TestTarget do
     end
 
     target
+  end
+
+  @doc """
+  Start `n` targets sharing a cookie, connected to each other as `links`
+  says: `:full`, or a list of `{i, j}` index pairs. They don't connect
+  transitively (`-connect_all false`), so a missing link stays missing.
+  """
+  def start_cluster(n, links \\ :full) do
+    cookie = "cluster_#{System.unique_integer([:positive])}"
+    targets = for _ <- 1..n, do: start(cookie: cookie, args: [~c"-connect_all", ~c"false"])
+
+    pairs =
+      if links == :full,
+        do: for(i <- 0..(n - 1), j <- (i + 1)..(n - 1)//1, do: {i, j}),
+        else: links
+
+    for {i, j} <- pairs do
+      true = call(Enum.at(targets, i), :net_kernel, :connect_node, [Enum.at(targets, j).node])
+    end
+
+    targets
   end
 
   @doc "Stop the target and wait until our node has noticed it's gone."

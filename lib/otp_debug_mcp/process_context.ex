@@ -64,6 +64,9 @@ defmodule OtpDebugMcp.ProcessContext do
               end,
             {SupName, Hist, Ids}
         end;
+      _ when is_pid(Parent) ->
+        {not_supervised, Parent, erlang:process_info(Parent, registered_name), InitialCall(Parent),
+         erlang:is_process_alive(Parent)};
       _ ->
         undefined
     end,
@@ -81,10 +84,11 @@ defmodule OtpDebugMcp.ProcessContext do
     with {:ok, {this, first, second, uptime_ms, now, sup, alive?}} <-
            Checks.remote_eval(code, Pid: pid, Window: @window_ms) do
       # Including the spawn for this very call, a moment after `started`.
-      own = Target.own_spawn_ages(started, 100_000)
+      own = Target.own_spawn_ages(node(pid), started, 100_000)
 
       {:ok,
-       %{age: age(this, first, second, uptime_ms, own), supervisor: supervisor(sup, now)}
+       %{age: age(this, first, second, uptime_ms, own)}
+       |> Map.merge(supervision(sup, now))
        |> Map.merge(if alive?, do: %{}, else: %{exited_during_check: true})}
     end
   end
@@ -111,10 +115,17 @@ defmodule OtpDebugMcp.ProcessContext do
       how:
         "An estimate: BEAM doesn't record when a process started. Pids are numbered " <>
           "in spawn order: #{since} processes were spawned after this one, #{ours} of " <>
-          "them by this tool's own calls and the rest at the node's spawn rate. " <>
-          "Reliable for telling a fresh process from an old one; rough for old ones. " <>
-          "younger_than_seconds is certain: it's when this tool spawned more " <>
-          "processes on the node than have been spawned since this one."
+          "them by this tool's own calls; " <>
+          basis(since, ours, rate, average, own) <>
+          " Reliable for telling a fresh process from an old one; rough for old ones. " <>
+          if(younger_than,
+            do:
+              "younger_than_seconds is certain: it's when this tool spawned more " <>
+                "processes on the node than have been spawned since this one.",
+            else:
+              "There's no certain upper bound: this tool hasn't spawned more processes " <>
+                "on the node than have been spawned since this one."
+          )
     }
   end
 
@@ -154,10 +165,50 @@ defmodule OtpDebugMcp.ProcessContext do
     if rate > 0, do: prev + (since - k) / rate, else: prev
   end
 
+  # What the processes others spawned were spread over.
+  defp basis(since, ours, _rate, _average, _own) when since == ours,
+    do: "only this tool spawned processes since, so the age lies between two of its calls."
+
+  defp basis(_since, _ours, rate, _average, _own) when rate > 0,
+    do: "the rest are spread at the node's current spawn rate, #{Float.round(rate * 1.0, 1)}/s."
+
+  defp basis(since, _ours, _rate, average, own) when since > length(own) do
+    "nothing else spawned during the half-second measurement, so the rest are spread " <>
+      "at the average spawn rate since boot, #{Float.round(average * 1.0, 1)}/s, which " <>
+      "may be far off."
+  end
+
+  defp basis(_since, _ours, _rate, _average, _own),
+    do: "nothing else spawned during the half-second measurement."
+
   defp round_age(s) when s < 10, do: Float.round(s * 1.0, 1)
   defp round_age(s), do: round(s)
 
-  defp supervisor(:undefined, _now), do: nil
+  defp supervision({:not_supervised, parent, name, initial_call, alive?}, _now) do
+    parent_name =
+      case name do
+        {:registered_name, n} -> Format.inspect(n)
+        _ -> nil
+      end
+
+    %{
+      supervisor: nil,
+      parent: %{
+        pid: Format.inspect(parent),
+        registered_name: parent_name,
+        initial_call: Format.inspect(initial_call),
+        alive: alive?
+      },
+      supervision:
+        "Not started by a supervisor: nothing restarts this process if it crashes, " <>
+          "and nothing stops it when its parent does unless they're linked."
+    }
+  end
+
+  defp supervision(:undefined, _now),
+    do: %{supervisor: nil, supervision: "No parent: a process the runtime started itself."}
+
+  defp supervision(sup, now), do: %{supervisor: supervisor(sup, now)}
 
   defp supervisor({name, :unresponsive, _ids}, _now),
     do: %{supervisor: Format.inspect(name), unresponsive: true}

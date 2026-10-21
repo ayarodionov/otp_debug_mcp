@@ -17,16 +17,17 @@ Contents:
   4. [A process is stuck, or calls time out](#4-a-process-is-stuck-or-calls-time-out)
   5. [Approaching a system limit](#5-approaching-a-system-limit)
   6. [Crash loops and intermittent failures](#6-crash-loops-and-intermittent-failures)
-  7. [Incident triage](#7-incident-triage)
+  7. [One node in a cluster misbehaves](#7-one-node-in-a-cluster-misbehaves)
+  8. [Incident triage](#8-incident-triage)
 - **Understanding and verifying**
-  8. [Finding the bug in the code, not just the node](#8-finding-the-bug-in-the-code-not-just-the-node)
-  9. [Seeing what a function really receives](#9-seeing-what-a-function-really-receives)
-  10. [Verifying a fix or a deploy](#10-verifying-a-fix-or-a-deploy)
-  11. [Watching a load test](#11-watching-a-load-test)
-  12. [Getting to know an unfamiliar system](#12-getting-to-know-an-unfamiliar-system)
+  9. [Finding the bug in the code, not just the node](#9-finding-the-bug-in-the-code-not-just-the-node)
+  10. [Seeing what a function really receives](#10-seeing-what-a-function-really-receives)
+  11. [Verifying a fix or a deploy](#11-verifying-a-fix-or-a-deploy)
+  12. [Watching a load test](#12-watching-a-load-test)
+  13. [Getting to know an unfamiliar system](#13-getting-to-know-an-unfamiliar-system)
 - **Other kinds of targets**
-  13. [Erlang products you didn't write](#13-erlang-products-you-didnt-write)
-  14. [Your own node during development](#14-your-own-node-during-development)
+  14. [Erlang products you didn't write](#14-erlang-products-you-didnt-write)
+  15. [Your own node during development](#15-your-own-node-during-development)
 - [Before pointing it at production](#before-pointing-it-at-production)
 - [Not supported yet](#not-supported-yet)
 
@@ -149,7 +150,34 @@ supervisor's restart limit: nothing ever fails over, so it runs forever and
 shows up only as intermittent errors. A supervisor `at_limit` is one crash
 away from giving up and taking its siblings down with it.
 
-### 7. Incident triage
+### 7. One node in a cluster misbehaves
+
+**Situation.** A cluster of nodes running the same code gets slow or
+unstable, and it isn't clear which node is to blame, or the symptoms show
+up on a healthy node that depends on a sick one.
+
+> `shop@node-1` is part of a cluster that's getting slow. Find out which
+> node is the problem and why.
+
+**What the agent does.** `connect` reports that the node is in a cluster,
+and `cluster` compares every node: memory, process, port and atom counts,
+run queue, scheduler usage, the largest mailbox, and supervisors
+restarting children. It flags the nodes that stand out from the others,
+and nodes that don't see each other (a netsplit). `cluster` with
+`action: "diagnose"` runs the full diagnose everywhere, and
+`snapshot_take` then `snapshot_diff` show which node grows. The agent then
+connects to the odd node and drills in with the single-node tools. In
+testing, pointed at a healthy node of a three-node cluster, the agent ran
+`cluster` first and went straight to the one node with the bug.
+
+**Typical findings.** One node with a backed-up process or a leak the
+others don't have (uneven load, a stuck singleton), a node that never
+joined or lost its links, or a node whose atom count has crept up.
+
+**Watch out.** Nodes are attached with the current target's cookie, as a
+cluster shares one; a node with another cookie shows as unreachable.
+
+### 8. Incident triage
 
 **Situation.** Something is wrong right now, and you need a first picture
 fast.
@@ -170,7 +198,7 @@ gone after a restart.
 
 ## Understanding and verifying
 
-### 8. Finding the bug in the code, not just the node
+### 9. Finding the bug in the code, not just the node
 
 **Situation.** You want the fix, not just the diagnosis.
 
@@ -186,7 +214,7 @@ often line numbers, and the agent opens those files and reads the code. In
 testing, it went from a mailbox backlog to the `Process.sleep` in the
 offending `handle_cast/2` on its own.
 
-### 9. Seeing what a function really receives
+### 10. Seeing what a function really receives
 
 **Situation.** Production behaves differently from your tests, and you
 suspect the inputs.
@@ -207,7 +235,7 @@ Long terms are truncated so the result fits the agent's context.
   refuses and says what it found. Forcing it ends their trace, so the agent
   should ask you first.
 
-### 10. Verifying a fix or a deploy
+### 11. Verifying a fix or a deploy
 
 **Situation.** You've shipped a fix and want evidence that it worked.
 
@@ -219,7 +247,7 @@ or so apart. A fixed leak shows near-zero deltas under the same load that
 used to produce growth. The same before-and-after comparison works for
 config changes, such as a new pool size.
 
-### 11. Watching a load test
+### 12. Watching a load test
 
 **Situation.** You're load testing and want to know what breaks first and
 why.
@@ -232,7 +260,7 @@ why.
 the point where schedulers saturate, is your capacity limit, and
 `process_info` says which code it's in.
 
-### 12. Getting to know an unfamiliar system
+### 13. Getting to know an unfamiliar system
 
 **Situation.** You've inherited a system, or are onboarding, and want to see
 how it's actually put together at runtime.
@@ -241,7 +269,7 @@ how it's actually put together at runtime.
 > applications, what each supervisor runs, and what looks unusual.
 
 **What the agent does.** `supervision_tree` for each application, plus a
-`diagnose` baseline. Combined with the source (scenario 8), it can map
+`diagnose` baseline. Combined with the source (scenario 9), it can map
 runtime processes to modules and explain restart strategies and limits,
 which the tree shows for every supervisor along with its recent restarts.
 That's often quicker than reading the code alone, because the runtime
@@ -252,7 +280,7 @@ have been restarting.
 
 ## Other kinds of targets
 
-### 13. Erlang products you didn't write
+### 14. Erlang products you didn't write
 
 **Situation.** A third-party system built on the BEAM misbehaves: a message
 broker, a database, an XMPP server, anything written in Erlang, Elixir, Gleam
@@ -272,7 +300,7 @@ is used as-is.
 too, such as RabbitMQ's `rabbitmq-diagnostics`; use both. Locate the cookie
 with care: it grants full control of the node.
 
-### 14. Your own node during development
+### 15. Your own node during development
 
 **Situation.** You're developing locally and want runtime answers while you
 code.
@@ -314,5 +342,8 @@ that on a dev machine.
 These would be natural scenarios, but the tool can't do them well yet (see
 the README's TODO list):
 
-- **Multi-node clusters.** The tool talks to one node at a time. You can
-  `connect` to each in turn, but it doesn't compare or correlate nodes.
+- **Nodes on an older OTP release without a compiler.** Recon has to be
+  compiled on such a node, and slim releases often leave the compiler out,
+  so the recon-based checks are unavailable there.
+- **Tracing alongside other tracing on OTP 26 and earlier.** There
+  `trace_calls` would end someone else's trace, so it asks first.

@@ -62,8 +62,11 @@ defmodule OtpDebugMcp.Checks do
       result(:message_queues, status, offenders, """
       Processes with message_queue_len > 1000. A growing queue means the
       process can't keep up with its callers. Next step: inspect the worst
-      offender's current_function and backtrace (process_info tool), and find
-      who is sending to it (trace tool on the receiving module).
+      offender's current_function and backtrace (process_info tool). To find
+      who sends to it, trace the sending side, not the receiver (which only
+      shows it handling messages): e.g. trace_calls on GenServer cast or call,
+      whose events name the sending pid and the destination; top_reductions
+      often names a flooding producer too.
       """)
     else
       err -> error_result(:message_queues, err)
@@ -424,7 +427,10 @@ defmodule OtpDebugMcp.Checks do
 
       result(:top_reductions, :ok, hogs, """
       Top CPU consumers over a 1s window (informational — something is always
-      at the top). Only meaningful when the schedulers check shows saturation.
+      at the top). When the schedulers check shows saturation, these are the
+      processes using the CPU. Otherwise, a process far above the rest is
+      still worth a look: a producer flooding another process's mailbox,
+      or a busy loop.
       """)
     else
       err -> error_result(:top_reductions, err)

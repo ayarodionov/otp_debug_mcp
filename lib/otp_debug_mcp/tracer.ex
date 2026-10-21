@@ -253,7 +253,7 @@ defmodule OtpDebugMcp.Tracer do
 
     Target.with_footprint(target, {:trace_holder, :erlang.phash2(code)}, [exprs, bindings], fn ->
       # The holder; recon_trace spawns its tracer and formatter too.
-      Target.note_spawns(if code == @recon_holder, do: 3, else: 1)
+      Target.note_spawns(target, if(code == @recon_holder, do: 3, else: 1))
 
       {holder, ref} =
         Target.with_stderr_group_leader(fn ->

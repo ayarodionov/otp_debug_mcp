@@ -18,9 +18,10 @@ defmodule OtpDebugMcp.Snapshotter do
                   {message_queue_len, N} <- [erlang:process_info(P, message_queue_len)]]).
   """
 
-  def start_link(_opts), do: Agent.start_link(fn -> nil end, name: __MODULE__)
+  # The last snapshot of each node.
+  def start_link(_opts), do: Agent.start_link(fn -> %{} end, name: __MODULE__)
 
-  @doc "Capture a snapshot, store it, return a summary."
+  @doc "Capture a snapshot of the target, store it, return a summary."
   def take do
     # Before capturing, so the capture's own footprint is in the window.
     started_us = System.monotonic_time(:microsecond)
@@ -28,7 +29,9 @@ defmodule OtpDebugMcp.Snapshotter do
     case capture() do
       {:ok, snap} ->
         snap = Map.put(snap, :started_us, started_us)
-        Agent.update(__MODULE__, fn _ -> snap end)
+        # Here, not in the Agent's process, where Target.on/2 doesn't apply.
+        node = Target.connected_node()
+        Agent.update(__MODULE__, &Map.put(&1, node, snap))
 
         {:ok,
          %{
@@ -43,15 +46,17 @@ defmodule OtpDebugMcp.Snapshotter do
     end
   end
 
-  @doc "Diff current state against the stored snapshot."
+  @doc "Diff the target's current state against its stored snapshot."
   def diff do
-    case Agent.get(__MODULE__, & &1) do
+    node = Target.connected_node()
+
+    case Agent.get(__MODULE__, &Map.get(&1, node)) do
       nil ->
-        {:error, "no snapshot taken yet — call snapshot with action=take first"}
+        {:error, "no snapshot of #{node} taken yet — call snapshot with action=take first"}
 
       old ->
         with {:ok, new} <- capture() do
-          ours = Target.footprint_since(old.started_us)
+          ours = Target.footprint_since(node, old.started_us)
 
           {:ok,
            %{
@@ -59,7 +64,8 @@ defmodule OtpDebugMcp.Snapshotter do
              memory_delta_mb:
                Map.new(new.memory, fn {k, v} ->
                  delta = v - (old.memory[k] || 0) - code_footprint(k, ours)
-                 {k, Float.round(delta / 1_048_576, 2)}
+                 # + 0.0 turns -0.0 into 0.0.
+                 {k, Float.round(delta / 1_048_576, 2) + 0.0}
                end),
              process_count_delta: new.process_count - old.process_count,
              port_count_delta: new.port_count - old.port_count,
