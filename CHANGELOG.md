@@ -6,12 +6,16 @@
   `/mcp`'s Reconnect and Disable in Claude Code, the commands that undo
   the install (including the `epmd` the server leaves running), and
   prompts that have Claude Code remove or upgrade it.
+- A Docker image of the server, `ghcr.io/ayarodionov/otp_debug_mcp`,
+  for amd64 and arm64, published with each release (0.4.0 included) and
+  smoke-tested against a node in another container first. The
+  `Dockerfile` builds it from a published Linux release.
 - `docs/production.md` covers nodes in Docker containers. Either run the
-  Linux release in a container that shares the app container's network,
-  which needs no changes to the app and no published ports, or publish
-  the node's distribution port and have the server dial it, configured
-  for a Mix release by environment variables alone. There's a prompt
-  that has Claude Code set up the first.
+  image in a container that shares the app container's network, which
+  needs no changes to the app and no published ports, or publish the
+  node's distribution port and have the server dial it, configured for a
+  Mix release by environment variables alone. There's a prompt that has
+  Claude Code set up the first.
 
 ## 0.4.0
 

@@ -189,6 +189,20 @@ MIX_ENV=prod mix release
 The server is then `_build/prod/rel/otp_debug_mcp/bin/otp_debug_mcp` in
 that directory.
 
+### Or use the Docker image
+
+For nodes in Docker containers, the server can run in a container
+beside them, from the image published with each release:
+
+```sh
+docker pull ghcr.io/ayarodionov/otp_debug_mcp:0.4.0
+```
+
+[Targets in Docker containers](docs/production.md#targets-in-docker-containers)
+says how to register it, so that Claude Code starts it with `docker run`
+on the app container's network. For nodes on your machine, use a
+downloaded release or a build from source.
+
 ### Register it with Claude Code
 
 First say where the server and the skill are. For a downloaded release:

@@ -157,24 +157,23 @@ a Mix release, each in its own container.
 
 ### Run the server next to the container
 
-Run the Linux release of the server in a throwaway container that joins
-the app container's network (`--network container:myapp`). It shares the
+Run the server's Docker image in a throwaway container that joins the
+app container's network (`--network container:myapp`). It shares the
 app's hostname and DNS, so it reaches the node by its default name, and
 other nodes on the app's Docker network by theirs. The server only makes
 outgoing connections, so nothing needs publishing.
 
-Download the Linux release for Docker's architecture, `linux-arm64` on
-Apple silicon or `linux-x86_64` on Intel, into a directory of its own:
+The image is `ghcr.io/ayarodionov/otp_debug_mcp`, published with each
+release for amd64 and arm64: the Linux release on Ubuntu 22.04, built from
+the repository's `Dockerfile`. Get it with:
 
 ```sh
-vsn=0.4.0
-target=linux-arm64
-base=https://github.com/ayarodionov/otp_debug_mcp/releases/download/v$vsn
-curl -fLO "$base/otp_debug_mcp-$vsn-$target.tar.gz"
-curl -fLO "$base/otp_debug_mcp-$vsn-$target.tar.gz.sha256"
-shasum -a 256 -c "otp_debug_mcp-$vsn-$target.tar.gz.sha256"
-mkdir -p ~/.local/linux && tar -xzf "otp_debug_mcp-$vsn-$target.tar.gz" -C ~/.local/linux
+docker pull ghcr.io/ayarodionov/otp_debug_mcp:0.4.0
 ```
+
+`latest` follows the newest release. To build it yourself instead, run
+`docker build -t otp-debug-mcp .` in a checkout, and use `otp-debug-mcp`
+as the image name below.
 
 Find the node's name and cookie:
 
@@ -192,23 +191,29 @@ container beside `myapp` (your container's name), with the node's cookie:
 ```sh
 claude mcp add otp-debug --scope local \
   -e OTP_DEBUG_MCP_COOKIE=the-cookie \
-  -- docker run -i --rm --network container:myapp \
-  -e OTP_DEBUG_MCP_COOKIE -e LANG=C.UTF-8 \
-  -v ~/.local/linux/otp_debug_mcp:/opt/otp_debug_mcp:ro \
-  ubuntu:22.04 /opt/otp_debug_mcp/bin/otp_debug_mcp start
+  -- docker run -i --rm --network container:myapp -e OTP_DEBUG_MCP_COOKIE \
+  ghcr.io/ayarodionov/otp_debug_mcp:0.4.0
 ```
 
 - `-i` connects the server's stdin and stdout to Claude Code. Don't add
   `-t`: a terminal would mix the server's logs into the protocol stream.
 - `-e OTP_DEBUG_MCP_COOKIE`, with no value, passes the cookie from the
   registration into the container.
-- `ubuntu:22.04` has the glibc and OpenSSL 3 the release needs. It has
-  no UTF-8 locale, so `LANG=C.UTF-8` sets one; without it, the server
-  logs a warning about latin1 file name encoding. `--rm` deletes the
-  container when the server stops.
+- `--rm` deletes the container when the server stops. A version in the
+  image name means an upgrade happens only when you change it.
 - `--scope local` registers it for this project only. There it takes the
   place of a user-scope `otp-debug`: Claude Code uses the most specific
   scope's entry, and `claude mcp list` warns that both exist.
+
+Claude Code reads the skill on your machine, not in the container, so
+install it as in the README's [Setup](../README.md#register-it-with-claude-code),
+or copy it out of the image:
+
+```sh
+id=$(docker create ghcr.io/ayarodionov/otp_debug_mcp:0.4.0)
+mkdir -p ~/.claude/skills && docker cp "$id:/opt/otp_debug_mcp/skills/otp-debug" ~/.claude/skills/
+docker rm "$id"
+```
 
 Restart Claude Code, or use `/mcp` → `otp-debug` → **Reconnect**, then:
 
@@ -219,16 +224,21 @@ it: use **Reconnect** again. The node keeps its name, because a restarted
 container keeps its hostname. A container that's removed and created
 again gets a new hostname, so the node gets a new name too.
 
+`load_module` reads the `.beam` file inside the server's container. To
+load a fix, mount its directory into it, e.g. add
+`-v "$PWD/_build:/work/_build:ro"` to the `docker run` arguments, and give
+the path as the container sees it, under `/work/_build`.
+
 Claude Code can do the set-up, asking before each command:
 
 ```sh
 claude "Set up otp_debug_mcp to debug the BEAM node in the Docker \
 container myapp, following 'Run the server next to the container' in \
 https://github.com/ayarodionov/otp_debug_mcp/blob/main/docs/production.md: \
-download and verify the Linux release for this Docker, find the node's \
-name and cookie with docker exec, and register the server for this \
-project as the doc shows. Check that each step worked, and tell me the \
-node name to connect to."
+pull the server's image, find the node's name and cookie with docker \
+exec, register the server for this project as the doc shows, and \
+install the skill if it isn't installed. Check that each step worked, \
+and tell me the node name to connect to."
 ```
 
 Claude needs the cookie to register the server. In testing, it passed
