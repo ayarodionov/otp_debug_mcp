@@ -39,7 +39,12 @@ raw introspection when a purpose-built tool exists.
      and line) when a child dies during the sample; then `trace_calls` on
      the crashing function to see its arguments.
    - CPU suspicion → `run_check(schedulers)` first; OS CPU% lies about the
-     BEAM (busy-wait). Only if schedulers are pegged, use `top_reductions`.
+     BEAM (busy-wait). Only if schedulers are pegged, use `top_reductions`,
+     then `profile` on the module the top process is running, to see which
+     functions use the time. Narrow it to a function or a process if the
+     module is busy. `profile` counts only time spent running: a function
+     that's slow because it waits (receive, sleep, calls to other
+     processes) shows little time, and `trace_calls` timestamps show it.
 4. **Confirm trends before concluding.** One snapshot is a guess; a diff is
    evidence. Prefer two diffs 60s apart for leak claims.
 
@@ -51,6 +56,10 @@ raw introspection when a purpose-built tool exists.
   happens on pre-OTP 27 nodes), someone may be debugging this node right now. Show the user what the refusal found
   and ask before retrying with `force: true`; forcing ends their tracing.
   Never set `force` on your own.
+- Keep `profile` to one module and a few seconds on production nodes:
+  counting slows every profiled call. Use `all_modules` only when the user
+  agrees, and as with `trace_calls`, never set `force` on your own: show the
+  user what the refusal found and ask first.
 - `process_info` with `include_state` sends a sys message to the process;
   skip it for processes already showing huge message queues.
 - Do not use `remote_eval` unless the purpose-built tools can't answer AND

@@ -316,7 +316,8 @@ defmodule OtpDebugMcp.Tracer do
     end
   end
 
-  defp other_tracing do
+  @doc "Tracing active in the legacy trace session, or nil if there is none."
+  def other_tracing do
     with {:ok, {recon?, new?, traced_count, tracers}} <- Checks.remote_eval(@probe) do
       if recon? or new? or traced_count > 0 do
         {:ok,

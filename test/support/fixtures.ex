@@ -287,6 +287,36 @@ defmodule OtpDebugMcp.Fixtures.Hog do
   end
 end
 
+defmodule OtpDebugMcp.Fixtures.Busy do
+  @moduledoc """
+  A registered process that keeps calling known functions, for profiling:
+  `crunch/1` does most of the work and allocates (through Enum, which isn't
+  in this module), `light/1` does almost nothing.
+  """
+
+  def start(name, n) do
+    pid = spawn(fn -> loop(n) end)
+    Process.register(pid, name)
+    :ok
+  end
+
+  def loop(n) do
+    step(n)
+
+    receive do
+      :stop -> :ok
+    after
+      1 -> loop(n)
+    end
+  end
+
+  def step(n), do: {crunch(n), light(n)}
+
+  def crunch(n), do: Enum.sum(Enum.map(1..n, &(&1 * &1)))
+
+  def light(n), do: n + 1
+end
+
 defmodule OtpDebugMcp.Fixtures.AtomLeak do
   @moduledoc "Creates an atom about every `ms` milliseconds, forever."
 

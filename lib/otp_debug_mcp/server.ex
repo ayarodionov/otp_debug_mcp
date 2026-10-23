@@ -21,6 +21,7 @@ defmodule OtpDebugMcp.Server do
   component(Tools.ProcessInfo)
   component(Tools.SupervisionTree)
   component(Tools.TraceCalls)
+  component(Tools.Profile)
   component(Tools.Cluster)
   component(Tools.Snapshot)
   component(Tools.RemoteEval)

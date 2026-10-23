@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- `profile`: where the CPU time goes on the target, by function. For one
+  module, one function or one process (or, when asked, every module), it
+  counts calls, own time and memory allocated per function over a short
+  window (default 5s, at most 30s), with the runtime's call_time and
+  call_memory counters, and ranks them, with the processes making the
+  calls. On OTP 27+ it runs in its own trace session and never sees or
+  disturbs other tracing; on older nodes it refuses while there is any,
+  unless forced. It needs nothing from OTP's `tools` application, which
+  releases usually leave out, and leaves no counters or trace flags
+  behind. Anonymous functions are named as Elixir does
+  (`anonymous fn/1 in MyMod.fun/1`). The smoke test profiles each demo.
 - The README's Setup says how to stop, restart and remove the server:
   `/mcp`'s Reconnect and Disable in Claude Code, the commands that undo
   the install (including the `epmd` the server leaves running), and

@@ -6,7 +6,7 @@ defmodule OtpDebugMcp.Tools do
   """
 
   alias Anubis.Server.Response
-  alias OtpDebugMcp.Format
+  alias OtpDebugMcp.{Format, Target}
 
   @doc "Encode any term as a JSON tool response (falling back to inspect for non-JSON terms)."
   def json_response(frame, term) do
@@ -29,6 +29,42 @@ defmodule OtpDebugMcp.Tools do
       end
 
     {:reply, Response.error(Response.tool(), message), frame}
+  end
+
+  # Pids arrive as "<0.107.0>", as the target and our tools print them
+  # (see OtpDebugMcp.Format), which must be parsed on the target, or in
+  # our node's form, "#PID<39943.107.0>" or "<39943.107.0>", from an
+  # agent that got one elsewhere, which is already valid locally.
+  @doc "A process given as a tool argument: a pid as printed, or a registered name."
+  def resolve_process("#PID" <> rest), do: resolve_process(rest)
+
+  def resolve_process("<0." <> _ = pid_str) do
+    Target.rpc(:erlang, :list_to_pid, [String.to_charlist(pid_str)])
+  end
+
+  def resolve_process("<" <> _ = pid_str) do
+    {:ok, :erlang.list_to_pid(String.to_charlist(pid_str))}
+  rescue
+    ArgumentError -> {:error, {:invalid_pid, pid_str}}
+  end
+
+  # A name may come quoted, as Erlang prints atoms like 'log-index'.
+  def resolve_process("'" <> quoted) do
+    case String.split(quoted, "'") do
+      [name, ""] -> resolve_process(name)
+      _ -> {:error, {:no_such_process, "'" <> quoted}}
+    end
+  end
+
+  def resolve_process(name) do
+    candidates = [String.to_atom(name), Module.concat([name])]
+
+    Enum.find_value(candidates, {:error, {:no_such_process, name}}, fn atom ->
+      case Target.rpc(:erlang, :whereis, [atom]) do
+        {:ok, pid} when is_pid(pid) -> {:ok, pid}
+        _ -> nil
+      end
+    end)
   end
 
   defmodule Connect do
@@ -172,7 +208,7 @@ defmodule OtpDebugMcp.Tools do
     def execute(%{pid: pid_str} = params, frame) do
       # Context first: its age estimate counts the processes spawned since,
       # and every rpc spawns one on the target.
-      with {:ok, pid} <- resolve(pid_str),
+      with {:ok, pid} <- Tools.resolve_process(pid_str),
            {:ok, context} <- context(pid),
            {:ok, info} <- Target.rpc(:recon, :info, [pid]) do
         {state, state_summary} =
@@ -252,41 +288,6 @@ defmodule OtpDebugMcp.Tools do
         {:ok, context} -> {:ok, context}
         {:error, reason} -> {:ok, %{age: "unavailable: #{Format.inspect(reason)}"}}
       end
-    end
-
-    # Pids arrive as "<0.107.0>", as the target and our tools print them
-    # (see OtpDebugMcp.Format), which must be parsed on the target, or in
-    # our node's form, "#PID<39943.107.0>" or "<39943.107.0>", from an
-    # agent that got one elsewhere, which is already valid locally.
-    defp resolve("#PID" <> rest), do: resolve(rest)
-
-    defp resolve("<0." <> _ = pid_str) do
-      Target.rpc(:erlang, :list_to_pid, [String.to_charlist(pid_str)])
-    end
-
-    defp resolve("<" <> _ = pid_str) do
-      {:ok, :erlang.list_to_pid(String.to_charlist(pid_str))}
-    rescue
-      ArgumentError -> {:error, {:invalid_pid, pid_str}}
-    end
-
-    # A name may come quoted, as Erlang prints atoms like 'log-index'.
-    defp resolve("'" <> quoted) do
-      case String.split(quoted, "'") do
-        [name, ""] -> resolve(name)
-        _ -> {:error, {:no_such_process, "'" <> quoted}}
-      end
-    end
-
-    defp resolve(name) do
-      candidates = [String.to_atom(name), Module.concat([name])]
-
-      Enum.find_value(candidates, {:error, {:no_such_process, name}}, fn atom ->
-        case Target.rpc(:erlang, :whereis, [atom]) do
-          {:ok, pid} when is_pid(pid) -> {:ok, pid}
-          _ -> nil
-        end
-      end)
     end
   end
 
@@ -430,6 +431,90 @@ defmodule OtpDebugMcp.Tools do
         true -> "duration"
       end
     end
+  end
+
+  defmodule Profile do
+    @moduledoc """
+    Profile where the time goes, by function: calls, own time and memory
+    allocated per function over a short window, from the runtime's
+    call_time and call_memory counters (as eprof and tprof use). Give a
+    module (and optionally one function), and optionally one process. Run
+    it when schedulers are busy or a process is slow, to find which
+    functions use the time.
+
+    Counting slows down every profiled call, so keep the scope small on
+    production nodes. all_modules profiles every function on the node,
+    which is much more expensive: use it only with the user's permission
+    there. On OTP 27+ the profile runs in its own isolated trace session and
+    never affects other tracing. On older nodes it refuses if other tracing
+    is active, because it would end it; ask the user before retrying with
+    force: true.
+    """
+    use Anubis.Server.Component, type: :tool
+
+    alias OtpDebugMcp.{Profiler, Tools}
+
+    schema do
+      field(:module, :string,
+        description:
+          "Module to profile, e.g. Elixir.MyApp.Worker or my_worker; required unless all_modules"
+      )
+
+      field(:function, :string, description: "Only this function of the module, every arity")
+
+      field(:process, :string,
+        description:
+          "Only this process's calls: a pid as printed, e.g. <0.123.0>, or a registered " <>
+            "name. Default: every process"
+      )
+
+      field(:duration_ms, :integer,
+        description: "How long to count (default 5000, max 30000, or 10000 with all_modules)"
+      )
+
+      field(:all_modules, :boolean,
+        description:
+          "Every function of every loaded module, instead of one module. Much more " <>
+            "expensive: only with the user's explicit permission on production nodes."
+      )
+
+      field(:top, :integer, description: "Functions in each ranking (default 15, max 50)")
+
+      field(:force, :boolean,
+        description:
+          "Pre-OTP 27 targets only: profile even though other tracing is active on " <>
+            "the node, ending it. Only with the user's explicit permission."
+      )
+    end
+
+    @impl true
+    def execute(params, frame) do
+      all? = params[:all_modules] == true
+      max = if all?, do: 10_000, else: 30_000
+
+      with {:ok, scope} <- scope(params[:module], params[:function], all?),
+           {:ok, process} <- process(params[:process]),
+           {:ok, result} <-
+             Profiler.profile(
+               scope,
+               (params[:duration_ms] || 5_000) |> min(max) |> max(100),
+               process: process,
+               top: (params[:top] || 15) |> min(50) |> max(1),
+               force: params[:force] == true
+             ) do
+        Tools.json_response(frame, result)
+      else
+        {:error, reason} -> Tools.error_response(frame, reason)
+      end
+    end
+
+    defp scope(nil, _function, true), do: {:ok, :all_modules}
+    defp scope(nil, _function, false), do: {:error, "give a module, or all_modules: true"}
+    defp scope(_module, _function, true), do: {:error, "give a module or all_modules, not both"}
+    defp scope(module, function, false), do: {:ok, {:module, module, function}}
+
+    defp process(nil), do: {:ok, nil}
+    defp process(name), do: Tools.resolve_process(name)
   end
 
   defmodule Cluster do

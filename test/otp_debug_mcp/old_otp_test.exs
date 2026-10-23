@@ -15,7 +15,7 @@ defmodule OtpDebugMcp.OldOtpTest do
   """
   use ExUnit.Case, async: false
 
-  alias OtpDebugMcp.{Checks, Target, Tracer}
+  alias OtpDebugMcp.{Checks, Profiler, Target, Tracer}
 
   @moduletag :old_otp
 
@@ -59,5 +59,27 @@ defmodule OtpDebugMcp.OldOtpTest do
 
     assert {:ok, %{events: [_ | _], stopped_other_tracing: nil}} =
              Tracer.trace("queue", "new", 2, 5_000)
+  end
+
+  test "profile counts calls in the legacy trace session, and clears up" do
+    assert {:ok, %{backend: "legacy" <> _, by_time: rows}} =
+             Profiler.profile({:module, "queue", nil}, 1_000)
+
+    # queue:new/0 ten times a second.
+    assert %{calls: calls} = Enum.find(rows, &(&1.function == "queue:new/0"))
+    assert calls in 5..15
+
+    assert {:ok, {:call_time, false}} =
+             Target.rpc(:erlang, :trace_info, [{:queue, :new, 0}, :call_time])
+  end
+
+  test "profile refuses while dbg is tracing, unless forced" do
+    {:ok, _} = Checks.remote_eval("dbg:tracer(), dbg:p(all, call), dbg:tpl(queue, new, []).")
+
+    assert {:error, %{refused: _, active_tracing: %{traces_new_processes: true}}} =
+             Profiler.profile({:module, "queue", nil}, 500)
+
+    assert {:ok, %{by_time: [_ | _]}} =
+             Profiler.profile({:module, "queue", nil}, 500, force: true)
   end
 end

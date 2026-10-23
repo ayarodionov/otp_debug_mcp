@@ -75,7 +75,9 @@ process. `process_info` on it shows what it's busy doing (`current_function`
 and stack trace). `trace_calls` on its callbacks shows the per-message
 work. Tracing the *sender* side, e.g. `GenServer.cast` or `GenServer.call`,
 shows who floods it and how fast. In testing, this is how the agent found
-that a cache was handling 1 message for every 170 it received.
+that a cache was handling 1 message for every 170 it received. If the
+process is busy rather than waiting, `profile` on its module shows which
+of its functions use the time.
 
 **Typical findings.** One process serializing work for everyone (a registry,
 a single DB connection, the owner of an ETS table doing all writes), or
@@ -90,10 +92,25 @@ fire-and-forget casts with no backpressure.
 **What the agent does.** `run_check(schedulers)` first. OS CPU% overstates a
 BEAM node because schedulers busy-wait; scheduler utilization is the real
 number. If schedulers are saturated, `top_reductions` names the processes
-burning CPU, and `trace_calls` on their hot module shows the calls.
+burning CPU, and `profile` on their hot module ranks its functions by the
+time they use, with call counts and memory allocated. `trace_calls` on the
+top one then shows the arguments it's called with.
+
+> Profile `Pricing` on `worker@batch-2` for 5 seconds. Which functions use
+> the time?
 
 **Typical findings.** Real saturation (all schedulers near 1.0) versus one
 pegged scheduler with the rest idle, which points to a long-running NIF.
+A profile usually puts most of the time in a few functions: a loop over a
+large list, repeated encoding or decoding, a regex compiled on every call.
+
+**Watch out.**
+- Counting slows down every profiled call, so profile one module for a few
+  seconds on production nodes. `all_modules` counts every function on the
+  node: much more expensive.
+- Only time spent running counts. A function that's slow because it waits
+  for a reply, a lock or a sleep shows little time in a profile; that's
+  scenario 2, and `trace_calls` timestamps.
 
 ### 4. A process is stuck, or calls time out
 

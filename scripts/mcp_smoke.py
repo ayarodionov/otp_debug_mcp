@@ -3,8 +3,8 @@
 Usage: mcp_smoke.py BINARY NODE [TRACE_MODULE]
 
 Exits non-zero on any non-JSON line on stdout, a tool error, a trace that
-returns no events, or a server that doesn't exit with status 0 when stdin
-closes.
+returns no events, a profile in which no function was called, or a server
+that doesn't exit with status 0 when stdin closes.
 """
 import json
 import signal
@@ -93,6 +93,13 @@ if len(sys.argv) > 3:
         failures.append("trace_calls: no events")
     for e in events:
         print("   ", e.strip()[:110])
+    err, text = call(9, "profile", {"module": sys.argv[3], "duration_ms": 1000})
+    rows = [] if err else json.loads(text)["by_time"]
+    print("profile ->", "ERROR " + text[:300] if err else f"{len(rows)} functions called")
+    if not err and not rows:
+        failures.append("profile: no function was called")
+    for r in rows[:3]:
+        print(f"    {r['function']}: {r['calls']} calls, {r['time_us']} us")
     call(6, "snapshot", {"action": "take"})
     time.sleep(2)
     err, text = call(7, "snapshot", {"action": "diff"})

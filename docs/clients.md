@@ -148,7 +148,7 @@ directory as a skill if your plan has skills.
 - **Approvals.** Clients ask before each tool call unless you allow a
   tool. Allowing the read-only ones (`diagnose`, `run_check`,
   `process_info`, `supervision_tree`, `snapshot`, `cluster`) saves clicks;
-  keep `trace_calls` on ask for production nodes.
+  keep `trace_calls` and `profile` on ask for production nodes.
 - **`load_module` asks you to approve each load** in a dialog, using MCP
   2026-07-28 form elicitation. A client that can't do that gets a
   refusal, and nothing is loaded. Claude Code can; check your client's

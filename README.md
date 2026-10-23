@@ -37,8 +37,9 @@ introspection primitives, but an encoded diagnostic playbook in the spirit of
   running it, such as an operator's `recon_trace` session. `connect` reports
   which recon is in use.
 - **Safe by default.** Every trace has hard caps on event count and
-  duration and stops early if calls arrive too fast; every rpc has a
-  timeout; arbitrary `remote_eval` is disabled unless
+  duration and stops early if calls arrive too fast; every profile has a
+  capped duration and a scope you choose; every rpc has a timeout;
+  arbitrary `remote_eval` is disabled unless
   `OTP_DEBUG_MCP_ALLOW_EVAL=true`.
 - **Nothing changes the node's code without you.** `load_module` asks you
   to approve every load in a dialog from your MCP client, even when you've
@@ -52,7 +53,9 @@ introspection primitives, but an encoded diagnostic playbook in the spirit of
   `recon_trace`, which turns off all tracing on the node when it starts and
   stops. There it first checks for other tracing and refuses, describing
   what it found, unless called with `force: true`. The bundled skill tells
-  the agent to ask the user before forcing.
+  the agent to ask the user before forcing. `profile` works the same way:
+  its own session on OTP 27+, and a refusal on older nodes while anyone
+  else traces.
 
 ## Tools
 
@@ -64,6 +67,7 @@ introspection primitives, but an encoded diagnostic playbook in the spirit of
 | `process_info` | Deep-inspect one process: recon:info, an age estimate, its supervisor's restart history, optional `sys:get_state` |
 | `supervision_tree` | Render an application's supervision tree, with each supervisor's strategy and restart history |
 | `trace_calls` | Rate-limited call tracing (isolated trace session on OTP 27+, recon_trace before) |
+| `profile` | Where the CPU time goes, by function: calls, own time and memory per function over a short window, for one module, one function or one process |
 | `cluster` | Every node of the target's cluster at once: compare them (outliers, partitions), diagnose them all, or snapshot them all to see which grows |
 | `snapshot` | Take / diff system snapshots — trends beat point-in-time numbers; diffs exclude the atoms and code this tool itself adds |
 | `remote_eval` | Arbitrary Erlang eval on the target (opt-in, off by default) |

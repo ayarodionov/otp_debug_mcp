@@ -12,6 +12,7 @@ defmodule OtpDebugMcp.TestTarget do
 
   @fixtures [
     OtpDebugMcp.Fixtures.Ticker,
+    OtpDebugMcp.Fixtures.Busy,
     OtpDebugMcp.Fixtures.Mailbox,
     OtpDebugMcp.Fixtures.Operator,
     OtpDebugMcp.Fixtures.App,
