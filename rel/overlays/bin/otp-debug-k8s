@@ -1,0 +1,40 @@
+#!/bin/sh
+# Runs the otp_debug_mcp server as a pod in the app's Kubernetes namespace,
+# as the MCP server command for Claude Code. The pod reads the Erlang
+# cookie from the app's Secret, and is deleted when the session ends.
+#
+#   OTP_DEBUG_K8S_NAMESPACE   the app's namespace (required)
+#   OTP_DEBUG_K8S_SECRET      the Secret holding the cookie (required)
+#   OTP_DEBUG_K8S_SECRET_KEY  the cookie's key in it (default: cookie)
+#   OTP_DEBUG_K8S_IMAGE       the server image (default: this release's,
+#                             ghcr.io/ayarodionov/otp_debug_mcp:<version>)
+#   OTP_DEBUG_K8S_CONTEXT     the kubectl context (default: the current one)
+set -eu
+ns=${OTP_DEBUG_K8S_NAMESPACE:?set OTP_DEBUG_K8S_NAMESPACE}
+secret=${OTP_DEBUG_K8S_SECRET:?set OTP_DEBUG_K8S_SECRET}
+key=${OTP_DEBUG_K8S_SECRET_KEY:-cookie}
+# This script ships in the release's bin/, next to its version.
+vsn=$(cut -d' ' -f2 "$(dirname "$0")/../releases/start_erl.data" 2>/dev/null || echo latest)
+image=${OTP_DEBUG_K8S_IMAGE:-ghcr.io/ayarodionov/otp_debug_mcp:${vsn:-latest}}
+name=otp-debug-$(date +%s)-$$
+overrides=$(printf '{"spec": {"containers": [{"name": "%s", "image": "%s", "stdin": true, "stdinOnce": true, "env": [{"name": "OTP_DEBUG_MCP_COOKIE", "valueFrom": {"secretKeyRef": {"name": "%s", "key": "%s"}}}]}]}}' "$name" "$image" "$secret" "$key")
+k() { kubectl ${OTP_DEBUG_K8S_CONTEXT:+--context "$OTP_DEBUG_K8S_CONTEXT"} --namespace "$ns" "$@"; }
+
+# The client may stop this script with a signal at the end of a session,
+# which would leave the pod behind, so delete it here however it ends.
+child=
+cleanup() {
+  if [ -n "$child" ]; then kill "$child" 2>/dev/null || true; fi
+  k delete pod "$name" --ignore-not-found --wait=false >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+trap 'exit 143' TERM INT HUP
+
+# In the background so the traps run at once; <&0 keeps stdin, which a
+# background command would otherwise lose.
+k run "$name" -i --rm --quiet --restart=Never \
+  --image="$image" --labels=app.kubernetes.io/name=otp-debug \
+  --overrides="$overrides" <&0 &
+child=$!
+wait "$child"
+child=

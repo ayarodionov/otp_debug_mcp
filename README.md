@@ -282,6 +282,10 @@ Notes:
   beside it: no changes to the app, no ports published. Or publish the
   node's port. [Targets in Docker containers](docs/production.md#targets-in-docker-containers)
   has both, and a prompt that has Claude Code set it up.
+- **Kubernetes.** For nodes in pods, `bin/otp-debug-k8s` in the release
+  runs the server as a pod in the app's namespace for each session,
+  with the cookie from the app's Secret. [Targets in Kubernetes](docs/production.md#targets-in-kubernetes)
+  has the set-up, the permissions it needs, and port forwarding.
 - **Pids look the same everywhere.** Every tool prints the target's pids
   and ports the way the target itself does (`<0.107.0>`), matching trace
   output and `remote_eval`, and `process_info` accepts them as given.

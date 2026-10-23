@@ -492,7 +492,7 @@ defmodule OtpDebugMcp.Target do
         _ -> String.to_atom(base)
       end
 
-    case :net_kernel.start(name, %{name_domain: name_domain, hidden: true}) do
+    case start_net_kernel(name, name_domain, target) do
       {:ok, _} ->
         # Our node's own cookie guards connections to it, which it never
         # needs. It would otherwise be ~/.erlang.cookie or, in a release, the
@@ -503,6 +503,41 @@ defmodule OtpDebugMcp.Target do
 
       {:error, reason} ->
         {:error, {:distribution_failed, reason}}
+    end
+  end
+
+  # A bare long name takes its host from this machine's fully qualified
+  # name, which a container or a Kubernetes pod usually lacks: its hostname
+  # has no domain. Then name it by the address it reaches the target from.
+  # Nothing connects to this node (it doesn't listen), so the name only has
+  # to be valid.
+  defp start_net_kernel(name, name_domain, target) do
+    opts = %{name_domain: name_domain, hidden: true}
+
+    with {:error, _} = error <- :net_kernel.start(name, opts) do
+      case {name_domain, own_address(target)} do
+        {:longnames, {:ok, address}} ->
+          [base | _] = name |> Atom.to_string() |> String.split("@")
+          :net_kernel.start(:"#{base}@#{address}", opts)
+
+        _ ->
+          error
+      end
+    end
+  end
+
+  # The local address of the route to the target: connecting a UDP socket
+  # picks it without sending anything.
+  defp own_address(target) do
+    with {:ok, ip} <- :inet.getaddr(String.to_charlist(host(target)), :inet),
+         {:ok, socket} <- :gen_udp.open(0) do
+      address =
+        with :ok <- :gen_udp.connect(socket, ip, 4369),
+             {:ok, {own, _port}} <- :inet.sockname(socket),
+             do: {:ok, own |> :inet.ntoa() |> to_string()}
+
+      :gen_udp.close(socket)
+      address
     end
   end
 

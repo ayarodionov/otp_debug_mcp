@@ -14,6 +14,7 @@ the AI provider.
 - [Targets listening on one interface](#targets-listening-on-one-interface)
 - [TLS distribution](#tls-distribution)
 - [Targets in Docker containers](#targets-in-docker-containers)
+- [Targets in Kubernetes](#targets-in-kubernetes)
 - [Passing VM flags to the server](#passing-vm-flags-to-the-server)
 
 ## What a connection needs
@@ -297,6 +298,119 @@ claude mcp add otp-debug --scope local \
 - **Docker on another host:** keep the port on that host's loopback, and
   tunnel to it with `ssh -N -L 9100:127.0.0.1:9100 docker-host`. The
   node's name stays `myapp@127.0.0.1`.
+
+## Targets in Kubernetes
+
+Nodes in pods are usually named by pod IP (`myapp@10.1.2.3`) or by their
+DNS name in a headless service
+(`myapp@myapp-0.myapp.prod.svc.cluster.local`), which are reachable only
+inside the cluster. There are two ways in:
+
+- **[Run the server as a pod](#run-the-server-as-a-pod)**: no changes to
+  the app. Claude Code starts a pod in the app's namespace for each
+  session, which reaches the nodes by their own names, and the `cluster`
+  tool sees every node.
+- **[Forward the node's port](#forward-the-nodes-port)**: the server runs
+  on your machine, and `kubectl port-forward` carries one node's
+  distribution port. The node has to be named `myapp@127.0.0.1`.
+
+Both were tested on a local kind cluster (Kubernetes 1.37) against a Mix
+release in a StatefulSet of two pods, named by pod IP and by DNS name.
+
+### Run the server as a pod
+
+`bin/otp-debug-k8s` in the release starts the server with `kubectl run`
+in the app's namespace, from the release's Docker image, and attaches to
+it. The pod reads the cookie from the app's own Secret, so neither you
+nor the agent sees it, and it's deleted when the session ends. Register
+it in the app's project directory:
+
+```sh
+claude mcp add otp-debug --scope local \
+  -e OTP_DEBUG_K8S_NAMESPACE=prod \
+  -e OTP_DEBUG_K8S_SECRET=myapp-cookie \
+  -- ~/.local/otp_debug_mcp/bin/otp-debug-k8s
+```
+
+- `OTP_DEBUG_K8S_NAMESPACE` is the app's namespace, and
+  `OTP_DEBUG_K8S_SECRET` the Secret the app reads its cookie from, under
+  the key `cookie`. Set `OTP_DEBUG_K8S_SECRET_KEY` for another key.
+- It uses `kubectl`'s current context. Set `OTP_DEBUG_K8S_CONTEXT` to
+  name another.
+- The image is `ghcr.io/ayarodionov/otp_debug_mcp` at the release's own
+  version. Set `OTP_DEBUG_K8S_IMAGE` for another, such as a copy in your
+  own registry. It needs version 0.5.0 or later: earlier servers can't
+  start distribution in a pod, whose hostname has no domain.
+- For a build from source, the script is in
+  `_build/prod/rel/otp_debug_mcp/bin/` in the checkout.
+
+Find the node names with `kubectl get pods -n prod -o wide` (the pod IP)
+or the app's `RELEASE_NODE` (`kubectl exec -n prod myapp-0 -- printenv
+RELEASE_NODE`). Then restart Claude Code, or use `/mcp` → `otp-debug` →
+**Reconnect**, and:
+
+> Connect to myapp@10.1.2.3 and compare the nodes of its cluster.
+
+What it needs in the namespace:
+
+- **Permissions** to `create`, `get`, `list`, `watch` and `delete`
+  pods, and `create` `pods/attach`. Reading Secrets isn't one of them:
+  Kubernetes gives the cookie to the pod itself. As a Role:
+
+  ```yaml
+  apiVersion: rbac.authorization.k8s.io/v1
+  kind: Role
+  metadata:
+    name: otp-debug
+    namespace: prod
+  rules:
+    - apiGroups: [""]
+      resources: ["pods"]
+      verbs: ["create", "get", "list", "watch", "delete"]
+    - apiGroups: [""]
+      resources: ["pods/attach"]
+      verbs: ["create"]
+  ```
+
+- **Network access** from the debug pod, labelled
+  `app.kubernetes.io/name=otp-debug`, to the app's pods on epmd's port
+  4369 and their distribution ports, if network policies restrict
+  traffic in the namespace. (kind doesn't enforce network policies, so
+  that part is untested.)
+- **The image**, pulled from ghcr.io, unless the cluster can't reach it;
+  then set `OTP_DEBUG_K8S_IMAGE` to a copy it can.
+
+The script deletes its pod however the session ends: when Claude Code
+closes it, when it stops the script, or on Ctrl-C. If one is ever left
+behind, `kubectl delete pods -n prod -l app.kubernetes.io/name=otp-debug`
+removes it.
+
+### Forward the node's port
+
+As with [Docker](#publish-the-nodes-port), name the node by
+`127.0.0.1` with a fixed distribution port. For a Mix release:
+
+```yaml
+env:
+  - name: RELEASE_DISTRIBUTION
+    value: name
+  - name: RELEASE_NODE
+    value: myapp@127.0.0.1
+  - name: ERL_AFLAGS
+    value: -kernel inet_dist_listen_min 9100 inet_dist_listen_max 9100
+```
+
+Then forward the port, and run the server with
+`ERL_FLAGS="-erl_epmd_port 9100"` as for Docker:
+
+```sh
+kubectl port-forward -n prod pod/myapp-0 9100:9100
+```
+
+A node named by `127.0.0.1` can't join a cluster of pods, which
+connect to each other by IP or DNS name, so this suits single-node apps
+or a pod set up for debugging. And it reaches one node per forwarded
+port.
 
 ## Passing VM flags to the server
 

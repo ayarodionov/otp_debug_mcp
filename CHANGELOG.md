@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Nodes in Kubernetes pods. The release has `bin/otp-debug-k8s`, which
+  Claude Code runs as the MCP server: it starts the server as a pod in
+  the app's namespace, from the release's Docker image, with the cookie
+  from the app's Secret, and deletes the pod when the session ends, even
+  if the session is stopped. `docs/production.md` has the set-up, the
+  smallest Role it needs (no access to Secrets), and port forwarding.
+  Tested on a kind cluster with nodes named by pod IP and by DNS name.
+- The server can start distribution where the machine has no fully
+  qualified host name, such as in a container or a pod. Connecting to a
+  node with a long name used to fail there with `nodistribution`; the
+  server now falls back to naming itself by the address it reaches the
+  target from.
 - `profile`: where the CPU time goes on the target, by function. For one
   module, one function or one process (or, when asked, every module), it
   counts calls, own time and memory allocated per function over a short
