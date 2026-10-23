@@ -1,7 +1,36 @@
 # Changelog
 
-## Unreleased
+## 0.5.0
 
+Profiling by function with `profile`, a Docker image of the server, and
+debugging nodes in Docker containers and Kubernetes pods.
+
+### Profiling
+
+- `profile`: where the CPU time goes on the target, by function. For one
+  module, one function or one process (or, when asked, every module), it
+  counts calls, own time and memory allocated per function over a short
+  window (default 5s, at most 30s), with the runtime's call_time and
+  call_memory counters, and ranks them, with the processes making the
+  calls. On OTP 27+ it runs in its own trace session and never sees or
+  disturbs other tracing; on older nodes it refuses while there is any,
+  unless forced. It needs nothing from OTP's `tools` application, which
+  releases usually leave out, and leaves no counters or trace flags
+  behind. Anonymous functions are named as Elixir does
+  (`anonymous fn/1 in MyMod.fun/1`). The smoke test profiles each demo.
+
+### Docker and Kubernetes
+
+- A Docker image of the server, `ghcr.io/ayarodionov/otp_debug_mcp`,
+  for amd64 and arm64, published with each release (0.4.0 too) and
+  smoke-tested against a node in another container first. The
+  `Dockerfile` builds it from a published Linux release.
+- `docs/production.md` covers nodes in Docker containers. Either run the
+  image in a container that shares the app container's network, which
+  needs no changes to the app and no published ports, or publish the
+  node's distribution port and have the server dial it, configured for a
+  Mix release by environment variables alone. There's a prompt that has
+  Claude Code set up the first.
 - Nodes in Kubernetes pods. The release has `bin/otp-debug-k8s`, which
   Claude Code runs as the MCP server: it starts the server as a pod in
   the app's namespace, from the release's Docker image, with the cookie
@@ -14,31 +43,13 @@
   node with a long name used to fail there with `nodistribution`; the
   server now falls back to naming itself by the address it reaches the
   target from.
-- `profile`: where the CPU time goes on the target, by function. For one
-  module, one function or one process (or, when asked, every module), it
-  counts calls, own time and memory allocated per function over a short
-  window (default 5s, at most 30s), with the runtime's call_time and
-  call_memory counters, and ranks them, with the processes making the
-  calls. On OTP 27+ it runs in its own trace session and never sees or
-  disturbs other tracing; on older nodes it refuses while there is any,
-  unless forced. It needs nothing from OTP's `tools` application, which
-  releases usually leave out, and leaves no counters or trace flags
-  behind. Anonymous functions are named as Elixir does
-  (`anonymous fn/1 in MyMod.fun/1`). The smoke test profiles each demo.
+
+### Docs
+
 - The README's Setup says how to stop, restart and remove the server:
   `/mcp`'s Reconnect and Disable in Claude Code, the commands that undo
   the install (including the `epmd` the server leaves running), and
   prompts that have Claude Code remove or upgrade it.
-- A Docker image of the server, `ghcr.io/ayarodionov/otp_debug_mcp`,
-  for amd64 and arm64, published with each release (0.4.0 included) and
-  smoke-tested against a node in another container first. The
-  `Dockerfile` builds it from a published Linux release.
-- `docs/production.md` covers nodes in Docker containers. Either run the
-  image in a container that shares the app container's network, which
-  needs no changes to the app and no published ports, or publish the
-  node's distribution port and have the server dial it, configured for a
-  Mix release by environment variables alone. There's a prompt that has
-  Claude Code set up the first.
 
 ## 0.4.0
 
