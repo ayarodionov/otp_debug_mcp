@@ -13,6 +13,7 @@ the AI provider.
 - [Keeping the cookie out of the conversation](#keeping-the-cookie-out-of-the-conversation)
 - [Targets listening on one interface](#targets-listening-on-one-interface)
 - [TLS distribution](#tls-distribution)
+- [Targets in Docker containers](#targets-in-docker-containers)
 - [Passing VM flags to the server](#passing-vm-flags-to-the-server)
 
 ## What a connection needs
@@ -136,6 +137,156 @@ connection as TLS. Between two Macs, the smoke test passed with both ends
 on TLS, the target reported the connection as TLS, and a plain-TCP tool
 and a tool whose certificate came from another CA were both refused. `connect`'s error mentions a TLS mismatch as one of the
 likely causes when it fails.
+
+## Targets in Docker containers
+
+A node in a container is on the container's network, not your machine's.
+Its default name uses the container's hostname, such as
+`myapp@3f2a9c1b7d4e` for a Mix release, and that name only resolves
+inside Docker. There are two ways to reach it:
+
+- **[Run the server next to the container](#run-the-server-next-to-the-container)**:
+  no changes to the app, no ports published, no restart. Use this when
+  Docker runs on the machine where Claude Code runs.
+- **[Publish the node's port](#publish-the-nodes-port)**: the server runs
+  on your machine as usual, and the container publishes one port. The
+  node's name and port must be set when the container starts.
+
+Both were tested on Docker Desktop for Mac, against a plain Erlang node and
+a Mix release, each in its own container.
+
+### Run the server next to the container
+
+Run the Linux release of the server in a throwaway container that joins
+the app container's network (`--network container:myapp`). It shares the
+app's hostname and DNS, so it reaches the node by its default name, and
+other nodes on the app's Docker network by theirs. The server only makes
+outgoing connections, so nothing needs publishing.
+
+Download the Linux release for Docker's architecture, `linux-arm64` on
+Apple silicon or `linux-x86_64` on Intel, into a directory of its own:
+
+```sh
+vsn=0.4.0
+target=linux-arm64
+base=https://github.com/ayarodionov/otp_debug_mcp/releases/download/v$vsn
+curl -fLO "$base/otp_debug_mcp-$vsn-$target.tar.gz"
+curl -fLO "$base/otp_debug_mcp-$vsn-$target.tar.gz.sha256"
+shasum -a 256 -c "otp_debug_mcp-$vsn-$target.tar.gz.sha256"
+mkdir -p ~/.local/linux && tar -xzf "otp_debug_mcp-$vsn-$target.tar.gz" -C ~/.local/linux
+```
+
+Find the node's name and cookie:
+
+- **Name:** `name@hostname`. `docker exec myapp hostname` prints the
+  hostname. For a Mix release, `name` is the release's name, or
+  `RELEASE_NODE` if it's set. For a rebar3 release, it's in `vm.args`
+  (`-sname`).
+- **Cookie:** `RELEASE_COOKIE` in the container's environment
+  (`docker exec myapp printenv RELEASE_COOKIE`), the release's
+  `releases/COOKIE` file, or `-setcookie` in `vm.args`.
+
+Then, in the app's project directory, register a server that runs in a
+container beside `myapp` (your container's name), with the node's cookie:
+
+```sh
+claude mcp add otp-debug --scope local \
+  -e OTP_DEBUG_MCP_COOKIE=the-cookie \
+  -- docker run -i --rm --network container:myapp \
+  -e OTP_DEBUG_MCP_COOKIE -e LANG=C.UTF-8 \
+  -v ~/.local/linux/otp_debug_mcp:/opt/otp_debug_mcp:ro \
+  ubuntu:22.04 /opt/otp_debug_mcp/bin/otp_debug_mcp start
+```
+
+- `-i` connects the server's stdin and stdout to Claude Code. Don't add
+  `-t`: a terminal would mix the server's logs into the protocol stream.
+- `-e OTP_DEBUG_MCP_COOKIE`, with no value, passes the cookie from the
+  registration into the container.
+- `ubuntu:22.04` has the glibc and OpenSSL 3 the release needs. It has
+  no UTF-8 locale, so `LANG=C.UTF-8` sets one; without it, the server
+  logs a warning about latin1 file name encoding. `--rm` deletes the
+  container when the server stops.
+- `--scope local` registers it for this project only. There it takes the
+  place of a user-scope `otp-debug`: Claude Code uses the most specific
+  scope's entry, and `claude mcp list` warns that both exist.
+
+Restart Claude Code, or use `/mcp` → `otp-debug` → **Reconnect**, then:
+
+> Connect to myapp@3f2a9c1b7d4e and run diagnose.
+
+If `myapp` restarts, the server's container loses its network along with
+it: use **Reconnect** again. The node keeps its name, because a restarted
+container keeps its hostname. A container that's removed and created
+again gets a new hostname, so the node gets a new name too.
+
+Claude Code can do the set-up, asking before each command:
+
+```sh
+claude "Set up otp_debug_mcp to debug the BEAM node in the Docker \
+container myapp, following 'Run the server next to the container' in \
+https://github.com/ayarodionov/otp_debug_mcp/blob/main/docs/production.md: \
+download and verify the Linux release for this Docker, find the node's \
+name and cookie with docker exec, and register the server for this \
+project as the doc shows. Check that each step worked, and tell me the \
+node name to connect to."
+```
+
+Claude needs the cookie to register the server. In testing, it passed
+the cookie from `docker exec` to `claude mcp add` through the shell,
+without printing it, but nothing guarantees that. Register by hand if the
+cookie must stay out of the conversation.
+
+### Publish the node's port
+
+When the server can't run beside the app, publish the node's distribution
+port and have the server dial it directly, as through the SSH tunnel in
+[Targets listening on one interface](#targets-listening-on-one-interface).
+The container must start the node with:
+
+- **A name the server can reach it by:** `myapp@127.0.0.1` when Docker
+  runs on your machine.
+- **A fixed distribution port.**
+
+For a Mix release, environment variables are enough:
+
+```sh
+docker run -d --name myapp -p 127.0.0.1:9100:9100 \
+  -e RELEASE_DISTRIBUTION=name \
+  -e RELEASE_NODE=myapp@127.0.0.1 \
+  -e RELEASE_COOKIE=the-cookie \
+  -e ERL_AFLAGS="-kernel inet_dist_listen_min 9100 inet_dist_listen_max 9100" \
+  myapp-image
+```
+
+For a rebar3 release, set the same in `vm.args`:
+
+```
+-name myapp@127.0.0.1
+-setcookie the-cookie
+-kernel inet_dist_listen_min 9100 inet_dist_listen_max 9100
+```
+
+Then register the server to dial port 9100, and connect to
+`myapp@127.0.0.1`:
+
+```sh
+claude mcp add otp-debug --scope local \
+  -e OTP_DEBUG_MCP_COOKIE=the-cookie \
+  -e ERL_FLAGS="-erl_epmd_port 9100" \
+  -- ~/.local/otp_debug_mcp/bin/otp_debug_mcp start
+```
+
+- **Publish on loopback only.** `127.0.0.1:` in `-p` publishes the port
+  on your machine's loopback only. Anyone who can reach that port and
+  has the cookie controls the node.
+- **Don't publish epmd's port 4369.** It isn't needed, and it fails with
+  "address already in use" if anything on your machine runs Erlang,
+  which starts an `epmd` of its own.
+- **One node per server.** With `-erl_epmd_port`, the server dials port
+  9100 for every node, so this server reaches this one node only.
+- **Docker on another host:** keep the port on that host's loopback, and
+  tunnel to it with `ssh -N -L 9100:127.0.0.1:9100 docker-host`. The
+  node's name stays `myapp@127.0.0.1`.
 
 ## Passing VM flags to the server
 

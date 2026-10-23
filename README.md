@@ -260,6 +260,10 @@ Notes:
 - **Production nodes.** [docs/production.md](docs/production.md) covers
   firewalls and fixed distribution ports, targets that listen only on
   loopback (with an SSH tunnel recipe), and TLS distribution.
+- **Docker.** For a node in a container, run the server in a container
+  beside it: no changes to the app, no ports published. Or publish the
+  node's port. [Targets in Docker containers](docs/production.md#targets-in-docker-containers)
+  has both, and a prompt that has Claude Code set it up.
 - **Pids look the same everywhere.** Every tool prints the target's pids
   and ports the way the target itself does (`<0.107.0>`), matching trace
   output and `remote_eval`, and `process_info` accepts them as given.
