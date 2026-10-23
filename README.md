@@ -523,15 +523,21 @@ ERL_FLAGS="-erl_epmd_port 9100" python3 scripts/mcp_call.py \
 
 ## Releasing
 
-1. Set the new version in `mix.exs`, and add a `## <version>` section for
-   it at the top of `CHANGELOG.md`.
+1. Set the new version in `mix.exs` and in the `Dockerfile`'s `ARG VSN`,
+   and add a `## <version>` section for it at the top of `CHANGELOG.md`.
 2. Commit, then tag and push: `git tag v<version> && git push origin v<version>`.
 
 The [Release workflow](.github/workflows/release.yml) builds and
 smoke-tests each platform's archive, checks the tag matches `mix.exs`, and
-publishes the GitHub release with the changelog section as its notes. Run
-it by hand (`gh workflow run Release`) to build and test without
-publishing.
+publishes the GitHub release with the changelog section as its notes.
+Then the [Image workflow](.github/workflows/image.yml) builds the Docker
+image from the published Linux archives, for amd64 and arm64,
+smoke-tests it against a node in another container, and pushes it to
+`ghcr.io/ayarodionov/otp_debug_mcp` as `<version>` and `latest`. Run the
+Release workflow by hand (`gh workflow run Release`) to build and test
+without publishing, and the Image workflow
+(`gh workflow run Image -f version=<version>`) to build an earlier
+release's image.
 
 ## Status / TODO
 

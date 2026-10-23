@@ -1,8 +1,9 @@
 name: Release
 
 # On a v* tag: build the release on each platform, smoke-test it there,
-# and publish a GitHub release with the tarballs and checksums. Run it by
-# hand to build and test without publishing.
+# publish a GitHub release with the tarballs and checksums, then the
+# Docker image built from them. Run it by hand to build and test without
+# publishing.
 on:
   push:
     tags: ["v*"]
@@ -76,10 +77,12 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Check the tag matches the version in mix.exs
+      - name: Check the tag matches the version in mix.exs and the Dockerfile
         run: |
           vsn=$(sed -n 's/^ *version: "\(.*\)",$/\1/p' mix.exs)
           test "v$vsn" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME, mix.exs $vsn"; exit 1; }
+          docker_vsn=$(sed -n 's/^ARG VSN=//p' Dockerfile)
+          test "$docker_vsn" = "$vsn" || { echo "Dockerfile VSN $docker_vsn, mix.exs $vsn"; exit 1; }
 
       - name: Release notes from the changelog
         run: |
@@ -90,3 +93,13 @@ jobs:
       - run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --notes-file notes.md
         env:
           GH_TOKEN: ${{ github.token }}
+
+  image:
+    name: Publish the Docker image
+    needs: publish
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/image.yml
+    with:
+      version: ${{ github.ref_name }}
