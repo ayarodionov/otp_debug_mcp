@@ -272,6 +272,90 @@ Then, in Claude Code:
 
 > Connect to myapp@127.0.0.1 and find out why memory keeps growing.
 
+### Stop, restart or remove it
+
+Claude Code starts the server when a session starts and stops it when
+the session ends, so there's no server to stop by hand. In a session,
+`/mcp` → `otp-debug` has:
+
+- **Reconnect**: stops the server and starts a fresh one, which forgets
+  its connections and snapshots. Use it after installing a new release
+  or running `mix release` again, so the session runs the new build, or
+  if the server stops responding.
+- **Disable**: stops the server and keeps it off in this project. **Enable**,
+  in the same place, brings it back.
+
+Stopping the server closes its connections to the target nodes. They
+carry on as before, except that recon modules the tool loaded stay
+loaded until the node restarts. Claude Code can't run `/mcp` for you, so
+use the menu for these two.
+
+To remove it from your machine, take out what the install put in:
+
+```sh
+claude mcp remove otp-debug --scope user
+rm -rf ~/.claude/skills/otp-debug
+```
+
+`claude mcp list` should no longer show `otp-debug`. If you also
+registered it for one project (`--scope project` or `local`, or an entry
+in a `.mcp.json`), run `claude mcp remove otp-debug` in that project too.
+Then delete the server: for a downloaded release, that's
+
+```sh
+rm -rf ~/.local/otp_debug_mcp
+```
+
+and for a build from source, the directory you cloned and built in.
+
+Like any Erlang node, the server starts `epmd`, the port-mapper daemon on
+port 4369, if it isn't running yet, and `epmd` keeps running after the
+server stops. It's harmless and other Erlang nodes use it too. If
+`pgrep -fl epmd` shows it running from `~/.local/otp_debug_mcp`, stop it
+before deleting that directory:
+
+```sh
+~/.local/otp_debug_mcp/erts-*/bin/epmd -kill
+```
+
+It refuses with "Killing not allowed - living nodes in database" while
+any node is registered (`epmd -names` lists them); stop those first, or
+leave `epmd` running.
+
+For Cursor, GitHub Copilot or Claude Desktop, also take `otp-debug` out
+of their MCP config, and delete the playbook files
+[docs/clients.md](docs/clients.md) had you create
+(`.cursor/rules/otp-debug.mdc`, `.github/instructions/otp-debug.instructions.md`).
+
+Claude Code can do the removal too, asking before each command:
+
+```sh
+claude "Remove otp_debug_mcp from this machine, following the README at \
+https://github.com/ayarodionov/otp_debug_mcp: remove the otp-debug MCP \
+server from every Claude Code scope it's registered in, remove the \
+otp-debug skill, stop epmd if it runs from the release and no nodes are \
+registered, and delete the installed release. If it was built from \
+source, show me the checkout and ask before deleting it. Check that \
+each step worked."
+```
+
+That session starts its own `otp-debug` server from the release it's
+deleting, which keeps running until you quit the session; that's
+harmless, as nothing else uses it.
+
+Or to upgrade to the latest release:
+
+```sh
+claude "Upgrade otp_debug_mcp to the latest release from \
+https://github.com/ayarodionov/otp_debug_mcp by following its README: \
+download the release for this machine, verify its checksum, replace the \
+installed one in ~/.local/otp_debug_mcp, and copy its skill to \
+~/.claude/skills again. Check that each step worked."
+```
+
+Then use `/mcp` → `otp-debug` → **Reconnect** in any session that's
+already running, so it uses the new release.
+
 ## Typical agent workflow
 
 1. `connect(node: "myapp@127.0.0.1")`; if the node is in a cluster, it says

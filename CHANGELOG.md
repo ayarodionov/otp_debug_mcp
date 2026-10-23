@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- The README's Setup says how to stop, restart and remove the server:
+  `/mcp`'s Reconnect and Disable in Claude Code, the commands that undo
+  the install (including the `epmd` the server leaves running), and
+  prompts that have Claude Code remove or upgrade it.
+
 ## 0.4.0
 
 Trying a fix on the live node with `load_module`, only with the user's
