@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### Ports
+
+- `ports` (in `diagnose`) tells what the ports are: by type (`tcp_inet`,
+  external programs by command, drivers), the processes holding the most,
+  the ports with data waiting to be written, with `owner_blocked` when the
+  owner is stuck sending to a slow peer, and the external programs with
+  their OS pids, OTP's own helpers apart. It also counts sockets of the
+  `socket` module, which aren't ports.
+- Snapshot diffs report `port_delta_by_type` and `port_delta_by_owner`:
+  which kind of port grew, and which processes opened them, named.
+- `socket_traffic` (in `diagnose`): the inet sockets moving the most bytes
+  over a second, with peer and local address and owner.
+- `port_info`: one port in detail. For a socket, its addresses, statistics
+  (`send_pend`) and options (`active`, `packet`, buffers, watermarks); for
+  an external program, its OS pid; its owner, links, I/O and queue.
+- `trace_port`: a port's traffic (what its owner sends it, what it sends
+  back, truncated), or with `opened: true` the ports opened and closed in
+  a window, summed up by who opened them. Capped like `trace_calls`; in its
+  own trace session on OTP 27+, refused before while others trace.
+- `long_schedules` names the driver and owner of a port in its events.
+- `examples/erlang/run.sh ports`: a shop that leaks sockets and external
+  programs and fills a slow peer's socket. CI smoke-tests the release
+  against it. `docs/scenarios.md` has a scenario for ports (10; the ones
+  after it are renumbered).
+
 ### Native code
 
 - `long_schedules` (in `diagnose`): over 2 seconds, the processes that

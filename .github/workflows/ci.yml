@@ -166,6 +166,12 @@ jobs:
           sleep 3
           python3 scripts/mcp_smoke.py _build/prod/rel/otp_debug_mcp/bin/otp_debug_mcp \
             "native_erl@$(hostname -s)" native_nif
+      - name: Smoke test against the ports demo node
+        run: |
+          examples/erlang/run.sh ports
+          sleep 3
+          python3 scripts/mcp_smoke.py _build/prod/rel/otp_debug_mcp/bin/otp_debug_mcp \
+            "ports_erl@$(hostname -s)" ports_shop
       - name: Smoke test against the Gleam demo node
         run: |
           examples/gleam/run.sh shop

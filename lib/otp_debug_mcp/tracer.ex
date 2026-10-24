@@ -380,7 +380,31 @@ defmodule OtpDebugMcp.Tracer do
     if m =~ ~r/^[A-Z]/, do: Module.concat([m]), else: String.to_atom(m)
   end
 
-  defp start_collector(max_events) do
+  @doc """
+  Runs a trace holder evaluated from `code` on the target, for tracers
+  other than trace_calls: the holder sends `{trace_started, Holder, N}`
+  to `Owner`, then `{trace_line, Holder, Text}` to the collector.
+  Returns the lines once there are enough, the holder has finished, or
+  the duration has passed.
+  """
+  def run_traced(target, code, bindings, collector, duration_ms) do
+    case start_holder(target, code, bindings) do
+      {:started, holder, ref, _matched} ->
+        events = await_events(collector, ref, duration_ms)
+        stop_and_wait(holder, ref)
+        {:ok, events}
+
+      {:down, reason} ->
+        {:error, {:trace_failed, reason}}
+
+      {:timeout, holder, ref} ->
+        stop_and_wait(holder, ref)
+        {:error, "the trace did not start within 5s"}
+    end
+  end
+
+  @doc "A process collecting up to `max_events` trace lines for the caller."
+  def start_collector(max_events) do
     owner = self()
     spawn(fn -> collector_loop(owner, max_events, []) end)
   end

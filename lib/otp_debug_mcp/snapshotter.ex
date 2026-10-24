@@ -69,6 +69,8 @@ defmodule OtpDebugMcp.Snapshotter do
                end),
              process_count_delta: new.process_count - old.process_count,
              port_count_delta: new.port_count - old.port_count,
+             port_delta_by_type: port_type_delta(new.ports, old.ports),
+             port_delta_by_owner: port_owner_delta(new.ports, old.ports),
              atom_count_delta: new.atom_count - old.atom_count - ours.atoms,
              total_message_queue_delta: new.total_mq - old.total_mq,
              os_memory_delta_mb: mb_delta(new.os_memory, old.os_memory),
@@ -86,7 +88,10 @@ defmodule OtpDebugMcp.Snapshotter do
              allocators (the OS's memory for the node minus what they hold): memory NIFs and \
              drivers allocate themselves, which erlang:memory() never shows, so \
              growth there with memory_delta flat is a native leak (run the \
-             native_memory and native_code checks). The deltas \
+             native_memory and native_code checks). port_delta_by_type and \
+             port_delta_by_owner say which kind of port grew and which \
+             processes opened them: steady growth is sockets or programs never \
+             closed. The deltas \
              exclude what this tool itself added to the node in the window \
              (atoms it sent, code it caused to load), shown in \
              excluded_footprint_of_this_tool.\
@@ -95,6 +100,36 @@ defmodule OtpDebugMcp.Snapshotter do
         end
     end
   end
+
+  # The types whose count changed, and the owners that gained the most
+  # ports, named: what leaks sockets or programs, and where.
+  defp port_type_delta(%{by_type: new}, %{by_type: old}) do
+    for type <- Enum.uniq(Map.keys(new) ++ Map.keys(old)),
+        delta = Map.get(new, type, 0) - Map.get(old, type, 0),
+        delta != 0,
+        into: %{},
+        do: {type, delta}
+  end
+
+  defp port_type_delta(_new, _old), do: nil
+
+  defp port_owner_delta(%{by_owner: new}, %{by_owner: old}) do
+    grown =
+      new
+      |> Enum.map(fn {owner, n} -> {owner, n - Map.get(old, owner, 0)} end)
+      |> Enum.filter(fn {_, delta} -> delta > 0 end)
+      |> Enum.sort_by(&(-elem(&1, 1)))
+      |> Enum.take(5)
+
+    names = OtpDebugMcp.Checks.owners(Enum.map(grown, &elem(&1, 0)))
+
+    for {owner, delta} <- grown do
+      %{owner: OtpDebugMcp.Format.inspect(owner), ports_added: delta, ports_now: new[owner]}
+      |> Map.merge(Map.get(names, owner, %{}))
+    end
+  end
+
+  defp port_owner_delta(_new, _old), do: nil
 
   defp mb_delta(new, old) when is_integer(new) and is_integer(old),
     do: Float.round((new - old) / 1_048_576, 2) + 0.0
@@ -130,8 +165,11 @@ defmodule OtpDebugMcp.Snapshotter do
              do: bytes,
              else: (_ -> nil)
 
+      ports = with {:ok, counts} <- OtpDebugMcp.Checks.port_counts(), do: counts, else: (_ -> nil)
+
       {:ok,
        %{
+         ports: ports,
          os_memory: os_memory,
          allocated: allocated,
          at: DateTime.utc_now(),

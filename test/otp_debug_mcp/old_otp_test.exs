@@ -82,6 +82,20 @@ defmodule OtpDebugMcp.OldOtpTest do
     assert {:ok, {^holder, [{:long_gc, 1000}]}} = Target.rpc(:erlang, :system_monitor, [])
   end
 
+  test "port_info, and trace_port in the legacy session, refused while dbg traces" do
+    %{findings: %{by_type: [_ | _]}} = Checks.run(:ports)
+    {:ok, [port | _]} = Target.rpc(:erlang, :ports, [])
+    assert {:ok, %{port: _, name: _}} = OtpDebugMcp.Ports.info(port)
+
+    assert {:ok, %{backend: "legacy trace session"}} = OtpDebugMcp.Ports.trace(:new_ports, 5, 500)
+
+    {:ok, _} = Checks.remote_eval("dbg:tracer(), dbg:p(all, call), dbg:tpl(queue, new, []).")
+    assert {:error, %{refused: _}} = OtpDebugMcp.Ports.trace(:new_ports, 5, 500)
+
+    assert {:ok, %{backend: "legacy trace session"}} =
+             OtpDebugMcp.Ports.trace(:new_ports, 5, 500, force: true)
+  end
+
   test "module_code reads an older OTP's .beam here" do
     assert {:ok, info} = OtpDebugMcp.ModuleCode.fetch("queue")
     assert info.disassembled == :here

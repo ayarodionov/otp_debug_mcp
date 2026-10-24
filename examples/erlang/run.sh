@@ -6,6 +6,7 @@
 #     examples/erlang/run.sh sessions    # sessions_erl: atom and ETS leaks
 #     examples/erlang/run.sh cluster     # erl_a, erl_b, erl_c: only erl_b has the shop bug
 #     examples/erlang/run.sh native      # native_erl: NIFs that block a scheduler and leak memory
+#     examples/erlang/run.sh ports       # ports_erl: leaked sockets, a slow consumer, external programs
 #     examples/erlang/run.sh stop        # stop them all
 #
 # Each node runs in the background, named with -sname on this host, with
@@ -46,6 +47,7 @@ case "${1:-}" in
   shop) build; start shop_erl "price_cache:start()" ;;
   payments) build; start payments_erl "{ok, _} = application:ensure_all_started(payments)" ;;
   sessions) build; start sessions_erl "sessions:start()" ;;
+  ports) build; start ports_erl "ok = ports_shop:start()" ;;
   native)
     build_native
     erl -sname native_erl -pa "$here/native_shop/ebin" -noshell -detached \
@@ -62,11 +64,11 @@ case "${1:-}" in
   stop)
     erl -sname "stopper_$$" -noshell -eval "
       [rpc:call(list_to_atom(N ++ \"@$host\"), init, stop, [], 2000)
-       || N <- [\"shop_erl\", \"payments_erl\", \"sessions_erl\", \"native_erl\", \"erl_a\", \"erl_b\", \"erl_c\"]],
+       || N <- [\"shop_erl\", \"payments_erl\", \"sessions_erl\", \"native_erl\", \"ports_erl\", \"erl_a\", \"erl_b\", \"erl_c\"]],
       halt()."
     ;;
   *)
-    echo "usage: $0 shop|payments|sessions|cluster|native|stop" >&2
+    echo "usage: $0 shop|payments|sessions|cluster|native|ports|stop" >&2
     exit 1
     ;;
 esac

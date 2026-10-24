@@ -20,17 +20,18 @@ Contents:
   - [7. One node in a cluster misbehaves](#7-one-node-in-a-cluster-misbehaves)
   - [8. Incident triage](#8-incident-triage)
   - [9. Native code: a NIF that blocks or leaks](#9-native-code-a-nif-that-blocks-or-leaks)
+  - [10. Sockets, ports and external programs](#10-sockets-ports-and-external-programs)
 - **Understanding and verifying**
-  - [10. Finding the bug in the code, not just the node](#10-finding-the-bug-in-the-code-not-just-the-node)
-  - [11. Seeing what a function really receives](#11-seeing-what-a-function-really-receives)
-  - [12. Verifying a fix or a deploy](#12-verifying-a-fix-or-a-deploy)
-  - [13. Trying a fix on the live node](#13-trying-a-fix-on-the-live-node)
-  - [14. Code that macros generated](#14-code-that-macros-generated)
-  - [15. Watching a load test](#15-watching-a-load-test)
-  - [16. Getting to know an unfamiliar system](#16-getting-to-know-an-unfamiliar-system)
+  - [11. Finding the bug in the code, not just the node](#11-finding-the-bug-in-the-code-not-just-the-node)
+  - [12. Seeing what a function really receives](#12-seeing-what-a-function-really-receives)
+  - [13. Verifying a fix or a deploy](#13-verifying-a-fix-or-a-deploy)
+  - [14. Trying a fix on the live node](#14-trying-a-fix-on-the-live-node)
+  - [15. Code that macros generated](#15-code-that-macros-generated)
+  - [16. Watching a load test](#16-watching-a-load-test)
+  - [17. Getting to know an unfamiliar system](#17-getting-to-know-an-unfamiliar-system)
 - **Other kinds of targets**
-  - [17. Erlang products you didn't write](#17-erlang-products-you-didnt-write)
-  - [18. Your own node during development](#18-your-own-node-during-development)
+  - [18. Erlang products you didn't write](#18-erlang-products-you-didnt-write)
+  - [19. Your own node during development](#19-your-own-node-during-development)
 - [Before pointing it at production](#before-pointing-it-at-production)
 - [Not supported yet](#not-supported-yet)
 
@@ -141,7 +142,7 @@ blocked behind its own backlog.
 
 > Check `chat@edge-5` for anything heading toward a system limit.
 
-**What the agent does.** `diagnose` covers processes, ports and atoms
+**What the agent does.** `diagnose` covers processes, ports (scenario 10) and atoms
 against their limits. Repeated `snapshot` diffs show the direction of each.
 For a growing process count, `supervision_tree` finds the supervisor whose
 child count keeps climbing (it reports `child_count` even when there are too
@@ -272,9 +273,48 @@ OTP.
   that takes the library's source, or its tests under AddressSanitizer
   or Valgrind.
 
+### 10. Sockets, ports and external programs
+
+**Situation.** The port count climbs toward the limit, sends block or time
+out, a peer can't keep up, or OS processes the node started pile up.
+Ports are how the node talks to the outside: sockets, external programs
+(`open_port`) and port drivers.
+
+> `ports_erl@yourhost`'s port count keeps climbing, and one of its
+> connections stops sending now and then. Find out why.
+
+**What the agent does.**
+- `diagnose` runs `ports`: ports by type (`tcp_inet`, external programs by
+  command), the processes holding the most, ports with data waiting to be
+  written (and whether the owner is blocked sending), and the external
+  programs with their OS pids. It also counts sockets of the `socket`
+  module, which aren't ports.
+- Snapshot diffs say which kind of port grew and which owner opened the
+  new ones: a leak names its code.
+- `socket_traffic` shows the sockets moving the most bytes, with peers.
+- `port_info` on one port gives its socket addresses, statistics
+  (`send_pend`) and options (`active`, `packet`, buffers, watermarks).
+- `trace_port` traces a port's traffic, or with `opened: true` the ports
+  opened and closed in a window, with who opened them.
+
+**Typical findings.** A process that opens a connection or an external
+program per request and never closes it; a socket whose peer reads slower
+than it's written to, with sends blocking at the high watermark; an
+owner with `{active, true}` flooding its own mailbox.
+
+**Watch out.**
+- Sockets opened with the `socket` backend (`{inet_backend, socket}`)
+  aren't ports: `ports` counts them, but `port_info`, `trace_port` and
+  `socket_traffic` don't cover them. Open files haven't been ports since
+  OTP 21.
+- `trace_port` shows the data a port carries, truncated: it's real
+  traffic, and goes to the AI provider like everything else.
+- Before OTP 27, `trace_port` uses the node's legacy trace session, and
+  refuses while anyone else traces.
+
 ## Understanding and verifying
 
-### 10. Finding the bug in the code, not just the node
+### 11. Finding the bug in the code, not just the node
 
 **Situation.** You want the fix, not just the diagnosis.
 
@@ -290,10 +330,10 @@ often line numbers, and the agent opens those files and reads the code. In
 testing, it went from a mailbox backlog to the `Process.sleep` in the
 offending `handle_cast/2` on its own.
 
-Functions that macros generate aren't in the source to open; scenario 14
+Functions that macros generate aren't in the source to open; scenario 15
 finds them on the node.
 
-### 11. Seeing what a function really receives
+### 12. Seeing what a function really receives
 
 **Situation.** Production behaves differently from your tests, and you
 suspect the inputs.
@@ -314,7 +354,7 @@ Long terms are truncated so the result fits the agent's context.
   refuses and says what it found. Forcing it ends their trace, so the agent
   should ask you first.
 
-### 12. Verifying a fix or a deploy
+### 13. Verifying a fix or a deploy
 
 **Situation.** You've shipped a fix and want evidence that it worked.
 
@@ -326,7 +366,7 @@ or so apart. A fixed leak shows near-zero deltas under the same load that
 used to produce growth. The same before-and-after comparison works for
 config changes, such as a new pool size.
 
-### 13. Trying a fix on the live node
+### 14. Trying a fix on the live node
 
 **Situation.** You have a fix and want to see it work on the node before
 going through a deploy, or you need a stopgap now.
@@ -356,7 +396,7 @@ is a recorded session of it on the Elixir payments demo.
   calling itself without its module name) keep running it. While they do,
   the tool refuses to load that module again, rather than kill them.
 
-### 14. Code that macros generated
+### 15. Code that macros generated
 
 **Situation.** A stack trace or a trace names a function you can't find in
 your source, or points into a library's file: `gen_server.ex:887`, a
@@ -404,7 +444,7 @@ generates and explained what each does with a message it doesn't handle.
   and after `load_module` the file may not be the code that runs; the tool
   says so.
 
-### 15. Watching a load test
+### 16. Watching a load test
 
 **Situation.** You're load testing and want to know what breaks first and
 why.
@@ -417,7 +457,7 @@ why.
 the point where schedulers saturate, is your capacity limit, and
 `process_info` says which code it's in.
 
-### 16. Getting to know an unfamiliar system
+### 17. Getting to know an unfamiliar system
 
 **Situation.** You've inherited a system, or are onboarding, and want to see
 how it's actually put together at runtime.
@@ -426,7 +466,7 @@ how it's actually put together at runtime.
 > applications, what each supervisor runs, and what looks unusual.
 
 **What the agent does.** `supervision_tree` for each application, plus a
-`diagnose` baseline. Combined with the source (scenario 10), it can map
+`diagnose` baseline. Combined with the source (scenario 11), it can map
 runtime processes to modules and explain restart strategies and limits,
 which the tree shows for every supervisor along with its recent restarts.
 That's often quicker than reading the code alone, because the runtime
@@ -437,7 +477,7 @@ have been restarting.
 
 ## Other kinds of targets
 
-### 17. Erlang products you didn't write
+### 18. Erlang products you didn't write
 
 **Situation.** A third-party system built on the BEAM misbehaves: a message
 broker, a database, an XMPP server, anything written in Erlang, Elixir, Gleam
@@ -459,7 +499,7 @@ is used as-is.
 too, such as RabbitMQ's `rabbitmq-diagnostics`; use both. Locate the cookie
 with care: it grants full control of the node.
 
-### 18. Your own node during development
+### 19. Your own node during development
 
 **Situation.** You're developing locally and want runtime answers while you
 code.

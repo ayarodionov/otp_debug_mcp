@@ -67,6 +67,8 @@ raw introspection when a purpose-built tool exists.
   counting slows every profiled call. Use `all_modules` only when the user
   agrees, and as with `trace_calls`, never set `force` on your own: show the
   user what the refusal found and ask first.
+- `trace_port` shows real traffic (truncated): keep it short on production
+  nodes, and as with `trace_calls`, never set `force` on your own.
 - `process_info` with `include_state` sends a sys message to the process;
   skip it for processes already showing huge message queues.
 - Do not use `remote_eval` unless the purpose-built tools can't answer AND
@@ -99,6 +101,14 @@ raw introspection when a purpose-built tool exists.
   10 ms there is a NIF or BIF), `module_code` marks its modules' NIFs,
   `trace_calls`/`profile` time them. A dirty CPU run queue that stays above
   zero → more dirty NIF work than the dirty schedulers can do.
+- Port count climbing, sends blocking, or OS processes piling up → ports:
+  `ports` (in `diagnose`) gives types, the owners holding most, write
+  queues (`owner_blocked`: stuck sending to a slow peer) and external
+  programs; a snapshot diff's `port_delta_by_type`/`port_delta_by_owner`
+  name the leaking code; `port_info` for one port's socket options and
+  stats; `trace_port` with `opened: true` shows who opens ports and whether
+  they close. Sockets of the `socket` backend aren't ports: `ports` counts
+  them, the other port tools don't see them.
 - OS memory growing while `erlang:memory()` is flat → native memory:
   `native_memory`, then snapshot diffs (`native_memory_delta_mb` growing
   with `memory_delta` flat is a NIF or driver leak), then `native_code` for

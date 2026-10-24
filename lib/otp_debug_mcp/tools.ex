@@ -169,7 +169,7 @@ defmodule OtpDebugMcp.Tools do
             "allocator_fragmentation, process_count, atom_table, ets_tables, ports, " <>
             "native_memory, native_code, schedulers (normal and dirty), " <>
             "long_schedules (2s: native code holding a scheduler, long GCs, busy ports), " <>
-            "top_reductions"
+            "socket_traffic (1s: the sockets moving the most bytes), top_reductions"
       )
     end
 
@@ -517,6 +517,127 @@ defmodule OtpDebugMcp.Tools do
 
     defp process(nil), do: {:ok, nil}
     defp process(name), do: Tools.resolve_process(name)
+  end
+
+  defmodule PortInfo do
+    @moduledoc """
+    Deep-inspect one port: what it is (a socket, an external program, a
+    port driver), its owner and links, bytes in and out, its write queue;
+    for a socket its peer and local address, statistics (send_pend: bytes
+    waiting to be sent) and options (active mode, packet, buffers,
+    watermarks); for an external program its OS pid. The ports check and
+    snapshot diffs name ports worth a look.
+    """
+    use Anubis.Server.Component, type: :tool
+
+    alias OtpDebugMcp.{Ports, Tools}
+
+    schema do
+      field(:port, {:required, :string},
+        description: "Port as printed, e.g. #Port<0.42>, or a port's registered name"
+      )
+    end
+
+    @impl true
+    def execute(%{port: spec}, frame) do
+      with {:ok, port} <- Ports.resolve(spec),
+           {:ok, info} <- Ports.info(port) do
+        Tools.json_response(frame, info)
+      else
+        {:error, reason} -> Tools.error_response(frame, reason)
+      end
+    end
+  end
+
+  defmodule TracePort do
+    @moduledoc """
+    Trace one port's traffic (the commands and data its owner sends it,
+    and the messages it sends back), or with opened: true the ports opened
+    and closed during the window, with who opened them: how to find the
+    code leaking sockets or external programs. Capped on events and
+    duration, and stopped early if events arrive too fast. On OTP 27+ in
+    its own trace session, never affecting other tracing; on older nodes
+    it refuses if other tracing is active, because it would end it: ask
+    the user before retrying with force: true. Data is truncated.
+    """
+    use Anubis.Server.Component, type: :tool
+
+    alias OtpDebugMcp.{Ports, Tools}
+
+    schema do
+      field(:port, :string,
+        description: "Port as printed, e.g. #Port<0.42>, or a registered name"
+      )
+
+      field(:opened, :boolean,
+        description: "Instead of one port: the ports opened (and closed) during the window"
+      )
+
+      field(:max_events, :integer,
+        description: "Stop after this many events (default 20, max 100)"
+      )
+
+      field(:duration_ms, :integer,
+        description: "Stop after this long regardless (default 5000, max 30000)"
+      )
+
+      field(:force, :boolean,
+        description:
+          "Pre-OTP 27 targets only: trace even though other tracing is active on the node, " <>
+            "ending it. Only with the user's explicit permission."
+      )
+    end
+
+    @impl true
+    def execute(params, frame) do
+      max = (params[:max_events] || 20) |> min(100) |> max(1)
+      duration = (params[:duration_ms] || 5_000) |> min(30_000) |> max(100)
+
+      with {:ok, spec} <- spec(params),
+           {:ok, result} <- Ports.trace(spec, max, duration, force: params[:force] == true) do
+        Tools.json_response(frame, if(spec == :new_ports, do: summarize(result), else: result))
+      else
+        {:error, reason} -> Tools.error_response(frame, reason)
+      end
+    end
+
+    defp spec(%{opened: true, port: port}) when is_binary(port),
+      do: {:error, "give a port, or opened: true, not both"}
+
+    defp spec(%{opened: true}), do: {:ok, :new_ports}
+    defp spec(%{port: port}) when is_binary(port), do: Ports.resolve(port)
+    defp spec(_), do: {:error, "give a port to trace, or opened: true"}
+
+    # Opened ports by who opened them, named, and what they are, and how
+    # many closed again in the window.
+    defp summarize(%{events: events} = result) do
+      opened =
+        for line <- events,
+            [_, owner, what] <- [Regex.run(~r/ open (<[\d.]+>) (.+)$/, line)],
+            do: {owner, what}
+
+      Map.merge(result, %{
+        opened: length(opened),
+        closed: Enum.count(events, &(&1 =~ " closed ")),
+        opened_by:
+          opened
+          |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+          |> Enum.map(fn {owner, whats} ->
+            %{owner: owner, ports: length(whats), what: Enum.frequencies(whats)}
+            |> Map.merge(owner_name(owner))
+          end)
+          |> Enum.sort_by(&(-&1.ports))
+      })
+    end
+
+    defp owner_name(owner) do
+      with {:ok, pid} <- Tools.resolve_process(owner),
+           %{^pid => fields} <- OtpDebugMcp.Checks.owners([pid]) do
+        Map.take(fields, [:owner_name, :owner_initial_call])
+      else
+        _ -> %{}
+      end
+    end
   end
 
   defmodule Cluster do

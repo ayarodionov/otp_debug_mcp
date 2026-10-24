@@ -26,6 +26,7 @@ defmodule OtpDebugMcp.Checks do
     :native_code,
     :schedulers,
     :long_schedules,
+    :socket_traffic,
     :top_reductions
   ]
 
@@ -49,7 +50,7 @@ defmodule OtpDebugMcp.Checks do
       :native_memory,
       :native_code
     ],
-    [:schedulers, :long_schedules, :top_reductions, :atom_table]
+    [:schedulers, :long_schedules, :socket_traffic, :top_reductions, :atom_table]
   ]
 
   # A check that takes longer than this is reported as failed.
@@ -637,15 +638,164 @@ defmodule OtpDebugMcp.Checks do
   end
 
   # Port count vs limit (sockets, files — leaks exhaust file descriptors).
+  # Every port: its type (the driver, or the external program it runs),
+  # owner, write queue and, for inet sockets, bytes waiting to be sent and
+  # the peer. Sockets of the socket module (the socket backend) aren't
+  # ports, so they're counted apart. Files haven't been ports since OTP 21.
+  @ports_scan ~S"""
+  Inet = ["tcp_inet", "udp_inet", "sctp_inet"],
+  Info = fun(P) ->
+    case erlang:port_info(P) of
+      undefined -> [];
+      I ->
+        Name = proplists:get_value(name, I),
+        Queue = case erlang:port_info(P, queue_size) of {queue_size, Q} -> Q; _ -> 0 end,
+        IsInet = lists:member(Name, Inet),
+        Pend = case IsInet andalso (catch inet:getstat(P, [send_pend])) of
+                 {ok, [{send_pend, SP}]} -> SP;
+                 _ -> 0
+               end,
+        Peer = case IsInet andalso (catch inet:peername(P)) of {ok, A} -> A; _ -> none end,
+        [{P, Name, proplists:get_value(connected, I), proplists:get_value(os_pid, I), Queue, Pend, Peer}]
+    end
+  end,
+  Ports = lists:append([Info(P) || P <- erlang:ports()]),
+  Sockets = case catch socket:which_sockets() of
+              L when is_list(L) ->
+                [{maps:get(owner, I, undefined), maps:get(domain, I, undefined),
+                  maps:get(type, I, undefined), maps:get(protocol, I, undefined)}
+                 || S <- L, I <- [catch socket:info(S)], is_map(I)];
+              _ -> []
+            end,
+  {Ports, Sockets, erlang:system_info(port_limit), code:root_dir()}.
+  """
+  # proc_lib processes' initial call is in $initial_call; a plain spawn's
+  # is its own.
+  @initial_call ~S"""
+  Initial = fun(P) ->
+    case InitialCall(P) of
+      undefined ->
+        case erlang:process_info(P, initial_call) of {initial_call, I} -> I; _ -> undefined end;
+      I -> I
+    end
+  end,
+  """
+  @describe_owners ~S"""
+  [{P, Initial(P), catch erlang:process_info(P, [registered_name, current_function, status])}
+   || P <- Pids, is_pid(P)].
+  """
   def run(:ports) do
-    with {:ok, count} <- Target.rpc(:erlang, :system_info, [:port_count]),
-         {:ok, limit} <- Target.rpc(:erlang, :system_info, [:port_limit]) do
+    with {:ok, {ports, sockets, limit, root}} <- remote_eval(@ports_scan) do
+      count = length(ports)
       ratio = count / limit
-      status = if ratio > 0.8, do: :critical, else: :ok
+      by_type = ports |> Enum.frequencies_by(&port_type/1) |> Enum.sort_by(&(-elem(&1, 1)))
 
-      result(:ports, status, %{count: count, limit: limit}, """
-      Ports are sockets and file handles. Steady growth means something opens
-      connections/files without closing them.
+      top_owners =
+        ports
+        |> Enum.group_by(&elem(&1, 2))
+        |> Enum.map(fn {owner, list} -> {owner, list} end)
+        |> Enum.sort_by(&(-length(elem(&1, 1))))
+        |> Enum.take(5)
+
+      queued =
+        ports
+        |> Enum.filter(fn {_, _, _, _, q, pend, _} -> q + pend > 0 end)
+        |> Enum.sort_by(fn {_, _, _, _, q, pend, _} -> -(q + pend) end)
+        |> Enum.take(5)
+
+      # OTP runs helper programs of its own, such as inet_gethost.
+      {otp_external, external} =
+        ports
+        |> Enum.filter(fn {_, _, _, os_pid, _, _, _} -> is_integer(os_pid) end)
+        |> Enum.split_with(fn {_, name, _, _, _, _, _} ->
+          :lists.prefix(root, to_charlist(name))
+        end)
+
+      socket_owners =
+        sockets |> Enum.frequencies_by(&elem(&1, 0)) |> Enum.sort_by(&(-elem(&1, 1)))
+
+      owners =
+        describe_owners(
+          Enum.map(top_owners, &elem(&1, 0)) ++
+            Enum.map(queued, &elem(&1, 2)) ++ Enum.map(Enum.take(socket_owners, 5), &elem(&1, 0))
+        )
+
+      worst_queue =
+        queued |> Enum.map(fn {_, _, _, _, q, pend, _} -> q + pend end) |> Enum.max(fn -> 0 end)
+
+      status =
+        cond do
+          ratio > 0.8 -> :critical
+          ratio > 0.5 or worst_queue >= 1_048_576 -> :warning
+          true -> :ok
+        end
+
+      findings = %{
+        count: count,
+        limit: limit,
+        by_type: for({type, n} <- Enum.take(by_type, 10), do: %{type: type, count: n}),
+        top_owners:
+          for {owner, list} <- top_owners do
+            %{
+              owner: Format.inspect(owner),
+              ports: length(list),
+              types: Enum.frequencies_by(list, &port_type/1)
+            }
+            |> Map.merge(Map.get(owners, owner, %{}))
+          end,
+        write_queues:
+          for {port, _, owner, _, q, pend, peer} = entry <- queued do
+            %{
+              port: Format.inspect(port),
+              type: port_type(entry),
+              queued_bytes: max(q, pend),
+              owner: Format.inspect(owner)
+            }
+            |> Map.merge(peer_field(peer))
+            |> Map.merge(Map.get(owners, owner, %{}))
+          end,
+        external_programs: %{
+          count: length(external),
+          otp_helpers: length(otp_external),
+          running:
+            for {port, name, owner, os_pid, _, _, _} <- Enum.take(external, 10) do
+              %{
+                port: Format.inspect(port),
+                command: to_string(name),
+                os_pid: os_pid,
+                owner: Format.inspect(owner)
+              }
+            end
+        },
+        socket_module_sockets: %{
+          count: length(sockets),
+          by_kind: sockets |> Enum.frequencies_by(fn {_, d, t, p} -> "#{d}/#{t}/#{p}" end),
+          top_owners:
+            for {owner, n} <- Enum.take(socket_owners, 5) do
+              %{owner: Format.inspect(owner), sockets: n}
+              |> Map.merge(Map.get(owners, owner, %{}))
+            end
+        }
+      }
+
+      result(:ports, status, findings, """
+      Ports connect the node to the outside: sockets (tcp_inet, udp_inet),
+      external programs (open_port, with an os_pid), and port drivers.
+      by_type and top_owners say what the ports are and which processes
+      hold them: a steadily growing count of one type, or one owner holding
+      far more than the rest, is a leak (snapshot diffs show which type and
+      owner grow). write_queues are ports with data waiting to be written
+      (queued_bytes): a slow peer or no backpressure. owner_blocked means
+      the owner is stuck right now in a send that waits until the port
+      takes more data, which for a socket is when the peer reads.
+      external_programs are OS processes the node started, apart from
+      OTP's own helpers (otp_helpers, such as inet_gethost); ones that pile
+      up were never closed. Sockets of the socket module (inet_backend
+      socket) aren't ports, so they're counted apart, in
+      socket_module_sockets. Open files aren't ports since OTP 21. Next
+      step: port_info on a port for its details and socket options,
+      trace_port for its traffic or, with opened: true, to see who opens
+      ports and whether they close them.
       """)
     else
       err -> error_result(:ports, err)
@@ -776,11 +926,14 @@ defmodule OtpDebugMcp.Checks do
       Stop(),
       Flush = fun F() -> receive {monitor, _, _, _} -> F() after 0 -> ok end end,
       Flush(),
-      Who = lists:usort([W || {W, _, _} <- Events, is_pid(W)]),
-      Describe = fun(P) ->
-        {P, catch proc_lib:translate_initial_call(P),
-         catch erlang:process_info(P, [registered_name, current_function])}
-      end,
+      Who = lists:usort([W || {W, _, _} <- Events, is_pid(W) orelse is_port(W)]
+                        ++ [I || {_, K, I} <- Events, K =:= busy_port orelse K =:= busy_dist_port, is_port(I)]),
+      Describe = fun(P) when is_pid(P) ->
+                       {P, Initial(P),
+                        catch erlang:process_info(P, [registered_name, current_function])};
+                    (P) ->
+                       {P, port, catch [erlang:port_info(P, name), erlang:port_info(P, connected)]}
+                 end,
       {How, Events, [Describe(P) || P <- Who]}
   end.
   """
@@ -792,7 +945,7 @@ defmodule OtpDebugMcp.Checks do
       MaxEvents: @monitor_events
     ]
 
-    case remote_eval(@system_monitor, bindings) do
+    case remote_eval(@supervisor_funs <> @initial_call <> @system_monitor, bindings) do
       {:ok, {:held, holder, info}} ->
         result(
           :long_schedules,
@@ -963,6 +1116,53 @@ defmodule OtpDebugMcp.Checks do
     end
   end
 
+  # The sockets moving the most bytes, sent and received, over a window:
+  # recon:inet_window over inet sockets (ports). Sockets of the socket
+  # module aren't covered.
+  @socket_window_ms 1_000
+  @socket_details ~S"""
+  [{P, catch inet:peername(P), catch inet:sockname(P), catch erlang:port_info(P, connected)} || P <- Ports].
+  """
+  def run(:socket_traffic) do
+    with {:ok, top} <- Target.rpc(:recon, :inet_window, [:oct, 5, @socket_window_ms], 10_000),
+         top = Enum.filter(top, fn {_, bytes, _} -> bytes > 0 end),
+         {:ok, details} <- remote_eval(@socket_details, Ports: Enum.map(top, &elem(&1, 0))) do
+      details = Map.new(details, fn {p, peer, local, owner} -> {p, {peer, local, owner}} end)
+      owners = describe_owners(for {_, {_, _, {:connected, o}}} <- details, do: o)
+
+      sockets =
+        for {port, bytes, totals} <- top do
+          {peer, local, owner} = Map.get(details, port, {nil, nil, nil})
+          owner = with {:connected, o} <- owner, do: o, else: (_ -> nil)
+
+          %{
+            port: Format.inspect(port),
+            bytes_per_s: round(bytes * 1000 / @socket_window_ms),
+            recv_bytes_total: totals[:recv_oct],
+            send_bytes_total: totals[:send_oct],
+            owner: Format.inspect(owner)
+          }
+          |> Map.merge(peer_field(with {:ok, a} <- peer, do: a, else: (_ -> :none)))
+          |> Map.merge(
+            case local do
+              {:ok, {ip, p}} -> %{local: "#{:inet.ntoa(ip)}:#{p}"}
+              _ -> %{}
+            end
+          )
+          |> Map.merge(Map.get(owners, owner, %{}))
+        end
+
+      result(:socket_traffic, :ok, sockets, """
+      The inet sockets that sent and received the most bytes over a 1s
+      window (informational: something is always on top), with their peer,
+      local address and owner: a chatty client, a hot upstream, or a
+      replication stream. Sockets of the socket module aren't covered.
+      """)
+    else
+      err -> error_result(:socket_traffic, err)
+    end
+  end
+
   # Busiest processes by reductions (CPU) over a sampling window.
   def run(:top_reductions) do
     with {:ok, top} <- Target.rpc(:recon, :proc_window, [:reductions, 5, 1_000], 10_000) do
@@ -984,6 +1184,78 @@ defmodule OtpDebugMcp.Checks do
   end
 
   # -- Helpers -------------------------------------------------------------------
+
+  # Each port's type and owner, for snapshots: lighter than the ports
+  # check's scan.
+  @port_owners ~S"""
+  [{N, O, X} || P <- erlang:ports(),
+                {name, N} <- [erlang:port_info(P, name)],
+                {connected, O} <- [erlang:port_info(P, connected)],
+                X <- [case erlang:port_info(P, os_pid) of {os_pid, Os} -> Os; _ -> undefined end]].
+  """
+  @doc "The node's ports counted by type and by owner, for snapshots."
+  def port_counts do
+    with {:ok, ports} <- remote_eval(@port_owners) do
+      {:ok,
+       %{
+         by_type:
+           Enum.frequencies_by(ports, fn {n, _, x} -> port_type({nil, n, nil, x, 0, 0, nil}) end),
+         by_owner: Enum.frequencies_by(ports, &elem(&1, 1))
+       }}
+    end
+  end
+
+  @doc "Names and initial calls of processes owning ports, for snapshot diffs."
+  def owners(pids), do: describe_owners(pids)
+
+  # A port's type: its driver's name, or for an external program the
+  # program, without its arguments or directory.
+  defp port_type({_, name, _, os_pid, _, _, _}) when is_integer(os_pid) do
+    program = name |> to_string() |> String.split(" ", parts: 2) |> hd() |> Path.basename()
+    "external: #{program}"
+  end
+
+  defp port_type({_, name, _, _, _, _, _}), do: to_string(name)
+
+  defp peer_field({ip, port}) when is_tuple(ip), do: %{peer: "#{:inet.ntoa(ip)}:#{port}"}
+  defp peer_field(_), do: %{}
+
+  # The name and initial call of each owner process, for the findings.
+  defp describe_owners(pids) do
+    case remote_eval(@supervisor_funs <> @initial_call <> @describe_owners,
+           Pids: Enum.uniq(Enum.filter(pids, &is_pid/1))
+         ) do
+      {:ok, list} ->
+        Map.new(list, fn {pid, initial, info} -> {pid, owner_fields(initial, info)} end)
+
+      _ ->
+        %{}
+    end
+  end
+
+  defp owner_fields(initial, info) when is_list(info) do
+    name = info[:registered_name]
+
+    %{owner_initial_call: Format.inspect(initial)}
+    |> put_if(:owner_name, Format.inspect(name), is_atom(name) and name not in [nil, []])
+    |> put_if(
+      :owner_blocked,
+      "in #{Format.inspect(info[:current_function])}, until the port takes more data",
+      blocked_sending?(info)
+    )
+  end
+
+  defp owner_fields(initial, _info), do: %{owner_initial_call: Format.inspect(initial)}
+
+  # A sender to a full inet socket waits in prim_inet:send for the reply
+  # the socket gives once it takes more; one sending to another busy port
+  # is suspended.
+  defp blocked_sending?(info) do
+    info[:status] == :suspended or match?({:prim_inet, :send, _}, info[:current_function])
+  end
+
+  defp put_if(map, key, value, true), do: Map.put(map, key, value)
+  defp put_if(map, _key, _value, false), do: map
 
   @doc "The memory the OS charges the node, and how it was measured."
   def os_memory, do: remote_eval(@os_memory)
@@ -1051,6 +1323,7 @@ defmodule OtpDebugMcp.Checks do
       |> Enum.map(fn {{kind, w, port}, n} ->
         %{kind: kind, pid: Format.inspect(w), port: Format.inspect(port), times: n}
         |> Map.merge(describe_process(w, who))
+        |> Map.merge(describe_port(port, who))
       end)
 
     worst = long |> Enum.map(& &1.max_ms) |> Enum.max(fn -> 0 end)
@@ -1112,10 +1385,26 @@ defmodule OtpDebugMcp.Checks do
     end
   end
 
-  defp describe_process(_port, _who), do: %{}
+  defp describe_process(port, who), do: describe_port(port, who)
+
+  # A port in a long_schedules event: its driver or program, and owner.
+  defp describe_port(port, who) when is_port(port) do
+    case Map.get(who, port) do
+      {:port, [{:name, name}, {:connected, owner}]} ->
+        %{port_type: to_string(name), port_owner: Format.inspect(owner)}
+
+      _ ->
+        %{}
+    end
+  end
+
+  defp describe_port(_other, _who), do: %{}
 
   @doc "Erlang funs InitialCall/1 and History/1, for code evaluated on the target."
   def supervisor_funs, do: @supervisor_funs
+
+  @doc "Erlang fun Initial/1 (after supervisor_funs/0), a process's initial call."
+  def initial_call_fun, do: @initial_call
 
   @doc "Erlang fun SysSafe/1, for code evaluated on the target."
   def sys_safe_fun, do: @sys_safe
