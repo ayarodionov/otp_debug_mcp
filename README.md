@@ -418,8 +418,9 @@ doesn't support yet.
 follow along with on the demo nodes below: the prompt, every tool call
 with its real result, and the conclusion, for a mailbox that never
 drains, a crash loop, one bad node in a cluster, trying the crash loop's
-fix on the node with `load_module`, and a bug that exists only in code a
-macro generated.
+fix on the node with `load_module`, a bug that exists only in code a
+macro generated, and a Phoenix route shadowed by one `resources`
+generates.
 
 ## Demo targets
 

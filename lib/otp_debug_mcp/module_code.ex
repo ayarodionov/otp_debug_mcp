@@ -272,21 +272,44 @@ defmodule OtpDebugMcp.ModuleCode do
   """
   def origin(%{debug_info: :elixir, defs: defs, source: source}, f) do
     case Enum.find(defs.definitions, fn {fa, _, _, _} -> fa == def_key(f) end) do
-      {_, kind, meta, clauses} -> elixir_origin(kind, meta, clauses, source)
+      {_, kind, meta, clauses} -> elixir_origin(kind, meta, clauses, source, macro_lines(defs))
       nil -> compiler_origin(f) || line_origin(f, source)
     end
   end
 
   def origin(%{source: source}, f), do: compiler_origin(f) || line_origin(f, source)
 
-  defp elixir_origin(kind, meta, clauses, source) do
+  # The lines where macros were called, and whose: where functions a
+  # macro generated say it was called.
+  defp macro_lines(defs) do
+    for {_, _, meta, _} <- defs.definitions,
+        meta[:context],
+        into: %{},
+        do: {meta[:line], meta[:context]}
+  end
+
+  defp elixir_origin(kind, meta, clauses, source, macro_lines) do
     base = %{kind: to_string(kind), clauses: length(clauses)}
 
-    case meta[:context] do
-      nil ->
+    case {meta[:context], Map.get(macro_lines, meta[:line])} do
+      # Some macros define functions in a way that doesn't record them as
+      # the macro's (Phoenix.Router's __match_route__/3, built in its
+      # __before_compile__). One defined on the line where a macro was
+      # called, as `use` is, is that macro's, not code written there.
+      {nil, context} when context != nil ->
+        base
+        |> Map.put(:generated_by, "probably a macro of #{inspect(context)}")
+        |> Map.put(:called_at, "#{source}:#{meta[:line]}")
+        |> Map.put(
+          :note,
+          "the debug info doesn't name the macro, but it's defined on the line where " <>
+            "#{inspect(context)}'s macro was called"
+        )
+
+      {nil, nil} ->
         Map.put(base, :written_at, "#{source}:#{meta[:line]}")
 
-      context ->
+      {context, _} ->
         base
         |> Map.put(:generated_by, "a macro of #{inspect(context)}")
         |> Map.put(:called_at, "#{source}:#{meta[:line]}")

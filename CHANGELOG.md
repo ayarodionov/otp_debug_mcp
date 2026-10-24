@@ -29,6 +29,12 @@
   source never mentions `:id`, and it compiles without a warning;
   `module_code` shows the router's expanded `__match_route__/3` clauses
   in matching order.
+- `module_code` reports a function some macros define without recording
+  it as theirs, such as Phoenix.Router's `__match_route__/3`, as
+  "probably a macro of" the macro called on the line it's defined on,
+  rather than as written there.
+- `docs/walkthroughs.md` has a sixth recorded session: the Phoenix demo's
+  shadowed search route, found from the node alone.
 - CI also tests against an OTP 29 node (`new_otp`): every check,
   `trace_calls`, `profile` and `module_code`.
 

@@ -1,6 +1,6 @@
 # Walkthroughs
 
-Five debugging sessions against the demo nodes in `examples/`, start to
+Six debugging sessions against the demo nodes in `examples/`, start to
 finish, for following along on your own machine. Each one gives the
 command that starts the demo, the prompt, every tool call the agent made
 with the part of its result that mattered, and the conclusion. The
@@ -23,7 +23,8 @@ Contents:
 3. [One bad node in a cluster](#3-one-bad-node-in-a-cluster)
 4. [Trying the fix on the live node](#4-trying-the-fix-on-the-live-node)
 5. [Code that a macro generated](#5-code-that-a-macro-generated)
-6. [Cleaning up](#cleaning-up)
+6. [A Phoenix route that macros shadowed](#6-a-phoenix-route-that-macros-shadowed)
+7. [Cleaning up](#cleaning-up)
 
 ---
 
@@ -610,6 +611,117 @@ source: it exists only after expansion.
   `Macro.expand_once/2` of a `timed` call, catches it.
 - **Correct the data.** Charges already recorded stay doubled, for every
   account charged through a `timed` route.
+
+---
+
+## 6. A Phoenix route that macros shadowed
+
+```sh
+examples/elixir/run.sh phoenix
+```
+
+`phoenix_ex` runs `phoenix_shop`, a small Phoenix 1.8 JSON API, on port
+4040, with a built-in shopper that calls it over HTTP every 500 ms. Its
+router:
+
+```elixir
+scope "/api", PhoenixShopWeb do
+  pipe_through :api
+
+  resources "/products", ProductController, only: [:index, :show]
+  get "/products/search", ProductController, :search
+end
+```
+
+> `phoenix_ex@yourhost` runs a Phoenix API. Product search
+> (`GET /api/products/search?q=...`) always returns 404 "product not
+> found", but opening a product (`GET /api/products/2`) works. Find out
+> why.
+
+As in walkthrough 5, only the otp-debug tools were allowed: the agent saw
+the node, not the source.
+
+**`connect`**, then **`diagnose`**: every check `ok`. A 404 isn't a crash,
+so nothing on the node looks wrong.
+
+**`module_code(module: "PhoenixShopWeb.Router")`** (after a first guess at
+the name, `PhoenixEx.Router`, that the node doesn't have). Nearly every
+function in it comes from Phoenix's macros:
+
+```json
+{"function": "__match_route__/3", "clauses": 4, "kind": "def",
+ "generated_by": "probably a macro of Phoenix.Router",
+ "called_at": "lib/phoenix_shop_web/router.ex:2",
+ "note": "the debug info doesn't name the macro, but it's defined on the line where Phoenix.Router's macro was called"}
+{"function": "call/2", "generated_by": "a macro of Phoenix.Router",
+ "called_at": "lib/phoenix_shop_web/router.ex:2",
+ "macro_code_at": "deps/phoenix/lib/phoenix/router.ex:468"}
+{"function": "api/2", "generated_by": "a macro of Phoenix.Router",
+ "called_at": "lib/phoenix_shop_web/router.ex:4"}
+```
+
+`__match_route__/3` is the function Phoenix generates from the routes:
+one clause per route, tried in order. `api/2` is the `:api` pipeline.
+
+**`module_code(module: "PhoenixShopWeb.Router", function: "__match_route__/3")`**,
+trimmed to each clause's head and route:
+
+```elixir
+def __match_route__("GET", ["api", "products"], _) do
+  {%{route: "/api/products", plug_opts: :index, ...}, ...}
+end
+
+def __match_route__("GET", ["api", "products", arg0], _) do
+  {%{route: "/api/products/:id", plug_opts: :show, path_params: %{"id" => arg0}, ...}, ...}
+end
+
+def __match_route__("GET", ["api", "products", "search"], _) do
+  {%{route: "/api/products/search", plug_opts: :search, ...}, ...}
+end
+
+def __match_route__(_verb, _path, _host) do
+  :error
+end
+```
+
+The second clause matches any third segment, `"search"` included, so the
+third can never run. That second clause is the `show` route `resources`
+generated: the router's source never mentions `:id`.
+
+**`trace_calls(module: "PhoenixShopWeb.ProductController", max_events: 20)`**
+catches the shopper's next search, trimmed to the action and its params:
+
+```
+<0.526.0> 'Elixir.PhoenixShopWeb.ProductController':show(#{...}, #{<<"id">> => <<"search">>,<<"q">> => <<"lamp">>})
+<0.526.0> 'Elixir.PhoenixShopWeb.ProductController':show/2 --> #{..., status => 404, ...}
+```
+
+`search/2` is never called.
+
+**The answer.** `resources "/products", ..., only: [:index, :show]`
+generates `GET /api/products/:id`, and it comes before
+`get "/products/search"` in the router, so it matches `/api/products/search`
+first. Search requests reach `show` with `id: "search"`, which finds no
+such product and returns 404. `GET /api/products/2` works because `"2"` is
+a real id.
+
+**Fixes.**
+
+- **Put the specific route first.** Move
+  `get "/products/search", ProductController, :search` above the
+  `resources` line. The agent, which couldn't see the source, suggested
+  replacing `resources` with three explicit `get` routes in that order,
+  which also works.
+- **Check the routes as Phoenix expands them.** `mix phx.routes` lists
+  them in matching order, with `/api/products/:id` above
+  `/api/products/search`. This bug compiles without a warning, so that
+  list, or a test that requests `/api/products/search` and expects 200, is
+  what catches it.
+- **Watch for it with every generated route.** A `:id` route shadows
+  any literal path with the same verb and the same number of segments
+  declared after it. `resources` generates them for `show`, `update`
+  and `delete`, so `GET /products/:id` shadows `GET /products/search`,
+  and `DELETE /products/:id` would shadow a `DELETE /products/all`.
 
 ---
 

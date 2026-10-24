@@ -328,8 +328,9 @@ every request, and proposed the fix to the macro. Walkthrough 5 has the
 session. Against the Phoenix demo, whose search route is shadowed by the
 `GET /products/:id` that `resources` generates, the agent read the
 router's `__match_route__/3` clauses in matching order and caught a search
-arriving at `show` with `id: "search"`. That bug compiles without a
-warning; `mix phx.routes` also lists the routes in matching order. Against a release, it listed the six functions `use GenServer`
+arriving at `show` with `id: "search"` (walkthrough 6). That bug compiles
+without a warning; `mix phx.routes` also lists the routes in matching
+order. Against a release, it listed the six functions `use GenServer`
 generates and explained what each does with a message it doesn't handle.
 
 **Watch out.**
