@@ -71,6 +71,13 @@ print("load_module ->", r["content"][0]["text"][:120])
 if not r.get("isError") or "Nothing was loaded" not in r["content"][0]["text"]:
     failures.append("load_module: didn't refuse a client that can't ask the user")
 
+# Every node has lists on its code path, unlike the demos compiled in memory.
+err, text = call(10, "module_code", {"module": "lists"})
+funs = [] if err else json.loads(text)["functions"]
+print("module_code ->", "ERROR " + text[:300] if err else f"{len(funs)} functions of lists")
+if not err and not funs:
+    failures.append("module_code: no functions")
+
 err, text = call(4, "diagnose", {})
 if err:
     print("diagnose -> ERROR", text[:500])

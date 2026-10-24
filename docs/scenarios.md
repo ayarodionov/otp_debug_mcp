@@ -232,6 +232,25 @@ often line numbers, and the agent opens those files and reads the code. In
 testing, it went from a mailbox backlog to the `Process.sleep` in the
 offending `handle_cast/2` on its own.
 
+Code that macros generate isn't in the source to open: the callbacks `use
+GenServer` adds, the functions a router or a schema DSL defines, clauses
+built in a `for` loop. `module_code` reads them from the module's `.beam` on
+the node: which functions a macro generated, which macro and where it was
+called, the code after expansion, and which function a stack frame's
+`file:line` is in.
+
+> On `shop@staging`, `DemoShop.Cache` only defines `start_link/1` and
+> `init/1`. Which other functions does it have, and what happens when it
+> gets a call it doesn't handle?
+
+In testing against a release, the agent listed the six functions `use
+GenServer` generates, read their code, and explained that the default
+`handle_call/3` and `handle_cast/2` raise and crash the process, while
+`handle_info/2` only logs. A release strips the code after expansion (the
+debug info) by default, so there the code is BEAM assembly, but where each
+function came from is still known. To keep the expanded code on a staging
+node, build its release with `strip_beams: [keep: ["Dbgi"]]`.
+
 ### 10. Seeing what a function really receives
 
 **Situation.** Production behaves differently from your tests, and you

@@ -45,6 +45,13 @@ raw introspection when a purpose-built tool exists.
      module is busy. `profile` counts only time spent running: a function
      that's slow because it waits (receive, sleep, calls to other
      processes) shows little time, and `trace_calls` timestamps show it.
+   - A function you can't find in the source, or a stack frame in a
+     library's file (`gen_server.ex:887`, a router, a schema) →
+     `module_code`: which functions a macro generated (`use GenServer`,
+     routers, DSLs), the code that actually runs after macro expansion,
+     and which function a `file:line` is in. Then trace or profile those
+     functions by name like any other. On a stripped release the code is
+     BEAM assembly, but where each function came from is still there.
 4. **Confirm trends before concluding.** One snapshot is a guess; a diff is
    evidence. Prefer two diffs 60s apart for leak claims.
 

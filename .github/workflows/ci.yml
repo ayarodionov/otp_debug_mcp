@@ -93,6 +93,41 @@ jobs:
         if: always()
         run: docker logs otp26
 
+  new-otp:
+    name: OTP 29 target
+    runs-on: ubuntu-24.04
+    env:
+      MIX_ENV: test
+    steps:
+      - uses: actions/checkout@v7
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28"
+          elixir-version: "1.19"
+      - uses: actions/cache@v6
+        with:
+          path: |
+            deps
+            _build
+          key: mix-test-28-${{ hashFiles('mix.lock') }}
+      - run: mix deps.get
+      - run: mix compile
+      # A newer OTP than the tool's: its .beam files need its own disassembler.
+      - name: Start an OTP 29 target
+        run: |
+          docker run -d --name otp29 -p 9101:9101 erlang:29-slim \
+            erl -noinput -name new@127.0.0.1 -setcookie testcookie -erl_epmd_port 9101 \
+            -eval 'spawn(fun() -> timer:apply_interval(100, queue, new, []), receive after infinity -> ok end end).'
+          sleep 5
+      - run: mix test --only new_otp
+        env:
+          NEW_OTP_NODE: new@127.0.0.1
+          NEW_OTP_COOKIE: testcookie
+          ERL_FLAGS: -erl_epmd_port 9101 -dist_listen false
+      - name: Target log
+        if: always()
+        run: docker logs otp29
+
   release:
     name: Release over MCP stdio
     runs-on: ubuntu-24.04

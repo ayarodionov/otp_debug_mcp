@@ -61,6 +61,14 @@ defmodule OtpDebugMcp.OldOtpTest do
              Tracer.trace("queue", "new", 2, 5_000)
   end
 
+  test "module_code reads an older OTP's .beam here" do
+    assert {:ok, info} = OtpDebugMcp.ModuleCode.fetch("queue")
+    assert info.disassembled == :here
+    in2 = Enum.find(info.functions, &(&1.name == :in and &1.arity == 2))
+    assert %{written_at: written} = OtpDebugMcp.ModuleCode.origin(info, in2)
+    assert written =~ ~r/queue\.erl:\d+$/
+  end
+
   test "profile counts calls in the legacy trace session, and clears up" do
     assert {:ok, %{backend: "legacy" <> _, by_time: rows}} =
              Profiler.profile({:module, "queue", nil}, 1_000)
