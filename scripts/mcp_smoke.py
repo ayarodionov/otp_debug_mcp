@@ -7,6 +7,7 @@ returns no events, a profile in which no function was called, or a server
 that doesn't exit with status 0 when stdin closes.
 """
 import json
+import os
 import signal
 import subprocess
 import sys
@@ -91,6 +92,27 @@ else:
         err, text = call(40, "process_info", {"pid": printed_pid, "include_state": True})
         state = "" if err else json.loads(text)["state"]
         print(f"process_info({printed_pid}) ->", "ERROR " + text if err else "ok; state: " + state[:90])
+
+err, text = call(11, "recent_errors", {"duration_ms": 2500})
+groups = [] if err else json.loads(text)["groups"]
+print("recent_errors ->", "ERROR " + text[:300] if err else f"{len(groups)} groups")
+for g in groups[:3]:
+    print(f"    {g['level']} {g['kind']}: {g.get('reason') or g.get('message')} x{g['events']}")
+# A demo that's known to crash: SMOKE_EXPECT_CRASH names who.
+expected = os.environ.get("SMOKE_EXPECT_CRASH")
+if expected and not any(g["kind"] == "crash" and g.get("who") == expected for g in groups):
+    failures.append(f"recent_errors: no crash of {expected}")
+
+# A dump to read: SMOKE_CRASH_DUMP is its path, and SMOKE_CRASH_CAUSE the
+# cause expected.
+dump = os.environ.get("SMOKE_CRASH_DUMP")
+if dump:
+    err, text = call(12, "crash_dump", {"path": dump})
+    report = {} if err else json.loads(text)
+    cause = report.get("cause", {}).get("kind")
+    print("crash_dump ->", "ERROR " + text[:300] if err else f"{cause}; {report['findings'][:2]}")
+    if not err and cause != os.environ.get("SMOKE_CRASH_CAUSE", cause):
+        failures.append(f"crash_dump: cause {cause}")
 
 if len(sys.argv) > 3:
     err, text = call(5, "trace_calls", {"module": sys.argv[3], "max_events": 3})

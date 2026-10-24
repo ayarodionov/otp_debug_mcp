@@ -213,6 +213,38 @@ defmodule OtpDebugMcp.Fixtures.CrashSup do
   end
 end
 
+defmodule OtpDebugMcp.Fixtures.DyingApp do
+  @moduledoc """
+  A permanent application whose only child crashes `ms` after it starts,
+  until its supervisor gives up (after one restart): the application
+  stops, and so the node, writing a crash dump. Its logging is turned off.
+  """
+  use Application
+
+  alias OtpDebugMcp.Fixtures.Crasher
+
+  def start(ms) do
+    spec =
+      {:application, :dying_app,
+       [
+         description: ~c"test fixture",
+         vsn: ~c"1.0.0",
+         modules: [__MODULE__, Crasher],
+         registered: [],
+         applications: [:kernel, :stdlib, :elixir],
+         mod: {__MODULE__, ms}
+       ]}
+
+    :logger.set_primary_config(:level, :none)
+    :ok = :application.load(spec)
+    :ok = :application.start(:dying_app, :permanent)
+  end
+
+  @impl true
+  def start(_type, ms),
+    do: Supervisor.start_link([{Crasher, ms}], strategy: :one_for_one, max_restarts: 1)
+end
+
 defmodule OtpDebugMcp.Fixtures.Spawner do
   @moduledoc "Keeps a node busy spawning a short-lived process every `interval` ms."
 

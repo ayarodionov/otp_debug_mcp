@@ -18,6 +18,8 @@ defmodule OtpDebugMcp.Server do
   component(Tools.Connect)
   component(Tools.Diagnose)
   component(Tools.RunCheck)
+  component(Tools.RecentErrors)
+  component(Tools.CrashDump)
   component(Tools.ProcessInfo)
   component(Tools.PortInfo)
   component(Tools.SupervisionTree)

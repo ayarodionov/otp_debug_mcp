@@ -64,6 +64,8 @@ introspection primitives, but an encoded diagnostic playbook in the spirit of
 | `connect` | Attach to a node (name + optional cookie) as a hidden node |
 | `diagnose` | Full health battery, findings ranked worst-first |
 | `run_check` | One check: `message_queues`, `supervisor_restarts`, `binary_leak`, `memory_breakdown`, `allocator_fragmentation`, `process_count`, `atom_table`, `ets_tables`, `ports`, `native_memory`, `native_code`, `schedulers`, `long_schedules`, `socket_traffic`, `top_reductions` |
+| `recent_errors` | The errors the node logs, grouped by who failed and why: crashes with their stack and the reports they caused, error and warning messages with where they were logged, and the errors in the node's log files from before; listens for a window, or in the background |
+| `crash_dump` | Why a node died, from its `erl_crash.dump`: what the slogan means, the process that was running, the biggest processes and mailboxes with their stacks, the first messages of the longest mailbox, memory, ETS and ports; no connection needed |
 | `process_info` | Deep-inspect one process: recon:info, an age estimate, its supervisor's restart history, optional `sys:get_state` |
 | `supervision_tree` | Render an application's supervision tree, with each supervisor's strategy and restart history |
 | `port_info` | Deep-inspect one port: a socket's addresses, statistics and options, an external program's OS pid, its owner and queue |
@@ -405,7 +407,8 @@ example prompt, the tools involved, and what to watch out for:
 
 - **Production problems:** memory growth, slow requests, high CPU, stuck
   processes and call timeouts, approaching system limits, crash loops and
-  intermittent failures, one bad node in a cluster, incident triage, NIFs
+  intermittent failures, errors only the logs show, a node that died, one
+  bad node in a cluster, incident triage, NIFs
   that block a scheduler or leak native memory, leaking sockets and
   external programs, slow peers
 - **Understanding and verifying:** tracing a runtime problem to the code in
@@ -424,8 +427,9 @@ with its real result, and the conclusion, for a mailbox that never
 drains, a crash loop, one bad node in a cluster, trying the crash loop's
 fix on the node with `load_module`, a bug that exists only in code a
 macro generated, a Phoenix route shadowed by one `resources` generates,
-NIFs that block a scheduler and leak native memory, and leaking sockets
-and external programs with a slow peer.
+NIFs that block a scheduler and leak native memory, leaking sockets and
+external programs with a slow peer, errors only the logs show, and a node
+that died, from its crash dump.
 
 ## Demo targets
 
@@ -436,7 +440,7 @@ background, on this host with `-sname`, and `run.sh stop` stops them:
 | Language | Directory | Demos |
 |---|---|---|
 | Elixir | [examples/elixir](examples/elixir) | a mailbox that never drains, a crash loop, a cluster with one bad node, a billing service whose macro DSL records every charge twice, a Phoenix API whose search route is shadowed by one `resources` generates, and a Mix release with its own cookie |
-| Erlang | [examples/erlang](examples/erlang) | a mailbox that never drains, an OTP application in a crash loop, a session store leaking atoms and ETS rows, a cluster with one bad node, a C NIF library that blocks a scheduler and leaks native memory, and a shop that leaks sockets and external programs and fills a slow peer's socket |
+| Erlang | [examples/erlang](examples/erlang) | a mailbox that never drains, an OTP application in a crash loop, a session store leaking atoms and ETS rows, a cluster with one bad node, a C NIF library that blocks a scheduler and leaks native memory, a shop that leaks sockets and external programs and fills a slow peer's socket, an orders service whose errors only its logs show, and a node that runs out of memory and leaves a crash dump |
 | Gleam | [examples/gleam](examples/gleam) | a mailbox that never drains, a supervised actor whose `let assert` panics in a loop, and a job runner leaking processes |
 | LFE | [examples/lfe](examples/lfe) | a mailbox that never drains, an OTP application in a crash loop, and an index whose slices pin whole binaries |
 

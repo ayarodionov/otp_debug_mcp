@@ -19,6 +19,7 @@ defmodule OtpDebugMcp.TestTarget do
     OtpDebugMcp.Fixtures.Worker,
     OtpDebugMcp.Fixtures.Crasher,
     OtpDebugMcp.Fixtures.CrashSup,
+    OtpDebugMcp.Fixtures.DyingApp,
     OtpDebugMcp.Fixtures.Spawner,
     OtpDebugMcp.Fixtures.Fragmenter,
     OtpDebugMcp.Fixtures.Hog,
@@ -32,7 +33,8 @@ defmodule OtpDebugMcp.TestTarget do
 
   @doc """
   Start a target node. Options: `:name`, `:cookie`, `longnames: true` (as
-  `name@127.0.0.1`), `recon: true` (recon application loaded, as in a
+  `name@127.0.0.1`), `:env` (environment variables, as `{name, value}`),
+  `recon: true` (recon application loaded, as in a
   release that depends on it), `:args` (more VM flags, as charlists),
   `erlang: true` (the Elixir application isn't started, so the node looks
   like a plain Erlang node; fixtures still load, but only those that need
@@ -52,7 +54,8 @@ defmodule OtpDebugMcp.TestTarget do
       connection: :standard_io,
       args:
         [~c"-setcookie", ~c"#{cookie}"] ++
-          Enum.flat_map(paths, &[~c"-pa", &1]) ++ Keyword.get(opts, :args, [])
+          Enum.flat_map(paths, &[~c"-pa", &1]) ++ Keyword.get(opts, :args, []),
+      env: for({k, v} <- Keyword.get(opts, :env, []), do: {~c"#{k}", ~c"#{v}"})
     }
 
     # Always say which: otherwise :peer takes the name mode of the test

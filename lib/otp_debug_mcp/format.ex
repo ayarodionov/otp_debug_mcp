@@ -38,13 +38,16 @@ defmodule OtpDebugMcp.Format do
   """
   def inspect(term, opts \\ []) do
     node = Target.connected_node()
-    localized = localize(term, node)
-
-    case Target.syntax(node) do
-      :erlang -> erlang_syntax(localized, opts)
-      _ -> Kernel.inspect(localized, opts)
-    end
+    inspect_as(localize(term, node), Target.syntax(node), opts)
   end
+
+  @doc """
+  A term in `:erlang` or `:elixir` syntax, whatever the target: for terms
+  that come from elsewhere, such as a crash dump. Pids and ports in them
+  are `Printed` already.
+  """
+  def inspect_as(term, :erlang, opts), do: erlang_syntax(term, opts)
+  def inspect_as(term, _syntax, opts), do: Kernel.inspect(term, opts)
 
   # Erlang's printer knows nothing of Printed, so localized pids and ports
   # stand in as placeholder atoms while it prints, then are swapped back.

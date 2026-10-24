@@ -28,3 +28,5 @@ otp_debug_mcp-*.tar
 /examples/erlang/native_shop/priv/
 /examples/gleam/build/
 /examples/lfe/ebin/
+/examples/erlang/log/
+/examples/erlang/dumps/

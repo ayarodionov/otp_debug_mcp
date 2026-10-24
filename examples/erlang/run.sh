@@ -7,6 +7,8 @@
 #     examples/erlang/run.sh cluster     # erl_a, erl_b, erl_c: only erl_b has the shop bug
 #     examples/erlang/run.sh native      # native_erl: NIFs that block a scheduler and leak memory
 #     examples/erlang/run.sh ports       # ports_erl: leaked sockets, a slow consumer, external programs
+#     examples/erlang/run.sh orders      # orders_erl: errors that only its logs show
+#     examples/erlang/run.sh crash       # crash_erl: runs out of memory within a minute, leaving a crash dump
 #     examples/erlang/run.sh stop        # stop them all
 #
 # Each node runs in the background, named with -sname on this host, with
@@ -19,7 +21,7 @@ host=$(hostname -s)
 build() {
   mkdir -p "$here/ebin"
   erlc +debug_info -o "$here/ebin" "$here"/src/*.erl
-  cp "$here/src/payments.app" "$here/ebin/"
+  cp "$here/src/payments.app" "$here/src/orders.app" "$here/ebin/"
 }
 
 # The native_shop application and its NIF library, built with the system's
@@ -48,6 +50,26 @@ case "${1:-}" in
   payments) build; start payments_erl "{ok, _} = application:ensure_all_started(payments)" ;;
   sessions) build; start sessions_erl "sessions:start()" ;;
   ports) build; start ports_erl "ok = ports_shop:start()" ;;
+  orders)
+    build
+    mkdir -p "$here/log"
+    rm -f "$here/log/orders_erl.log"
+    erl -sname orders_erl -pa "$here/ebin" -noshell -detached \
+      -orders log_file "\"$here/log/orders_erl.log\"" \
+      -eval "{ok, _} = application:ensure_all_started(orders)"
+    echo "started orders_erl@$host, logging to $here/log/orders_erl.log"
+    ;;
+  crash)
+    # The VM may use only a 300 MB super carrier, so it runs out of memory
+    # in under a minute, wherever it runs.
+    build
+    mkdir -p "$here/dumps"
+    rm -f "$here/dumps/crash_erl.dump"
+    ERL_CRASH_DUMP="$here/dumps/crash_erl.dump" \
+      erl +MMscs 300 +MMsco true +Musac false -sname crash_erl -pa "$here/ebin" -noshell -detached \
+      -eval "ok = events_shop:start()"
+    echo "started crash_erl@$host; it dies within a minute, writing $here/dumps/crash_erl.dump"
+    ;;
   native)
     build_native
     erl -sname native_erl -pa "$here/native_shop/ebin" -noshell -detached \
@@ -64,11 +86,12 @@ case "${1:-}" in
   stop)
     erl -sname "stopper_$$" -noshell -eval "
       [rpc:call(list_to_atom(N ++ \"@$host\"), init, stop, [], 2000)
-       || N <- [\"shop_erl\", \"payments_erl\", \"sessions_erl\", \"native_erl\", \"ports_erl\", \"erl_a\", \"erl_b\", \"erl_c\"]],
+       || N <- [\"shop_erl\", \"payments_erl\", \"sessions_erl\", \"native_erl\", \"ports_erl\",
+                \"orders_erl\", \"crash_erl\", \"erl_a\", \"erl_b\", \"erl_c\"]],
       halt()."
     ;;
   *)
-    echo "usage: $0 shop|payments|sessions|cluster|native|ports|stop" >&2
+    echo "usage: $0 shop|payments|sessions|cluster|native|ports|orders|crash|stop" >&2
     exit 1
     ;;
 esac

@@ -293,6 +293,196 @@ defmodule OtpDebugMcp.Tools do
     end
   end
 
+  defmodule RecentErrors do
+    @moduledoc """
+    The errors the node logs: crashes (with who crashed, the reason and the
+    stack), supervisor reports, and error and warning messages, grouped by
+    who failed and why, counted, with an example of each. Listens for
+    duration_ms; with watch_minutes it keeps listening in the background
+    instead, and later calls return what it caught. Also reads the newest
+    error entries of the node's log files, which hold what was logged
+    before. Listening adds a logger handler to the node, removed when the
+    window or watch ends; nothing is loaded there.
+    """
+    use Anubis.Server.Component, type: :tool
+
+    alias OtpDebugMcp.{Errors, Tools}
+
+    schema do
+      field(:duration_ms, :integer, description: "How long to listen (default 10000, max 60000)")
+
+      field(:watch_minutes, :integer,
+        description:
+          "Instead of waiting: keep listening in the background for this long (max 240); " <>
+            "call recent_errors again to see what it caught"
+      )
+
+      field(:stop, :boolean, description: "Return what the background watch caught and end it")
+
+      field(:level, :string,
+        description: "Lowest level to collect: error or warning (default), or any logger level"
+      )
+    end
+
+    @impl true
+    def execute(params, frame) do
+      with {:ok, level} <- level(params[:level]),
+           {:ok, result} <- run(params, level) do
+        Tools.json_response(frame, Map.merge(result, log_files(level)))
+      else
+        {:error, reason} -> Tools.error_response(frame, reason)
+      end
+    end
+
+    defp run(%{stop: true}, _level) do
+      case Errors.read(true) do
+        {:ok, report} -> {:ok, summary(report, %{watch: Errors.window(report), stopped: true})}
+        :none -> {:error, "no watch is running on this node"}
+        err -> err
+      end
+    end
+
+    defp run(%{watch_minutes: minutes}, level) when is_integer(minutes) do
+      minutes = minutes |> min(240) |> max(1)
+
+      case Errors.start(level, minutes * 60_000) do
+        {:ok, :started} ->
+          {:ok,
+           %{
+             watching: "#{level} and above, for #{minutes} min",
+             hint:
+               "Call recent_errors again (no arguments) to see what it caught so far, " <>
+                 "or with stop: true to end it."
+           }}
+
+        {:ok, :already_running} ->
+          with {:ok, report} <- Errors.read(false) do
+            {:ok,
+             summary(report, %{
+               watch: Errors.window(report),
+               note: "a watch was already running; this is what it caught so far"
+             })}
+          end
+
+        err ->
+          err
+      end
+    end
+
+    defp run(params, level) do
+      duration = (params[:duration_ms] || 10_000) |> min(60_000) |> max(100)
+
+      case Errors.listen(level, duration) do
+        {:ok, :window, report} ->
+          {:ok, summary(report, %{listened_ms: duration, level: level})}
+
+        {:ok, :watch, report} ->
+          {:ok,
+           summary(report, %{
+             watch: Errors.window(report),
+             note: "a background watch is running, so this is what it caught so far"
+           })}
+
+        err ->
+          err
+      end
+    end
+
+    defp summary(report, about) do
+      about
+      |> Map.merge(Errors.summarize(report))
+      |> Map.merge(hidden_levels(report))
+      |> Map.put(:interpretation, interpretation())
+    end
+
+    # Events below the node's primary level are never logged at all.
+    defp hidden_levels(%{primary_level: primary, level: level}) do
+      if level in Errors.levels() and primary in Errors.levels() and
+           Enum.find_index(Errors.levels(), &(&1 == primary)) <
+             Enum.find_index(Errors.levels(), &(&1 == level)) do
+        %{
+          warning:
+            "the node's primary logger level is #{primary}, so nothing below it is " <>
+              "logged at all, or seen here"
+        }
+      else
+        %{}
+      end
+    end
+
+    defp hidden_levels(_), do: %{}
+
+    defp log_files(level) do
+      case Errors.log_files(level) do
+        {:ok, []} -> %{log_files: "none found: the node logs to its console only, or elsewhere"}
+        {:ok, files} -> %{log_files: files}
+        {:error, reason} -> %{log_files: "unreadable: #{OtpDebugMcp.Format.inspect(reason)}"}
+      end
+    end
+
+    defp interpretation do
+      """
+      groups are the events caught while listening, worst level first, then \
+      the most frequent. A crash group is one process (who) failing for one \
+      reason, however often: reports counts the reports it caused, since one \
+      crash can log several (the behaviour's own, a crash report, and the \
+      supervisor's; Elixir nodes drop the last two unless handle_sasl_reports \
+      is set). processes is how many different processes it was: one, \
+      restarted and failing again, is a crash loop. stack is where it failed, \
+      innermost first, and called_with the arguments of a function_clause. \
+      A log group is one message logged from one place. log_files holds the \
+      newest error entries of the node's log files, from before listening \
+      started; entries are told apart by their format, so check the text. \
+      Next step: module_code with at: file:line for a frame of the stack, \
+      and trace_calls on that function to see the calls that fail.\
+      """
+    end
+
+    defp level(nil), do: {:ok, :warning}
+
+    defp level(name) do
+      case Enum.find(Errors.levels(), &(Atom.to_string(&1) == String.downcase(name))) do
+        nil -> {:error, "level must be one of: #{Enum.join(Errors.levels(), ", ")}"}
+        level -> {:ok, level}
+      end
+    end
+  end
+
+  defmodule CrashDump do
+    @moduledoc """
+    Why a node died, from its crash dump (erl_crash.dump, or where
+    ERL_CRASH_DUMP pointed): what the VM said (the slogan) and what it
+    means, the process that was running, the biggest processes and longest
+    mailboxes with their stacks, the first messages of the longest one, and
+    memory, ports, ETS and atoms, with what stands out. No connection is
+    needed: the dump is read on the machine running this server, so copy it
+    there first if the node ran elsewhere. Large dumps take a while.
+    """
+    use Anubis.Server.Component, type: :tool
+
+    alias OtpDebugMcp.Tools
+
+    schema do
+      field(:path, {:required, :string},
+        description:
+          "Path of the dump on the machine running this server, e.g. /srv/app/erl_crash.dump"
+      )
+
+      field(:process, :string,
+        description:
+          "Also show this process in full: its pid as the dump prints it, e.g. <0.88.0>"
+      )
+    end
+
+    @impl true
+    def execute(%{path: path} = params, frame) do
+      case OtpDebugMcp.CrashDump.analyze(Path.expand(path), process: params[:process]) do
+        {:ok, report} -> Tools.json_response(frame, report)
+        {:error, reason} -> Tools.error_response(frame, reason)
+      end
+    end
+  end
+
   defmodule SupervisionTree do
     @moduledoc """
     Render the supervision tree of one application on the target node, with

@@ -250,7 +250,9 @@ defmodule OtpDebugMcp.Checks do
         children whose pid changed during a #{div(@sample_ms, 1000)}s sample,
         with the exit_reason (including the stack trace, with file and line)
         of each one seen to die. Next step: read the code at the top of that
-        stack; trace_calls on the crashing function shows its arguments.
+        stack; trace_calls on the crashing function shows its arguments;
+        recent_errors collects the crash reports, for children that crash
+        less often than the sample catches.
         Unresponsive supervisors didn't answer within 1s, usually because
         they are blocked starting a child whose init hangs.
         """

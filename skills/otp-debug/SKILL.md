@@ -10,6 +10,13 @@ raw introspection when a purpose-built tool exists.
 
 ## Workflow
 
+0. **A node that already died?** No connection is needed:
+   `crash_dump(path)` on its `erl_crash.dump` says why (the slogan's
+   meaning, the biggest processes and mailboxes with their stacks, what
+   was in the longest mailbox). Ask the user to copy the dump to this
+   machine if it's on another one, or in a container or pod. A dump has
+   no logs: if the node is back up, `recent_errors` there shows what led
+   to it.
 1. **Connect first.** `connect(node, cookie?)`. If the user didn't give a node
    name, ask for it (and check `epmd -names` on the target host for candidates).
    If connection fails, relay the hint in the error — it's usually the cookie
@@ -38,6 +45,13 @@ raw introspection when a purpose-built tool exists.
      its `restarting_children` carry the exit reason and stack trace (file
      and line) when a child dies during the sample; then `trace_calls` on
      the crashing function to see its arguments.
+   - Errors the numbers don't show (users see failures, the node looks
+     healthy) → `recent_errors`: crashes grouped by who and why, with the
+     stack and the arguments of a `function_clause`, logged errors and
+     warnings with where they were logged, and the errors in the node's log
+     files from before it listened (an error at boot is there). For rare
+     errors, `watch_minutes` keeps listening in the background; call it
+     again later, and with `stop: true` when done.
    - CPU suspicion → `run_check(schedulers)` first; OS CPU% lies about the
      BEAM (busy-wait). Only if schedulers are pegged, use `top_reductions`,
      then `profile` on the module the top process is running, to see which

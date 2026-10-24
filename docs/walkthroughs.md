@@ -1,11 +1,11 @@
 # Walkthroughs
 
-Eight debugging sessions against the demo nodes in `examples/`, start to
+Ten debugging sessions against the demo nodes in `examples/`, start to
 finish, for following along on your own machine. Each one gives the
 command that starts the demo, the prompt, every tool call the agent made
 with the part of its result that mattered, and the conclusion. The
 results are real, recorded from Claude Code with the `otp-debug` skill
-installed (OTP 28, Elixir demos), trimmed to the fields that drove each
+installed (OTP 28; Elixir and Erlang demos), trimmed to the fields that drove each
 step. Numbers such as queue lengths, pids and restart counts will
 differ on your run; what they show won't.
 
@@ -26,7 +26,9 @@ Contents:
 6. [A Phoenix route that macros shadowed](#6-a-phoenix-route-that-macros-shadowed)
 7. [NIFs that block a scheduler and leak memory](#7-nifs-that-block-a-scheduler-and-leak-memory)
 8. [Leaking sockets, a slow peer, and external programs](#8-leaking-sockets-a-slow-peer-and-external-programs)
-9. [Cleaning up](#cleaning-up)
+9. [Errors only the logs show](#9-errors-only-the-logs-show)
+10. [A node that died](#10-a-node-that-died)
+11. [Cleaning up](#cleaning-up)
 
 ---
 
@@ -974,13 +976,183 @@ new reader process.
 
 ---
 
+## 9. Errors only the logs show
+
+```sh
+examples/erlang/run.sh orders
+```
+
+`orders_erl` runs `orders`, an OTP application that keeps working while
+it fails, and logs to `examples/erlang/log/orders_erl.log`. Nothing it
+does shows in the numbers: no queue builds up, nothing leaks.
+
+> `orders_erl@yourhost` loses some of the orders it imports, and payments
+> fail now and then, but its numbers look healthy. Find out why.
+
+Only the otp-debug tools were allowed. The session took a minute.
+
+**`connect`**, then **`diagnose`**. Everything is ok but
+`supervisor_restarts`, which caught the importer dying during its sample:
+
+```json
+{"check": "supervisor_restarts", "status": "warning",
+ "findings": {"restarted": [{"supervisor": "orders_sup", "max_restarts": 10, "max_seconds": 10,
+   "restarts_in_window": 5, "at_limit": false,
+   "restarting_children": [{"id": "orders_importer",
+     "exit_reason": "{badarg,[{erlang,binary_to_integer,[<<\"n/a\">>],...},{orders_importer,parse_line,1,[...,{line,26}]},..."}]}]}}
+```
+
+That's the import, but not the payments. **`recent_errors`** with
+`duration_ms: 15000` listens to the node's logger, and reads its log file:
+
+```json
+{"listened_ms": 15000, "events": 38, "by_level": {"error": 26, "warning": 12},
+ "groups": [
+   {"kind": "crash", "level": "error", "who": "orders_importer", "reason": "badarg",
+    "events": 24, "processes": 8, "supervisor": "orders_sup",
+    "reports": {"gen_server terminated": 8, "crash report": 8, "supervisor report": 8},
+    "stack": ["erlang:binary_to_integer/1",
+              "orders_importer:parse_line/1 (examples/erlang/src/orders_importer.erl:26)",
+              "orders_importer:handle_info/2 (examples/erlang/src/orders_importer.erl:18)", ...],
+    "called_with": "[<<\"n/a\">>]"},
+   {"kind": "log", "level": "error", "events": 2,
+    "message": "payment for order 2074 failed: {provider,timeout}",
+    "logged_at": "orders_payments:charge/3 (examples/erlang/src/orders_payments.erl:24)"},
+   {"kind": "log", "level": "warning", "events": 12,
+    "message": "payment provider slow: 597 ms for order 2073",
+    "logged_at": "orders_payments:charge/3 (examples/erlang/src/orders_payments.erl:26)"}],
+ "log_files": [{"file": ".../examples/erlang/log/orders_erl.log", "read": "all of it",
+   "matching_entries": 127,
+   "groups": [
+     {"level": "error", "entries": 1,
+      "first": "2026-10-24T16:45:13.748480-04:00 error: pricing rules: couldn't read priv/pricing_rules.csv (enoent); every order is charged its list price"},
+     {"level": "error", "entries": 27, "first": "... error: Generic server orders_importer terminating. Reason: {badarg,..."},
+     {"level": "error", "entries": 27, "first": "... error: crasher: initial call: orders_importer:init/1, ..."},
+     {"level": "error", "entries": 27, "first": "... error: Supervisor: {local,orders_sup}. Context: child_terminated. ..."},
+     {"level": "warning", "entries": 42, "first": "... warning: payment provider slow: 659 ms for order 2004"},
+     {"level": "error", "entries": 3, "first": "... error: payment for order 2032 failed: {provider,timeout}"}]}]}
+```
+
+Eight crashes in 15 seconds, by eight processes: one, restarted each
+time. Each crash logs three reports, grouped into one with the bad
+argument. Payments fail on a timeout, and the provider is slow on about
+every other charge, each logged from a known line. And at the top of the
+log file, once, from before anything listened: the pricing rules never
+loaded.
+
+**`module_code`** for `orders_importer` and `orders_payments`, then
+`handle_info`, `parse_line`, `init` and `charge`: one batch of four lines,
+`<<"1003;n/a;7.50">>` among them, parsed in one list comprehension;
+`imported` counted in the state, which starts at 0. **`supervision_tree`**
+for `orders` confirms `one_for_one` with 10 restarts in 10 seconds.
+
+**The answer.**
+
+- **Lost imports.** `parse_line/1` calls `binary_to_integer/1` on the
+  quantity, and one line has `n/a` there: `badarg`. The batch is parsed in
+  one list comprehension, so one bad line crashes the importer and loses
+  the batch's three good orders too, and the restarted importer tries the
+  same batch again. It crashes 5 or 6 times in 10 seconds, under the
+  supervisor's limit of 10, so it never gives up, and nothing fails over:
+  27 crashes in the log since boot. The `imported` counter starts at 0 on
+  every restart, so it has never shown a single import.
+- **Failed payments.** `charge/3` logs a timeout on about one charge in
+  ten, and `handle_info` moves on to the next order whatever happened: a
+  failed charge is never retried.
+- **From the boot log.** The pricing rules were never read
+  (`enoent`), and the node carried on with list prices: nothing else shows
+  it.
+
+**Fixes.**
+
+- **Handle bad input per line.** Have `parse_line` return
+  `{ok, Order}` or `{error, Line}`, keep the good orders, and log the bad
+  lines; and find what sends `n/a` as a quantity.
+- **Retry or queue a failed charge** instead of moving on.
+- **Read files from `code:priv_dir(orders)`**, not a relative `priv/`, and
+  decide whether starting without pricing rules should be an error.
+
+---
+
+## 10. A node that died
+
+```sh
+examples/erlang/run.sh crash
+```
+
+`crash_erl` runs `events_shop`, and may use only 300 MB. It dies within a
+minute, writing `examples/erlang/dumps/crash_erl.dump` (128 MB); this one
+lasted 28 seconds. Once it's gone (`pgrep -f crash_erl` finds nothing),
+ask:
+
+> `crash_erl` died a minute after it started. It left a crash dump at
+> `~/prj/otp_debug_mcp/examples/erlang/dumps/crash_erl.dump`. Find out why
+> it died.
+
+Only the otp-debug tools were allowed. No node to connect to: the session
+took 23 seconds.
+
+**`crash_dump`** on the dump:
+
+```json
+{"slogan": "eheap_alloc: Cannot allocate 128 bytes of memory (of type \"heap_frag\").",
+ "cause": {"kind": "out_of_memory",
+   "explanation": "The VM asked the OS for 128 more bytes (heap_frag, from eheap_alloc) and didn't get them, so it stopped. The node had 252.4 MB. A process heap was growing: one process's data or mailbox got too big."},
+ "findings": [
+   "<0.87.0> (events_writer) held 74% of the node's memory (185.8 MB), with 1055805 messages in its mailbox",
+   "<0.87.0> (events_writer) had 1055805 messages waiting: it couldn't keep up with what it was sent"],
+ "memory_mb": {"total": 252.4, "processes": 195.8, "binary": 0.0, "ets": 0.4, "code": 4.8},
+ "running_when_it_died": {"process": "<0.88.0>", "name": "events_source", "state": "Running",
+   "current_function": "events_shop:'-source/2-lc$^0/1-0-'/4", "stack": ["events_shop:source/2"]},
+ "processes": {"count": 49,
+   "top_memory": [
+     {"pid": "<0.87.0>", "name": "events_writer", "memory_mb": 185.8, "share_of_memory": 74,
+      "message_queue_len": 1055805, "reductions": 89844, "state": "Scheduled",
+      "current_function": "timer:sleep/1", "stack": ["events_shop:writer/1"]},
+     {"pid": "<0.50.0>", "name": "code_server", "memory_mb": 0.3},
+     {"pid": "<0.88.0>", "name": "events_source", "memory_mb": 0.1, "reductions": 2767058}]},
+ "largest_mailbox": {"name": "events_writer", "message_queue_len": 1055805,
+   "first_messages": [
+     "{event,clicks,11951,#{at => 1792874821321,user => 227,page => <<\"/products\">>}}",
+     "{event,clicks,11952,#{at => 1792874821321,user => 228,page => <<\"/products\">>}}", ...]},
+ "atoms": {"count": 10147, "limit": 1048576, "percent": 1}}
+```
+
+Out of memory, and one process held three quarters of it, all in its
+mailbox. The writer was sleeping, from `writer/1`; the process the VM
+was running when it died was `events_source`, sending, with 30 times the
+writer's reductions. The oldest event waiting is number 11,951: the
+writer had stored about 1% of what it was sent. Then **`crash_dump`** with
+`process:` for each of the two shows their spawn and heap details, and
+the writer's first messages again.
+
+**The answer.** `events_source` sent events to `events_writer` far
+faster than the writer stores them (it sleeps between events), with
+nothing slowing the sender down. The writer's mailbox grew to a million
+events, about 180 bytes each, until the node's 250 MB were gone. Nothing
+else was big: ETS, binaries and atoms were small.
+
+**Fixes.**
+
+- **Make the source wait for the writer:** a `gen_server:call`, or an
+  acknowledgement per batch, instead of a plain send; or check the
+  writer's queue length and slow down or drop when it's too long.
+- **Make the writer faster:** take events in batches, without a sleep
+  per event.
+- **Have the dump outlive the node:** in production, point
+  `ERL_CRASH_DUMP` at a volume, or a restarted container takes the
+  evidence with it.
+
+---
+
 ## Cleaning up
 
 ```sh
 examples/elixir/run.sh stop
+examples/erlang/run.sh stop
 ```
 
-stops every Elixir demo node. The other languages' demos
+stops every Elixir and Erlang demo node. The other languages' demos
 (`examples/erlang`, `examples/gleam`, `examples/lfe`) have the same
 bugs and more, each with its own `run.sh`; see the
 [demo targets](../README.md#demo-targets) table.

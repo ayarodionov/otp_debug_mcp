@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+### Errors and crash dumps
+
+- `recent_errors`: the errors the node logs, grouped by who failed and
+  why. A crash group is one process and reason, however often, with its
+  stack, the arguments of a `function_clause`, the reports it caused and
+  how many processes it was; a log group is one message from one place,
+  with where it was logged. It listens for a window, or with
+  `watch_minutes` in the background, read by later calls and ended with
+  `stop: true`. It also groups the errors in the start and the end of the
+  node's log files (its logger handlers' files, and a release's
+  `erlang.log.N`), which hold what happened before. Nothing is loaded on
+  the node: a logger handler whose filter is evaluated code sends the
+  events to a process there, and is removed when it ends, even if that
+  process is killed.
+- `crash_dump`: why a node died, from its `erl_crash.dump`, read in one
+  pass, so dumps of gigabytes work. What the slogan means (out of memory
+  and in which allocator, a permanent application that stopped, a full
+  atom table, a failed boot, a signal), findings on what stands out, the
+  process that was running, the biggest processes and longest mailboxes
+  with their stacks and what proc_lib processes run, the first messages
+  of the longest mailbox decoded, and memory, ETS, ports and atoms.
+  `process:` shows one process in full. Dumps of OTP 26 to 29 are read;
+  no connection is needed.
+- `supervisor_restarts` points to `recent_errors` for children that crash
+  less often than its sample catches.
+- `examples/erlang/run.sh orders`: an orders service whose errors only its
+  logs show; `examples/erlang/run.sh crash`: a node that runs out of
+  memory within a minute and leaves a crash dump. CI smoke-tests the
+  release against both. `docs/scenarios.md` has a scenario for each (7
+  and 8; the ones after them are renumbered), and `docs/walkthroughs.md`
+  a recorded session for each (9 and 10).
+
 ### Ports
 
 - `ports` (in `diagnose`) tells what the ports are: by type (`tcp_inet`,
@@ -24,8 +56,8 @@
 - `long_schedules` names the driver and owner of a port in its events.
 - `examples/erlang/run.sh ports`: a shop that leaks sockets and external
   programs and fills a slow peer's socket. CI smoke-tests the release
-  against it. `docs/scenarios.md` has a scenario for ports (10; the ones
-  after it are renumbered), and `docs/walkthroughs.md` an eighth recorded
+  against it. `docs/scenarios.md` has a scenario for ports (now 12), and
+  `docs/walkthroughs.md` an eighth recorded
   session against the demo.
 
 ### Native code

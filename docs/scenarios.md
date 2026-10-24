@@ -17,21 +17,23 @@ Contents:
   - [4. A process is stuck, or calls time out](#4-a-process-is-stuck-or-calls-time-out)
   - [5. Approaching a system limit](#5-approaching-a-system-limit)
   - [6. Crash loops and intermittent failures](#6-crash-loops-and-intermittent-failures)
-  - [7. One node in a cluster misbehaves](#7-one-node-in-a-cluster-misbehaves)
-  - [8. Incident triage](#8-incident-triage)
-  - [9. Native code: a NIF that blocks or leaks](#9-native-code-a-nif-that-blocks-or-leaks)
-  - [10. Sockets, ports and external programs](#10-sockets-ports-and-external-programs)
+  - [7. Errors only the logs show](#7-errors-only-the-logs-show)
+  - [8. A node that died](#8-a-node-that-died)
+  - [9. One node in a cluster misbehaves](#9-one-node-in-a-cluster-misbehaves)
+  - [10. Incident triage](#10-incident-triage)
+  - [11. Native code: a NIF that blocks or leaks](#11-native-code-a-nif-that-blocks-or-leaks)
+  - [12. Sockets, ports and external programs](#12-sockets-ports-and-external-programs)
 - **Understanding and verifying**
-  - [11. Finding the bug in the code, not just the node](#11-finding-the-bug-in-the-code-not-just-the-node)
-  - [12. Seeing what a function really receives](#12-seeing-what-a-function-really-receives)
-  - [13. Verifying a fix or a deploy](#13-verifying-a-fix-or-a-deploy)
-  - [14. Trying a fix on the live node](#14-trying-a-fix-on-the-live-node)
-  - [15. Code that macros generated](#15-code-that-macros-generated)
-  - [16. Watching a load test](#16-watching-a-load-test)
-  - [17. Getting to know an unfamiliar system](#17-getting-to-know-an-unfamiliar-system)
+  - [13. Finding the bug in the code, not just the node](#13-finding-the-bug-in-the-code-not-just-the-node)
+  - [14. Seeing what a function really receives](#14-seeing-what-a-function-really-receives)
+  - [15. Verifying a fix or a deploy](#15-verifying-a-fix-or-a-deploy)
+  - [16. Trying a fix on the live node](#16-trying-a-fix-on-the-live-node)
+  - [17. Code that macros generated](#17-code-that-macros-generated)
+  - [18. Watching a load test](#18-watching-a-load-test)
+  - [19. Getting to know an unfamiliar system](#19-getting-to-know-an-unfamiliar-system)
 - **Other kinds of targets**
-  - [18. Erlang products you didn't write](#18-erlang-products-you-didnt-write)
-  - [19. Your own node during development](#19-your-own-node-during-development)
+  - [20. Erlang products you didn't write](#20-erlang-products-you-didnt-write)
+  - [21. Your own node during development](#21-your-own-node-during-development)
 - [Before pointing it at production](#before-pointing-it-at-production)
 - [Not supported yet](#not-supported-yet)
 
@@ -104,7 +106,7 @@ top one then shows the arguments it's called with.
 
 **Typical findings.** Real saturation (all schedulers near 1.0) versus one
 pegged scheduler with the rest idle, which points to a long-running NIF
-(scenario 9: `long_schedules` names it).
+(scenario 11: `long_schedules` names it).
 A profile usually puts most of the time in a few functions: a loop over a
 large list, repeated encoding or decoding, a regex compiled on every call.
 
@@ -142,7 +144,7 @@ blocked behind its own backlog.
 
 > Check `chat@edge-5` for anything heading toward a system limit.
 
-**What the agent does.** `diagnose` covers processes, ports (scenario 10) and atoms
+**What the agent does.** `diagnose` covers processes, ports (scenario 12) and atoms
 against their limits. Repeated `snapshot` diffs show the direction of each.
 For a growing process count, `supervision_tree` finds the supervisor whose
 child count keeps climbing (it reports `child_count` even when there are too
@@ -162,7 +164,9 @@ the logs fill with crash reports for the same process.
 reads each supervisor's own restart history. It names the supervisor and
 the child that keeps restarting, and when a child dies during its short
 sample, its exit reason with the stack trace, file and line. `trace_calls`
-on the crashing function then shows the arguments it fails on. In testing,
+on the crashing function then shows the arguments it fails on, and
+`recent_errors` collects the crash reports of a child that crashes less
+often than that sample catches (scenario 7). In testing,
 this took the agent from "fails now and then" to a malformed URL and the
 line that parses it, from `diagnose` alone.
 
@@ -172,7 +176,107 @@ supervisor's restart limit: nothing ever fails over, so it runs forever and
 shows up only as intermittent errors. A supervisor `at_limit` is one crash
 away from giving up and taking its siblings down with it.
 
-### 7. One node in a cluster misbehaves
+### 7. Errors only the logs show
+
+**Situation.** Something goes wrong but the node looks healthy by every
+number: users see errors, or a job quietly doesn't happen. The evidence is
+in the logs, on the node's machine, in a container, or nowhere you can
+read.
+
+> `orders@prod-1` loses some imported orders, and payments fail now and
+> then. What is it logging?
+
+**What the agent does.** `recent_errors` listens to the node's logger for
+a while (10 seconds by default) and groups what it catches:
+- **Crashes:** a group per process and reason, with the reports the crash
+  caused and how many different processes it was (one restarted again and
+  again is a crash loop). Each group has the stack, and for a
+  `function_clause` the arguments.
+- **Log messages:** a group per message, with the place it was logged
+  from (`logged_at`, from the logger's metadata).
+
+It also reads the start and the end of the node's log files, grouped the
+same way. That's where the errors from before it listened are: an error
+logged once at boot gets a group of its own, instead of being lost among
+a loop's thousands. For errors that happen rarely, `watch_minutes` keeps
+listening in the background, and later calls return what it caught. From
+a stack frame, `module_code` with `at:` finds the code and `trace_calls`
+the arguments.
+
+In testing against the orders demo (`examples/erlang/run.sh orders`), a
+session with only these tools found all three of its problems in a
+minute (walkthrough 9). `diagnose` caught the crash loop. `recent_errors`
+added the failing payments, with the line that logs them, and the error
+the node logged once at boot, which only its log file still had.
+
+**Typical findings.**
+- A crash loop under its supervisor's restart limit, which `diagnose`
+  catches only if a crash falls within its sample.
+- A warning logged on every call: a dependency is slow.
+- An error at boot that the node carried on from: a missing config file,
+  a fallback silently in use.
+
+**Watch out.**
+- Listening adds a logger handler to the node. It's removed when the
+  window or the watch ends; a watch also expires on its own, after at
+  most 4 hours.
+- Elixir nodes don't log OTP's crash and supervisor reports unless
+  `handle_sasl_reports` is set, so only the GenServer's own report shows.
+- Nothing below the node's primary logger level is logged at all; the
+  tool says when that hides warnings.
+- Log lines go to the AI provider, like any tool output.
+
+### 8. A node that died
+
+**Situation.** A node crashed and was restarted (by systemd, Kubernetes,
+heart), and you want to know why before it happens again. It left an
+`erl_crash.dump`.
+
+> `events@prod-3` died last night; its crash dump is at
+> /srv/events/erl_crash.dump. Find out why.
+
+**What the agent does.** `crash_dump` reads the dump. No connection is
+needed: the file is read on the machine running the server. It says what
+the slogan, the VM's last words, means: out of memory (and in which
+allocator), a permanent application that stopped (and which one), a full
+atom table, a failed boot, a signal. Its findings name what stands out: a
+process holding most of the memory, a mailbox of a million messages, a
+process leak. It also shows:
+- the process that was running when the node died;
+- the biggest processes and the longest mailboxes, with their stacks;
+- the first messages of the longest mailbox, decoded, which say what was
+  piling up and often who sent it;
+- memory, ETS tables, ports and atoms.
+
+With `process:`, it shows one process in full.
+
+In testing on the dump of the crash demo (`examples/erlang/run.sh crash`,
+128 MB), a session given only the dump's path found in 23 seconds why the
+node died (walkthrough 10). It named the writer that held 74% of memory
+in a million queued events and the source that was sending them, and saw
+from the oldest event that the writer had kept up with about 1%.
+
+**Typical findings.**
+- A consumer that can't keep up with its producer, until the node runs
+  out of memory.
+- A binary or ETS leak.
+- An application that stopped because a child crashed more often than its
+  supervisor allows. The dump shows the node after the crashes, so the
+  node's logs, or `recent_errors` on the restarted node, show why it
+  crashed.
+- Atoms made from input.
+
+**Watch out.**
+- Copy the dump to the machine running the server first (`docker cp`,
+  `kubectl cp`).
+- A dump has no logs.
+- A node killed by the OS (the OOM killer, `kill -9`) writes no dump at
+  all; in a container, running out of memory usually ends that way.
+- Point `ERL_CRASH_DUMP` at a volume that outlives the container, or the
+  dump goes with it.
+- A large dump takes a few seconds per hundred MB.
+
+### 9. One node in a cluster misbehaves
 
 **Situation.** A cluster of nodes running the same code gets slow or
 unstable, and it isn't clear which node is to blame, or the symptoms show
@@ -199,7 +303,7 @@ joined or lost its links, or a node whose atom count has crept up.
 **Watch out.** Nodes are attached with the current target's cookie, as a
 cluster shares one; a node with another cookie shows as unreachable.
 
-### 8. Incident triage
+### 10. Incident triage
 
 **Situation.** Something is wrong right now, and you need a first picture
 fast.
@@ -218,7 +322,7 @@ gone after a restart.
 
 ---
 
-### 9. Native code: a NIF that blocks or leaks
+### 11. Native code: a NIF that blocks or leaks
 
 **Situation.** Latency spikes for everything on the node now and then, or
 the OS shows the node's memory growing while `erlang:memory()` stays flat.
@@ -273,7 +377,7 @@ OTP.
   that takes the library's source, or its tests under AddressSanitizer
   or Valgrind.
 
-### 10. Sockets, ports and external programs
+### 12. Sockets, ports and external programs
 
 **Situation.** The port count climbs toward the limit, sends block or time
 out, a peer can't keep up, or OS processes the node started pile up.
@@ -322,7 +426,7 @@ owner with `{active, true}` flooding its own mailbox.
 
 ## Understanding and verifying
 
-### 11. Finding the bug in the code, not just the node
+### 13. Finding the bug in the code, not just the node
 
 **Situation.** You want the fix, not just the diagnosis.
 
@@ -338,10 +442,10 @@ often line numbers, and the agent opens those files and reads the code. In
 testing, it went from a mailbox backlog to the `Process.sleep` in the
 offending `handle_cast/2` on its own.
 
-Functions that macros generate aren't in the source to open; scenario 15
+Functions that macros generate aren't in the source to open; scenario 17
 finds them on the node.
 
-### 12. Seeing what a function really receives
+### 14. Seeing what a function really receives
 
 **Situation.** Production behaves differently from your tests, and you
 suspect the inputs.
@@ -362,7 +466,7 @@ Long terms are truncated so the result fits the agent's context.
   refuses and says what it found. Forcing it ends their trace, so the agent
   should ask you first.
 
-### 13. Verifying a fix or a deploy
+### 15. Verifying a fix or a deploy
 
 **Situation.** You've shipped a fix and want evidence that it worked.
 
@@ -374,7 +478,7 @@ or so apart. A fixed leak shows near-zero deltas under the same load that
 used to produce growth. The same before-and-after comparison works for
 config changes, such as a new pool size.
 
-### 14. Trying a fix on the live node
+### 16. Trying a fix on the live node
 
 **Situation.** You have a fix and want to see it work on the node before
 going through a deploy, or you need a stopgap now.
@@ -404,7 +508,7 @@ is a recorded session of it on the Elixir payments demo.
   calling itself without its module name) keep running it. While they do,
   the tool refuses to load that module again, rather than kill them.
 
-### 15. Code that macros generated
+### 17. Code that macros generated
 
 **Situation.** A stack trace or a trace names a function you can't find in
 your source, or points into a library's file: `gen_server.ex:887`, a
@@ -452,7 +556,7 @@ generates and explained what each does with a message it doesn't handle.
   and after `load_module` the file may not be the code that runs; the tool
   says so.
 
-### 16. Watching a load test
+### 18. Watching a load test
 
 **Situation.** You're load testing and want to know what breaks first and
 why.
@@ -465,7 +569,7 @@ why.
 the point where schedulers saturate, is your capacity limit, and
 `process_info` says which code it's in.
 
-### 17. Getting to know an unfamiliar system
+### 19. Getting to know an unfamiliar system
 
 **Situation.** You've inherited a system, or are onboarding, and want to see
 how it's actually put together at runtime.
@@ -474,7 +578,7 @@ how it's actually put together at runtime.
 > applications, what each supervisor runs, and what looks unusual.
 
 **What the agent does.** `supervision_tree` for each application, plus a
-`diagnose` baseline. Combined with the source (scenario 11), it can map
+`diagnose` baseline. Combined with the source (scenario 13), it can map
 runtime processes to modules and explain restart strategies and limits,
 which the tree shows for every supervisor along with its recent restarts.
 That's often quicker than reading the code alone, because the runtime
@@ -485,7 +589,7 @@ have been restarting.
 
 ## Other kinds of targets
 
-### 18. Erlang products you didn't write
+### 20. Erlang products you didn't write
 
 **Situation.** A third-party system built on the BEAM misbehaves: a message
 broker, a database, an XMPP server, anything written in Erlang, Elixir, Gleam
@@ -507,7 +611,7 @@ is used as-is.
 too, such as RabbitMQ's `rabbitmq-diagnostics`; use both. Locate the cookie
 with care: it grants full control of the node.
 
-### 19. Your own node during development
+### 21. Your own node during development
 
 **Situation.** You're developing locally and want runtime answers while you
 code.

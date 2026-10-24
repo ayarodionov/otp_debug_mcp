@@ -55,4 +55,21 @@ defmodule OtpDebugMcp.NewOtpTest do
     assert %{written_at: written} = ModuleCode.origin(info, in2)
     assert written =~ ~r/queue\.erl:\d+$/
   end
+
+  test "recent_errors catches a crash, and removes its handler" do
+    {:ok, before} = Target.rpc(:logger, :get_handler_ids, [])
+
+    {:ok, _} =
+      Checks.remote_eval(
+        "spawn(fun() -> group_leader(whereis(user), self()), timer:sleep(200), " <>
+          "proc_lib:spawn(fun() -> lists:nth(5, [a]) end) end)."
+      )
+
+    assert {:ok, :window, report} = OtpDebugMcp.Errors.listen(:warning, 1_000)
+
+    assert %{groups: [%{kind: "crash", reason: "function_clause", stack: [_ | _]} | _]} =
+             OtpDebugMcp.Errors.summarize(report)
+
+    assert {:ok, ^before} = Target.rpc(:logger, :get_handler_ids, [])
+  end
 end
