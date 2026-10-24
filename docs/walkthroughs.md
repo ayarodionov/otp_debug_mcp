@@ -1,6 +1,6 @@
 # Walkthroughs
 
-Seven debugging sessions against the demo nodes in `examples/`, start to
+Eight debugging sessions against the demo nodes in `examples/`, start to
 finish, for following along on your own machine. Each one gives the
 command that starts the demo, the prompt, every tool call the agent made
 with the part of its result that mattered, and the conclusion. The
@@ -25,7 +25,8 @@ Contents:
 5. [Code that a macro generated](#5-code-that-a-macro-generated)
 6. [A Phoenix route that macros shadowed](#6-a-phoenix-route-that-macros-shadowed)
 7. [NIFs that block a scheduler and leak memory](#7-nifs-that-block-a-scheduler-and-leak-memory)
-8. [Cleaning up](#cleaning-up)
+8. [Leaking sockets, a slow peer, and external programs](#8-leaking-sockets-a-slow-peer-and-external-programs)
+9. [Cleaning up](#cleaning-up)
 
 ---
 
@@ -844,6 +845,132 @@ your approval because it leaks more memory on the node.
 - **Watch native memory.** A snapshot diff with `native_memory_delta_mb`
   growing and `memory_delta` flat is a native leak, which
   `erlang:memory()`-based monitoring never alerts on.
+
+---
+
+## 8. Leaking sockets, a slow peer, and external programs
+
+```sh
+examples/erlang/run.sh ports
+```
+
+`ports_erl` runs `ports_shop`, which talks to an upstream on the same
+node. Three processes misuse ports: `ports_client` connects to the
+upstream for every request, `ports_feed` streams to it over one
+connection, and `ports_thumbnailer` starts an external program for every
+job.
+
+> `ports_erl@yourhost`'s port count keeps climbing, and one of its
+> connections stops sending now and then. Find out why.
+
+Only the otp-debug tools were allowed.
+
+**`connect`**, then **`diagnose`**. `ports` says what the ports are, and
+whose:
+
+```json
+{"check": "ports", "status": "warning",
+ "findings": {"count": 361,
+   "by_type": [{"type": "tcp_inet", "count": 300}, {"type": "external: cat", "count": 59},
+               {"type": "external: inet_gethost", "count": 1}, {"type": "forker", "count": 1}],
+   "top_owners": [{"owner_name": "ports_client", "ports": 147, "types": {"tcp_inet": 147}},
+                  {"owner_name": "ports_thumbnailer", "ports": 59, "types": {"external: cat": 59}}],
+   "write_queues": [{"owner_name": "ports_feed", "port": "#Port<0.7>", "type": "tcp_inet",
+                     "peer": "127.0.0.1:52893", "queued_bytes": 7552540,
+                     "owner_blocked": "in {prim_inet,send,4}, until the port takes more data"}],
+   "external_programs": {"count": 59, "otp_helpers": 1,
+                         "running": [{"command": "cat", "os_pid": 80771, "owner": "<0.90.0>"}, ...]}}}
+```
+
+Three leads at once. `ports_client` holds 147 sockets and
+`ports_thumbnailer` 59 copies of `cat`, both after 45 seconds of
+uptime. `ports_feed` is stuck sending, with 7.5 MB queued for its peer.
+`inet_gethost` is OTP's own DNS helper, counted apart. `process_count` is
+growing 4 a second, and `socket_traffic`'s busiest socket is the
+upstream's end of the feed, receiving 36,864 bytes a second; the feed's
+own socket isn't in it, since it sent nothing while blocked.
+
+**`snapshot(take)`**, then **`port_info(port: "#Port<0.7>")`**, the
+feed's socket:
+
+```json
+{"kind": "socket", "name": "tcp_inet", "queue_bytes": 6931440, "output_bytes": 9559116,
+ "socket": {"peer": "127.0.0.1:52893", "local": "127.0.0.1:52894",
+   "stats": {"send_pend": "6931440", "send_oct": "9555000", "recv_oct": "0"},
+   "options": {"active": "false", "high_watermark": "8388608", "low_watermark": "4096",
+               "send_timeout": "infinity", "sndbuf": "343596"}},
+ "owner_process": {"name": "ports_feed", "current_function": "{prim_inet,send,4}", "status": "waiting"}}
+```
+
+The socket queues up to its 8 MB high watermark before sends block, and
+then they stay blocked until it drains to the 4 KB low watermark, with no
+`send_timeout` to give up.
+
+**`module_code(module: "ports_shop")`**, then each function in turn. With
+debug info, the agent read the bugs directly: `client/1` connects and
+drops the socket (`{ok, _Socket} = gen_tcp:connect(...)`), `thumbnailer/1`
+opens a port and drops it (`_ = open_port({spawn, "cat"}, [])`),
+`feed_loop/2` sends 65,000 bytes every 50 ms, and the upstream's
+`read_slowly/1` reads 4,096 bytes every 100 ms, about 40 KB a second.
+
+**`trace_port(opened: true, duration_ms: 3000)`** confirms the leaks live,
+summed up by who opened what:
+
+```json
+{"opened": 9, "closed": 0, "backend": "isolated trace session",
+ "opened_by": [{"owner_name": "ports_client", "ports": 6, "what": {"tcp_inet": 6}},
+               {"owner_name": "ports_thumbnailer", "ports": 3, "what": {"cat": 3}}]}
+```
+
+```
+19:28:18.796385Z #Port<0.640> open <0.90.0> cat
+19:28:18.836048Z #Port<0.641> open <0.88.0> tcp_inet
+19:28:18.836641Z #Port<0.642> getting_linked <0.1149.0>
+```
+
+The third event is the upstream's end of the new connection, handed to a
+new reader process.
+
+**`snapshot(diff)`**, 13 s after the first:
+
+```json
+{"window_seconds": 13, "port_count_delta": 161,
+ "port_delta_by_type": {"tcp_inet": 134, "external: cat": 27},
+ "port_delta_by_owner": [{"owner_name": "ports_client", "ports_added": 67, "ports_now": 277},
+                         {"owner_name": "ports_thumbnailer", "ports_added": 27, "ports_now": 111}],
+ "process_count_delta": 67}
+```
+
+161 more ports in 13 seconds, none closed: 67 sockets from `ports_client`,
+67 more at the upstream's end, and 27 programs.
+
+**The answer.**
+
+- `ports_client` opens a TCP connection every 200 ms and never closes it.
+  Each one also leaves a port and a reader process at the upstream's end,
+  since the reader only stops when the connection closes: that's the
+  process count growing too.
+- `ports_thumbnailer` starts `cat` every 500 ms and never closes the port,
+  so OS processes pile up.
+- `ports_feed` sends about 1.3 MB/s to a peer that reads 40 KB/s. The
+  socket fills to its 8 MB high watermark in seconds, then sends block
+  until the reader drains it to 4 KB, which at 40 KB/s takes over three
+  minutes: the connection that "stops sending now and then".
+
+**Fixes.**
+
+- **Close what you open.** `gen_tcp:close/1` when a connection is done, or
+  keep one connection, or a pool, and reuse it; `port_close/1` for an
+  external program once its job is done. A process that owns sockets or
+  ports and lives on keeps all of them open.
+- **Match the producer to the consumer.** A send that can block for
+  minutes stalls its process. Read faster or in larger chunks on the other
+  end, send less, or set `{send_timeout, T}` with
+  `{send_timeout_close, true}` so a stuck peer is dropped instead of
+  silently stalling the sender.
+- **Watch ports by type and owner.** A rising port count says little;
+  `port_delta_by_type` and `port_delta_by_owner` in snapshot diffs name
+  the leak, and alerting on them catches it early.
 
 ---
 

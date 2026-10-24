@@ -297,6 +297,14 @@ Ports are how the node talks to the outside: sockets, external programs
 - `trace_port` traces a port's traffic, or with `opened: true` the ports
   opened and closed in a window, with who opened them.
 
+In testing against the ports demo (`examples/erlang/run.sh ports`), a
+session with only these tools found all three of its bugs in under a
+minute (walkthrough 8): `ports` named the owner holding 147 sockets, the
+one running 59 copies of `cat`, and a feed blocked sending with 7.5 MB
+queued; `port_info` showed the feed's 8 MB high watermark; and
+`trace_port` and a snapshot diff confirmed 161 ports opened in 13 seconds,
+none closed.
+
 **Typical findings.** A process that opens a connection or an external
 program per request and never closes it; a socket whose peer reads slower
 than it's written to, with sends blocking at the high watermark; an

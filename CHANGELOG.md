@@ -25,7 +25,8 @@
 - `examples/erlang/run.sh ports`: a shop that leaks sockets and external
   programs and fills a slow peer's socket. CI smoke-tests the release
   against it. `docs/scenarios.md` has a scenario for ports (10; the ones
-  after it are renumbered).
+  after it are renumbered), and `docs/walkthroughs.md` an eighth recorded
+  session against the demo.
 
 ### Native code
 

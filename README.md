@@ -424,7 +424,8 @@ with its real result, and the conclusion, for a mailbox that never
 drains, a crash loop, one bad node in a cluster, trying the crash loop's
 fix on the node with `load_module`, a bug that exists only in code a
 macro generated, a Phoenix route shadowed by one `resources` generates,
-and NIFs that block a scheduler and leak native memory.
+NIFs that block a scheduler and leak native memory, and leaking sockets
+and external programs with a slow peer.
 
 ## Demo targets
 

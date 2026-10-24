@@ -15,7 +15,7 @@ defmodule OtpDebugMcp.ProfilerTest do
 
     watched = TestTarget.start(recon: true)
     :ok = TestTarget.call(watched, Busy, :start, [:busy, 2_000])
-    {:ok, _} = TestTarget.call(watched, Ticker, :start, [:ticker, 20])
+    {:ok, _} = TestTarget.call(watched, Ticker, :start, [:ticker, 50])
     :ok = TestTarget.call(watched, Operator, :start, [{Ticker, :handle_info, :_}])
 
     on_exit(fn ->
