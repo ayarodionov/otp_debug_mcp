@@ -93,7 +93,7 @@ It costs far less than tracing, so it's the right first look on a busy
 node. Against the Phoenix demo (`examples/elixir/run.sh phoenix`), it
 showed in its first call that every request to `/api/products/search`
 was dispatched to the route `/api/products/:id`, action `show`, and
-answered 404.
+answered 404 (walkthrough 12).
 
 **Typical findings.** One process serializing work for everyone (a registry,
 a single DB connection, the owner of an ETS table doing all writes), or
@@ -151,7 +151,7 @@ still pending it reports:
 
 Against the locks demo (`examples/erlang/run.sh locks`), it named the two
 gen_servers calling each other and what each had asked the other, with
-timeout infinity, and the shoppers stuck behind them.
+timeout infinity, and the shoppers stuck behind them (walkthrough 11).
 
 `process_info` on the process by name tells more. Its age
 and its supervisor's restart history tell a long-stuck process from one
@@ -491,9 +491,10 @@ When only some calls fail, `exceptions: true` reports only the calls that
 raise (an error, an exit or a throw), each with its arguments and the
 exception. That works even when the caller catches the error, so nothing
 is logged, and on a function called thousands of times a second, where
-the failing calls would be lost among the others. On the orders demo,
-`trace_calls` on `orders_importer:parse_line/1` with `exceptions: true`
-shows the line with `n/a` that raises `badarg`.
+the failing calls would be lost among the others. On the orders demo, a
+coupon service turns every failure into no discount without logging it;
+`trace_calls` on its `discount/1` with `exceptions: true` showed the two
+codes that fail, and why, in five seconds (walkthrough 13).
 
 **Watch out.**
 - Traced arguments are real production data and go to the AI provider

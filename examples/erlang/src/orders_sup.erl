@@ -12,5 +12,6 @@ init([]) ->
     Flags = #{strategy => one_for_one, intensity => 10, period => 10},
     Children =
         [#{id => orders_payments, start => {orders_payments, start_link, []}},
+         #{id => orders_coupons, start => {orders_coupons, start_link, []}},
          #{id => orders_importer, start => {orders_importer, start_link, []}}],
     {ok, {Flags, Children}}.

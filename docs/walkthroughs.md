@@ -1,6 +1,6 @@
 # Walkthroughs
 
-Ten debugging sessions against the demo nodes in `examples/`, start to
+Thirteen debugging sessions against the demo nodes in `examples/`, start to
 finish, for following along on your own machine. Each one gives the
 command that starts the demo, the prompt, every tool call the agent made
 with the part of its result that mattered, and the conclusion. The
@@ -28,7 +28,10 @@ Contents:
 8. [Leaking sockets, a slow peer, and external programs](#8-leaking-sockets-a-slow-peer-and-external-programs)
 9. [Errors only the logs show](#9-errors-only-the-logs-show)
 10. [A node that died](#10-a-node-that-died)
-11. [Cleaning up](#cleaning-up)
+11. [Two gen_servers that deadlock](#11-two-gen_servers-that-deadlock)
+12. [What a Phoenix API serves, from its telemetry](#12-what-a-phoenix-api-serves-from-its-telemetry)
+13. [Failures that nothing logs](#13-failures-that-nothing-logs)
+14. [Cleaning up](#cleaning-up)
 
 ---
 
@@ -1142,6 +1145,200 @@ else was big: ETS, binaries and atoms were small.
 - **Have the dump outlive the node:** in production, point
   `ERL_CRASH_DUMP` at a volume, or a restarted container takes the
   evidence with it.
+
+---
+
+## 11. Two gen_servers that deadlock
+
+```sh
+examples/erlang/run.sh locks
+```
+
+`locks_erl` runs `locks_shop`: `locks_stock` reserves items for 20
+shoppers, and asks `locks_pricing` for each item's price; `locks_pricing`
+refreshes its prices every 3 seconds, asking `locks_stock` for levels.
+
+> Shoppers on `locks_erl@yourhost` say their reservations all time out
+> now, though it worked when it started. Find out why.
+
+Only the otp-debug tools were allowed. The session took 48 seconds.
+
+**`connect`**, then **`diagnose`**. Everything is ok but `call_chains`,
+critical:
+
+```json
+{"check": "call_chains", "status": "critical",
+ "findings": {"waiting_now": 22, "waiting_over_1s": 22, "by_kind": {"call": 22},
+   "deadlocks": [[
+     {"process": "<0.87.0>", "name": "locks_stock", "initial_call": "{locks_stock,init,1}",
+      "waits_on": "a call to locks_pricing (<0.88.0>)", "call": "gen_server:call/3",
+      "request": "{price,3}", "timeout": "infinity",
+      "message_queue_len": 120, "also_waiting_on_it": 20},
+     {"process": "<0.88.0>", "name": "locks_pricing", "initial_call": "{locks_pricing,init,1}",
+      "waits_on": "a call to locks_stock (<0.87.0>)", "call": "gen_server:call/3",
+      "request": "{level,0}", "timeout": "infinity", "message_queue_len": 1}]],
+   "chains": [], "most_waited_on": []}}
+```
+
+`locks_stock` is in a call to `locks_pricing` for the price of item 3;
+`locks_pricing` is in a call to `locks_stock` for the level of item 0.
+Neither can answer the other, and with timeout infinity, neither ever
+gives up. All 20 shoppers wait on `locks_stock` too, and the 120
+messages in its mailbox are their timed-out reservations.
+
+**`module_code`** for both modules' `handle_call`, `locks_pricing`'s
+`handle_info` and `init`, and `locks_shop`'s `shopper`, and
+**`process_info`** on `locks_pricing`, show where the two calls are made
+and when: `handle_call({reserve, Item}, ...)` sleeps 20 ms, then calls
+pricing; `handle_info(refresh, ...)`, every 3 seconds from `init`, calls
+stock once per item; the shoppers call stock with a 5-second timeout,
+caught.
+
+**The answer.** The first 3 seconds work, because there's no refresh
+yet. Each refresh is a race: if it starts while stock is in a
+reservation, pricing calls stock while stock calls pricing, and both wait
+forever. With 20 shoppers, stock is almost always in a reservation, so
+an early refresh deadlocks them. From then on every reservation times
+out, quietly, since the shoppers catch it. Neither process is
+supervised, so nothing recovers: a restart would only start the race
+again.
+
+**Fixes.**
+
+- **Don't call back into a process from its callee.** Have stock push
+  levels to pricing with a cast when they change, or keep them in an ETS
+  table pricing reads, so pricing never calls stock.
+- **Or don't call pricing from stock's callbacks**: look the price up
+  before the reservation, or read prices from ETS.
+- **Use real timeouts** instead of infinity: a deadlock then becomes a
+  crash that a supervisor restarts and the logs show, instead of a hang
+  (it doesn't remove the race).
+
+---
+
+## 12. What a Phoenix API serves, from its telemetry
+
+```sh
+examples/elixir/run.sh phoenix
+```
+
+The Phoenix demo of walkthrough 6, without saying what's wrong: this time
+the question is what the node does.
+
+> `phoenix_ex@yourhost` is a Phoenix API. Tell me what requests it's
+> serving right now, how fast, and whether anything looks wrong.
+
+Only the otp-debug tools were allowed. The session took a minute.
+
+**`connect`**, then **`diagnose`**: all ok. Then **`telemetry`** for
+15 seconds, without naming events: it listened to those the node's
+handlers listen to (Phoenix's logger) and the known events of the
+libraries running there (Phoenix, Bandit):
+
+```json
+{"listened_ms": 15000, "events_seen": 180,
+ "by_event": [
+   {"event": "bandit.request.stop", "count": 60, "total_ms": 48.3,
+    "groups": [
+      {"key": "GET /api/products/search", "count": 30,
+       "duration_ms": {"p50": 1.01, "p95": 1.44, "max": 1.68},
+       "slowest": {"ms": 1.68, "metadata": "%{conn: %{status: 404, method: \"GET\", request_path: \"/api/products/search\", ...}}"}},
+      {"key": "GET /api/products/:id", "count": 30,
+       "duration_ms": {"p50": 0.62, "p95": 0.88, "max": 1.07},
+       "slowest": {"ms": 1.07, "metadata": "%{conn: %{status: 200, method: \"GET\", request_path: \"/api/products/2\", ...}}"}}]},
+   {"event": "phoenix.router_dispatch.stop", "count": 60, "total_ms": 25.8,
+    "groups": [
+      {"key": "GET /api/products/:id", "count": 60,
+       "duration_ms": {"p50": 0.43, "p95": 0.65, "max": 0.7},
+       "slowest": {"ms": 0.7, "metadata": "%{route: \"/api/products/:id\", plug: PhoenixShopWeb.ProductController, plug_opts: :show, conn: %{status: 404, request_path: \"/api/products/search\", ...}}"}}]}],
+ "exceptions": [],
+ "not_seen": ["bandit.request.exception", "phoenix.endpoint.stop", "phoenix.router_dispatch.exception", ...]}
+```
+
+Two kinds of request, 30 each, all fast. But the server sees two paths,
+and the router only one route: all 60 were dispatched to
+`/api/products/:id`, action `show`, including the searches, which all
+answered 404.
+
+**`module_code`** for the router and the controller, then the router's
+`__match_route__/3` and the controller's `show/2`; **`process_info`** on
+`PhoenixShop.Shopper`, the process on the node making the requests, whose
+state counts `%{{:show, 200} => 120, {:search, 404} => 120}`: every
+search it ever made failed.
+
+**The answer.** The router matches `GET /api/products/:id` before
+`GET /api/products/search`, so `search` is taken as an id; `show/2`
+can't parse it as an integer and answers 404 "product not found". The
+search action is never called, nothing raises, nothing is logged: it
+shows only as 404s, and in telemetry as a route that doesn't match its
+path.
+
+**Fix.** In the router, put `get "/products/search", ...` before
+`get "/products/:id", ...`.
+
+---
+
+## 13. Failures that nothing logs
+
+```sh
+examples/erlang/run.sh orders
+```
+
+The orders demo of walkthrough 9 has one more service, `orders_coupons`,
+which applies a coupon code every 300 ms, and logs nothing.
+
+> Customers of `orders_erl@yourhost` say some coupon codes give them no
+> discount, but nothing about coupons is in the logs. Find which codes,
+> and why.
+
+Only the otp-debug tools were allowed. The session took 47 seconds.
+
+**`connect`**, **`diagnose`** (the importer's crash loop of walkthrough
+9, nothing about coupons), **`supervision_tree`** for `orders`, and
+**`process_info`** on `orders_payments` and `orders_coupons`: the coupon
+service is fine, its state a counter. **`module_code`** for
+`orders_coupons`, then `handle_info/2` and `discount/1`:
+
+```erlang
+_Percent = try discount(Code) catch _:_ -> 0 end,
+
+discount(<<"SAVE", Percent/binary>>) ->
+    binary_to_integer(Percent).
+```
+
+Any failure becomes a 0% discount, silently. Which codes fail?
+**`trace_calls`** on `orders_coupons:discount` with `exceptions: true`,
+for 5 seconds, reports only the calls that raise:
+
+```json
+{"backend": "isolated trace session", "stopped_by": "duration",
+ "events": [
+   "21:52:46.229104Z <0.95.0> orders_coupons:discount(<<\"SPRING-15\">>)",
+   "21:52:46.229116Z <0.95.0> orders_coupons:discount/1 raised error:function_clause",
+   "21:52:46.831120Z <0.95.0> orders_coupons:discount(<<\"save15\">>)",
+   "21:52:46.831133Z <0.95.0> orders_coupons:discount/1 raised error:function_clause",
+   "21:52:47.734289Z <0.95.0> orders_coupons:discount(<<\"SPRING-15\">>)",
+   "21:52:47.734303Z <0.95.0> orders_coupons:discount/1 raised error:function_clause",
+   ...]}
+```
+
+Two codes, again and again; the calls with `SAVE10`, `SAVE5` and `SAVE20`
+returned and weren't reported.
+
+**The answer.** `SPRING-15` and `save15` give no discount. `discount/1`
+matches only codes written exactly `SAVE<number>`: `SPRING-15` doesn't
+start with `SAVE`, and `save15` is lowercase. Both fail with
+`function_clause`, and the `catch _:_ -> 0` turns that into no discount
+without a word. A code like `SAVEX` would fail the same way, with
+`badarg`.
+
+**Fixes.**
+
+- **Look codes up**, in a table of code to percent, rather than parsing
+  them; at least normalize their case first.
+- **Don't swallow errors silently.** Log the code and the error before
+  falling back to no discount, so the next bad code shows up in
+  `recent_errors` and the logs.
 
 ---
 

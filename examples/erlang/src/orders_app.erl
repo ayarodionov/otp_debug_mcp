@@ -8,6 +8,8 @@
 %%   supervisor restarts it each time, under its restart limit.
 %% - orders_payments charges an order every 700 ms; the provider is often
 %%   slow, which it logs as a warning, and sometimes times out, an error.
+%% - orders_coupons applies coupon codes, and gives no discount for the
+%%   ones it can't read, without a word: that one isn't in the logs.
 -module(orders_app).
 -behaviour(application).
 
