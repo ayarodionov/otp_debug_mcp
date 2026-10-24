@@ -6,6 +6,7 @@
 #     examples/elixir/run.sh cluster     # ex_a, ex_b, ex_c: only ex_b has the shop bug
 #     examples/elixir/run.sh release     # demo_shop: a Mix release, with its own cookie
 #     examples/elixir/run.sh billing     # billing_ex: every charge recorded twice, by a macro
+#     examples/elixir/run.sh phoenix     # phoenix_ex: a Phoenix API whose search always 404s
 #     examples/elixir/run.sh stop        # stop them all
 #
 # Each node runs in the background, named with --sname on this host. All
@@ -44,6 +45,12 @@ case "${1:-}" in
     elixirc --ignore-module-conflict -o "$here/ebin" "$here/src/billing.ex" >/dev/null
     start billing_ex -pa "$here/ebin" -e "{:ok, _} = Billing.start()"
     ;;
+  phoenix)
+    # A Mix project: fetches its deps from Hex the first time. Built in dev,
+    # so its .beam files keep their debug info for module_code.
+    (cd "$here/phoenix_shop" && mix deps.get --quiet && mix compile --quiet &&
+      start phoenix_ex -S mix phx.server)
+    ;;
   release)
     (cd "$here/demo_shop" && MIX_ENV=prod mix release --overwrite --quiet)
     "$release/bin/demo_shop" daemon
@@ -52,12 +59,12 @@ case "${1:-}" in
     ;;
   stop)
     elixir --sname "stopper_$$" -e "
-      for n <- ~w(shop_ex payments_ex billing_ex ex_a ex_b ex_c),
+      for n <- ~w(shop_ex payments_ex billing_ex phoenix_ex ex_a ex_b ex_c),
           do: :rpc.call(:\"#{n}@$host\", :init, :stop, [], 2000)"
     if [ -x "$release/bin/demo_shop" ]; then "$release/bin/demo_shop" stop 2>/dev/null || true; fi
     ;;
   *)
-    echo "usage: $0 shop|payments|cluster|release|billing|stop" >&2
+    echo "usage: $0 shop|payments|cluster|release|billing|phoenix|stop" >&2
     exit 1
     ;;
 esac

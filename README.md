@@ -429,7 +429,7 @@ background, on this host with `-sname`, and `run.sh stop` stops them:
 
 | Language | Directory | Demos |
 |---|---|---|
-| Elixir | [examples/elixir](examples/elixir) | a mailbox that never drains, a crash loop, a cluster with one bad node, a billing service whose macro DSL records every charge twice, and a Mix release with its own cookie |
+| Elixir | [examples/elixir](examples/elixir) | a mailbox that never drains, a crash loop, a cluster with one bad node, a billing service whose macro DSL records every charge twice, a Phoenix API whose search route is shadowed by one `resources` generates, and a Mix release with its own cookie |
 | Erlang | [examples/erlang](examples/erlang) | a mailbox that never drains, an OTP application in a crash loop, a session store leaking atoms and ETS rows, and a cluster with one bad node |
 | Gleam | [examples/gleam](examples/gleam) | a mailbox that never drains, a supervised actor whose `let assert` panics in a loop, and a job runner leaking processes |
 | LFE | [examples/lfe](examples/lfe) | a mailbox that never drains, an OTP application in a crash loop, and an index whose slices pin whole binaries |

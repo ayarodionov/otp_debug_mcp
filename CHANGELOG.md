@@ -23,6 +23,12 @@
   twice: a bug that exists only after expansion. `docs/scenarios.md` has a
   scenario for code that macros generated, and `docs/walkthroughs.md` a
   fifth recorded session, finding that bug from the node alone.
+- `examples/elixir/phoenix_shop` (`run.sh phoenix`): a Phoenix 1.8 JSON
+  API whose product search always returns 404, because the `GET
+  /products/:id` route that `resources` generates matches it first. The
+  source never mentions `:id`, and it compiles without a warning;
+  `module_code` shows the router's expanded `__match_route__/3` clauses
+  in matching order.
 - CI also tests against an OTP 29 node (`new_otp`): every check,
   `trace_calls`, `profile` and `module_code`.
 

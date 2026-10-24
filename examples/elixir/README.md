@@ -15,7 +15,9 @@ examples/elixir/run.sh stop
 host, using the cookie in `~/.erlang.cookie`, which is also the tool's
 default. The billing demo is compiled to `.beam` files in `ebin/` first,
 because `module_code` reads a module's `.beam` and the other demos are
-compiled in memory, from scripts. Node names end in `_ex` or start with `ex_`, so they can run
+compiled in memory, from scripts. The Phoenix demo is a Mix project:
+the first `run.sh phoenix` fetches its dependencies from Hex, then it's
+built in dev, which keeps debug info. Node names end in `_ex` or start with `ex_`, so they can run
 alongside the demos in the other languages.
 
 | Command | Node | The bug | What finds it |
@@ -24,6 +26,7 @@ alongside the demos in the other languages.
 | `payments` | `payments_ex` | An application whose `Payments.Gateway` parses a malformed URL a second after each start and raises, just under `Payments.Supervisor`'s restart limit: payments fail now and then | `diagnose` (`supervisor_restarts`, with the exit reason, file and line) |
 | `cluster` | `ex_a`, `ex_b`, `ex_c` | Three connected nodes, only `ex_b` running the shop bug | `cluster`, pointed at a healthy node |
 | `billing` | `billing_ex` | Routes defined with a macro DSL, `Billing.Router`. Its `timed` macro runs the block it wraps twice, so every charge is recorded twice in the ledger. No route's source shows the bug: it exists only after macro expansion | `module_code` (which functions the macro generated, and their code after expansion), `trace_calls` on `Billing.Ledger.record/2` |
+| `phoenix` | `phoenix_ex` | A Phoenix 1.8 JSON API (in `phoenix_shop/`, served by Bandit on port 4040) whose product search always returns 404. `resources "/products", ..., only: [:index, :show]` generates `GET /products/:id`, which matches `/products/search` before the `get "/products/search"` route after it, so search requests reach `show` with `id: "search"`. The source never mentions `:id`, and it compiles without a warning | `module_code` on the router (its `__match_route__/3` clauses, in matching order), `trace_calls` on the controller |
 | `release` | `demo_shop` | No bug: a Mix release with its own cookie (printed when it starts) and a nested supervision tree, with a DynamicSupervisor | `connect` with the release's cookie, `supervision_tree`, and reconnects after it's stopped and started again (`bin/demo_shop stop`, then `daemon`, in `demo_shop/_build/prod/rel/demo_shop`) |
 
 To run one in the foreground instead:
