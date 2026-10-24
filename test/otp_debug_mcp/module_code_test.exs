@@ -132,6 +132,16 @@ defmodule OtpDebugMcp.ModuleCodeTest do
     refute Map.has_key?(function(result, "get_a/0"), "generated_by")
 
     assert "module_info/0" in result["compiler_generated"]
+
+    # A macro is listed, and shown, as its source names it.
+    assert {:ok, routes} = code(%{module: "OtpdbgCode.Routes"})
+    assert %{"kind" => "defmacro", "written_at" => _} = function(routes, "route/2")
+
+    assert {:ok, %{"code" => [%{"function" => "route/2", "code" => text, "note" => note}]}} =
+             code(%{module: "OtpdbgCode.Routes", function: "route/2"})
+
+    assert text =~ "defmacro route(path, handler)"
+    assert note =~ "the functions it generated"
     assert result["loaded"] =~ "not loaded" or result["loaded"] =~ "this file's"
   end
 

@@ -13,6 +13,16 @@
   A release strips debug info by default, and then the line table, which
   it keeps, still gives each function's file, and code is BEAM assembly.
   A node on a newer OTP than the server's disassembles its own `.beam`.
+- A macro is listed and shown under the name its source gives it
+  (`timed/2`, kind `defmacro`), not as the compiled `MACRO-timed/3`, with
+  a note that its code after expansion is the code that builds what it
+  returns. Function heads are formatted so a `[do: block]` argument stays
+  an argument.
+- `examples/elixir` has a billing demo (`run.sh billing`) whose routes are
+  defined with a macro DSL, and whose `timed` macro records every charge
+  twice: a bug that exists only after expansion. `docs/scenarios.md` has a
+  scenario for code that macros generated, and `docs/walkthroughs.md` a
+  fifth recorded session, finding that bug from the node alone.
 - CI also tests against an OTP 29 node (`new_otp`): every check,
   `trace_calls`, `profile` and `module_code`.
 

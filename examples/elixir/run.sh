@@ -5,6 +5,7 @@
 #     examples/elixir/run.sh payments    # payments_ex: a crash loop
 #     examples/elixir/run.sh cluster     # ex_a, ex_b, ex_c: only ex_b has the shop bug
 #     examples/elixir/run.sh release     # demo_shop: a Mix release, with its own cookie
+#     examples/elixir/run.sh billing     # billing_ex: every charge recorded twice, by a macro
 #     examples/elixir/run.sh stop        # stop them all
 #
 # Each node runs in the background, named with --sname on this host. All
@@ -37,6 +38,12 @@ case "${1:-}" in
     start ex_b -r "$here/src/shop.exs" \
       -e "true = Node.connect(:\"ex_a@$host\"); true = Node.connect(:\"ex_c@$host\")"
     ;;
+  billing)
+    # Compiled to .beam files, so module_code can read them.
+    mkdir -p "$here/ebin"
+    elixirc --ignore-module-conflict -o "$here/ebin" "$here/src/billing.ex" >/dev/null
+    start billing_ex -pa "$here/ebin" -e "{:ok, _} = Billing.start()"
+    ;;
   release)
     (cd "$here/demo_shop" && MIX_ENV=prod mix release --overwrite --quiet)
     "$release/bin/demo_shop" daemon
@@ -45,12 +52,12 @@ case "${1:-}" in
     ;;
   stop)
     elixir --sname "stopper_$$" -e "
-      for n <- ~w(shop_ex payments_ex ex_a ex_b ex_c),
+      for n <- ~w(shop_ex payments_ex billing_ex ex_a ex_b ex_c),
           do: :rpc.call(:\"#{n}@$host\", :init, :stop, [], 2000)"
     if [ -x "$release/bin/demo_shop" ]; then "$release/bin/demo_shop" stop 2>/dev/null || true; fi
     ;;
   *)
-    echo "usage: $0 shop|payments|cluster|release|stop" >&2
+    echo "usage: $0 shop|payments|cluster|release|billing|stop" >&2
     exit 1
     ;;
 esac

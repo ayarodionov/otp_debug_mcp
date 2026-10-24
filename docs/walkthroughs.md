@@ -1,6 +1,6 @@
 # Walkthroughs
 
-Four debugging sessions against the demo nodes in `examples/`, start to
+Five debugging sessions against the demo nodes in `examples/`, start to
 finish, for following along on your own machine. Each one gives the
 command that starts the demo, the prompt, every tool call the agent made
 with the part of its result that mattered, and the conclusion. The
@@ -22,7 +22,8 @@ Contents:
 2. [A crash loop under the restart limit](#2-a-crash-loop-under-the-restart-limit)
 3. [One bad node in a cluster](#3-one-bad-node-in-a-cluster)
 4. [Trying the fix on the live node](#4-trying-the-fix-on-the-live-node)
-5. [Cleaning up](#cleaning-up)
+5. [Code that a macro generated](#5-code-that-a-macro-generated)
+6. [Cleaning up](#cleaning-up)
 
 ---
 
@@ -474,6 +475,141 @@ summary also noted:
   succeeds with no host, which neither clause matches, so the gateway
   would crash again on a URL like that. The fix now handles anything
   that isn't a URL with a host as a bad one.
+
+---
+
+## 5. Code that a macro generated
+
+```sh
+examples/elixir/run.sh billing
+```
+
+`billing_ex` is a small billing service whose routes are defined with a
+macro DSL, `Billing.Router`: `route "/charge" do ... end` defines a clause
+of `Billing.API.handle/2`, and `timed "charge" do ... end` runs a block and
+logs it if it's slow. A client charges account `acme` 10 every 200 ms.
+`run.sh` compiles `src/billing.ex` to `.beam` files rather than running it
+as a script, so `module_code` can read them.
+
+> `billing_ex@yourhost` records every charge twice: acme's balance is
+> double what was charged. Find out why.
+
+This session was recorded with only the otp-debug tools allowed, so the
+agent couldn't read the source: everything it found came from the node.
+
+**`connect`**, then **`diagnose`**. Every check is `ok`. Nothing crashes,
+queues or leaks: the bug is in what the code does, not in how the node
+runs.
+
+**`module_code(module: "Billing.Client")`** and **`"Billing.Ledger"`**. Each
+function's origin: the ones written in `billing.ex`, and the six callbacks
+`use GenServer` generated (`"generated_by": "a macro of GenServer"`). The
+agent read the client's `handle_info/2` and the ledger's `record/2` and
+`handle_call/3`: the client calls `Billing.API.handle("/charge", ...)`
+once per tick, and the ledger records what it's given. Both are right.
+
+**`module_code(module: "Billing.API")`**. Its only function is generated:
+
+```json
+{"function": "handle/2", "clauses": 3, "kind": "def",
+ "generated_by": "a macro of Billing.Router",
+ "called_at": "examples/elixir/src/billing.ex:45"}
+```
+
+**`module_code(module: "Billing.API", function: "handle/2")`**, the code
+that runs, after macro expansion:
+
+```elixir
+def handle("/charge", req) do
+  {micros, _} = :timer.tc(fn -> Billing.Ledger.record(req.account, req.amount) end)
+
+  case :erlang.>(micros, 50000) do
+    false -> nil
+    true -> IO.puts(:stderr, <<"charge"::binary, " took ", ...>>)
+  end
+
+  Billing.Ledger.record(req.account, req.amount)
+end
+
+def handle("/balance", req) do
+  Billing.Ledger.balance(req.account)
+end
+
+def handle(_path, _req) do
+  {:error, :not_found}
+end
+```
+
+`Billing.Ledger.record/2` is in the `"/charge"` clause twice: once inside
+`:timer.tc`, and again at the end. The source of the route has it once.
+The third clause is the catch-all that `__before_compile__` adds.
+
+**`module_code(module: "Billing.Router", function: "timed/2")`**. The
+macro, listed as `"kind": "defmacro"` at `billing.ex:26`. Its code after
+expansion is the code that builds what it returns, its `quote` already
+expanded into tuples, and the agent read from it that `block` goes in
+twice:
+
+```elixir
+defmacro timed(label, [do: block]) do
+  {:__block__, [],
+   [
+     {:=, [], [{{:micros, [], Billing.Router}, {:_, [], Billing.Router}},
+               {{:., [], [:timer, :tc]}, [], [{:fn, [], [{:->, [], [[], ...block]}]}]}]},
+     {:if, ...},
+     :elixir_quote.shallow_validate_ast(block)
+   ]}
+end
+```
+
+**`trace_calls(module: "Billing.Ledger", function: "record", max_events: 8)`**
+confirms it on the live node: two calls from the client for every tick.
+
+```
+17:18:06.688182Z <0.103.0> 'Elixir.Billing.Ledger':record(<<"acme">>, 10)
+17:18:06.688634Z <0.103.0> 'Elixir.Billing.Ledger':record/2 --> ok
+17:18:06.688640Z <0.103.0> 'Elixir.Billing.Ledger':record(<<"acme">>, 10)
+17:18:06.688819Z <0.103.0> 'Elixir.Billing.Ledger':record/2 --> ok
+17:18:06.889186Z <0.103.0> 'Elixir.Billing.Ledger':record(<<"acme">>, 10)
+```
+
+**`process_info(..., include_state: true)`** on both: the client counts
+1970 charged, and the ledger holds about 400 entries of 10 for `acme`. Its
+list of 10s prints as `~c"\n\n\n..."`, because a list of 10s is also a
+charlist of newlines.
+
+**The answer.** The `timed` macro runs the block it wraps twice: once
+inside `:timer.tc` to time it, discarding the result, and once more to
+return the result. Every route wrapped in `timed` runs its body twice,
+and `/charge` writes to the ledger twice. The bug isn't in any route's
+source: it exists only after expansion.
+
+**Fixes.**
+
+- **Run the block once.** Keep the result `:timer.tc` already returns:
+
+  ```elixir
+  defmacro timed(label, do: block) do
+    quote do
+      {micros, result} = :timer.tc(fn -> unquote(block) end)
+      if micros > 50_000, do: IO.puts(:stderr, "#{unquote(label)} took #{micros} us")
+      result
+    end
+  end
+  ```
+
+  Every module that uses `timed` has the second call compiled in, so it
+  needs recompiling too: here `Billing.API`. (The agent offered to try the
+  fixed `Billing.API` on the node with `load_module`.)
+- **Unquote each argument once.** A macro that puts the same `unquote` in
+  two places evaluates that expression twice, side effects included. Bind
+  it once (`value = unquote(expr)`) and use the variable.
+- **Test what a macro generates, not just its result.** A test that
+  checks `handle("/charge", ...)` returns `:ok` passes with this bug. One
+  that counts the ledger entries after a request, or checks
+  `Macro.expand_once/2` of a `timed` call, catches it.
+- **Correct the data.** Charges already recorded stay doubled, for every
+  account charged through a `timed` route.
 
 ---
 

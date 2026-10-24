@@ -232,10 +232,46 @@ defmodule OtpDebugMcp.ModuleCode do
   end
 
   @doc """
+  A function's name and arity as its source names it: the compiler
+  turns a macro `timed/2` into the function `MACRO-timed/3`, whose first
+  argument is the caller's environment.
+  """
+  def source_name(%{name: name, arity: arity}) do
+    case Atom.to_string(name) do
+      "MACRO-" <> macro -> {macro, arity - 1}
+      other -> {other, arity}
+    end
+  end
+
+  @doc "How to show a function: name/arity, an anonymous fn after the function it's in."
+  def label(f) do
+    {name, arity} = source_name(f)
+
+    case Regex.run(~r{^-(.+)/(\d+)-fun-\d+-$}, name) do
+      [_, outer, outer_arity] -> "anonymous fn/#{arity} in #{outer}/#{outer_arity}"
+      nil -> "#{name}/#{arity}"
+    end
+  end
+
+  # The debug info names a macro as its source does.
+  defp def_key(f) do
+    {name, arity} = source_name(f)
+    {String.to_atom(name), arity}
+  end
+
+  # A function asked for by its source name, or by its compiled one.
+  defp named?(f, name, arity) do
+    {source, source_arity} = source_name(f)
+
+    (source == name and (arity == nil or source_arity == arity)) or
+      (Atom.to_string(f.name) == name and (arity == nil or f.arity == arity))
+  end
+
+  @doc """
   The origin of one function, as a map for the tool's output.
   """
   def origin(%{debug_info: :elixir, defs: defs, source: source}, f) do
-    case Enum.find(defs.definitions, fn {fa, _, _, _} -> fa == {f.name, f.arity} end) do
+    case Enum.find(defs.definitions, fn {fa, _, _, _} -> fa == def_key(f) end) do
       {_, kind, meta, clauses} -> elixir_origin(kind, meta, clauses, source)
       nil -> compiler_origin(f) || line_origin(f, source)
     end
@@ -322,7 +358,7 @@ defmodule OtpDebugMcp.ModuleCode do
     matching =
       Enum.filter(
         info.functions,
-        &(Atom.to_string(&1.name) == name and (arity == nil or &1.arity == arity))
+        &named?(&1, name, arity)
       )
 
     case matching do
@@ -334,14 +370,21 @@ defmodule OtpDebugMcp.ModuleCode do
     end
   end
 
+  @macro_note "A macro's code after expansion is the code that builds what it returns: its " <>
+                "quote is expanded into the tuples it constructs. What it generates is easier to " <>
+                "read in the functions it generated: module_code on the module that calls it."
+
   defp render(%{debug_info: :elixir, defs: defs} = info, f) do
-    case Enum.find(defs.definitions, fn {fa, _, _, _} -> fa == {f.name, f.arity} end) do
-      {_, kind, _meta, clauses} ->
+    case Enum.find(defs.definitions, fn {fa, _, _, _} -> fa == def_key(f) end) do
+      {{name, _arity}, kind, _meta, clauses} ->
         %{
-          function: "#{f.name}/#{f.arity}",
+          function: label(f),
           language: "elixir",
-          code: elixir_code(kind, f.name, clauses)
+          code: elixir_code(kind, name, clauses)
         }
+        |> then(
+          &if kind in [:defmacro, :defmacrop], do: Map.put(&1, :note, @macro_note), else: &1
+        )
 
       nil ->
         assembly(info, f)
@@ -358,7 +401,7 @@ defmodule OtpDebugMcp.ModuleCode do
 
       form ->
         %{
-          function: "#{f.name}/#{f.arity}",
+          function: label(f),
           language: "erlang",
           code: form |> :erl_pp.function() |> to_string()
         }
@@ -367,10 +410,13 @@ defmodule OtpDebugMcp.ModuleCode do
 
   defp render(info, f), do: assembly(info, f)
 
+  # The head is formatted here: Macro.to_string would print a last
+  # argument like a macro's [do: block] as a do block around the head.
   defp elixir_code(kind, name, clauses) do
     Enum.map_join(clauses, "\n\n", fn {_meta, args, guards, body} ->
-      head = Enum.reduce(guards, {name, [], args}, fn guard, acc -> {:when, [], [acc, guard]} end)
-      Macro.to_string({kind, [], [head, [do: body]]})
+      when_ = Enum.map_join(guards, "", &(" when " <> Macro.to_string(&1)))
+      body = body |> Macro.to_string() |> String.replace(~r/^(?=.)/m, "  ")
+      "#{kind} #{name}(#{Enum.map_join(args, ", ", &Macro.to_string/1)})#{when_} do\n#{body}\nend"
     end)
   end
 
@@ -380,7 +426,7 @@ defmodule OtpDebugMcp.ModuleCode do
   # the source lines they stand for.
   defp assembly(%{disassembled: :no}, f) do
     %{
-      function: "#{f.name}/#{f.arity}",
+      function: label(f),
       language: "none",
       code:
         "unavailable: the .beam has no debug info, and neither this server nor the node could " <>
@@ -403,7 +449,7 @@ defmodule OtpDebugMcp.ModuleCode do
     more = length(f.instrs) - @max_instructions
 
     %{
-      function: "#{f.name}/#{f.arity}",
+      function: label(f),
       language: "beam assembly (the .beam has no debug info)",
       code: if(more > 0, do: shown <> "\n    … #{more} more instructions", else: shown)
     }

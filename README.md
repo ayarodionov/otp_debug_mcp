@@ -406,7 +406,8 @@ example prompt, the tools involved, and what to watch out for:
   intermittent failures, one bad node in a cluster, incident triage
 - **Understanding and verifying:** tracing a runtime problem to the code in
   your repo, seeing what a function really receives, verifying a fix or a
-  deploy, watching a load test, learning an unfamiliar system
+  deploy, trying a fix on the live node, code that macros generated,
+  watching a load test, learning an unfamiliar system
 - **Other targets:** Erlang products you didn't write (message brokers,
   databases), and your own node during development
 
@@ -416,8 +417,9 @@ doesn't support yet.
 [docs/walkthroughs.md](docs/walkthroughs.md) has whole sessions to
 follow along with on the demo nodes below: the prompt, every tool call
 with its real result, and the conclusion, for a mailbox that never
-drains, a crash loop, one bad node in a cluster, and trying the crash
-loop's fix on the node with `load_module`.
+drains, a crash loop, one bad node in a cluster, trying the crash loop's
+fix on the node with `load_module`, and a bug that exists only in code a
+macro generated.
 
 ## Demo targets
 
@@ -427,7 +429,7 @@ background, on this host with `-sname`, and `run.sh stop` stops them:
 
 | Language | Directory | Demos |
 |---|---|---|
-| Elixir | [examples/elixir](examples/elixir) | a mailbox that never drains, a crash loop, a cluster with one bad node, and a Mix release with its own cookie |
+| Elixir | [examples/elixir](examples/elixir) | a mailbox that never drains, a crash loop, a cluster with one bad node, a billing service whose macro DSL records every charge twice, and a Mix release with its own cookie |
 | Erlang | [examples/erlang](examples/erlang) | a mailbox that never drains, an OTP application in a crash loop, a session store leaking atoms and ETS rows, and a cluster with one bad node |
 | Gleam | [examples/gleam](examples/gleam) | a mailbox that never drains, a supervised actor whose `let assert` panics in a loop, and a job runner leaking processes |
 | LFE | [examples/lfe](examples/lfe) | a mailbox that never drains, an OTP application in a crash loop, and an index whose slices pin whole binaries |

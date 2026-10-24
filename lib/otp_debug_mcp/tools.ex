@@ -698,7 +698,7 @@ defmodule OtpDebugMcp.Tools do
          %{
            code:
              for r <- rendered do
-               f = Enum.find(info.functions, &("#{&1.name}/#{&1.arity}" == r.function))
+               f = Enum.find(info.functions, &(OtpDebugMcp.ModuleCode.label(&1) == r.function))
 
                r
                |> Map.update!(:code, &cap/1)
@@ -821,12 +821,7 @@ defmodule OtpDebugMcp.Tools do
       |> Enum.group_by(fn %{lines: [{file, _} | _]} -> file end, &label/1)
     end
 
-    defp label(%{name: name, arity: arity}) do
-      case Regex.run(~r{^-(.+)/(\d+)-fun-\d+-$}, Atom.to_string(name)) do
-        [_, outer, outer_arity] -> "anonymous fn/#{arity} in #{outer}/#{outer_arity}"
-        nil -> "#{name}/#{arity}"
-      end
-    end
+    defp label(f), do: OtpDebugMcp.ModuleCode.label(f)
 
     defp label_module(mod) do
       case Atom.to_string(mod) do
