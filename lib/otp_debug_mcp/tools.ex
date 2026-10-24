@@ -167,7 +167,9 @@ defmodule OtpDebugMcp.Tools do
           "One of: message_queues, supervisor_restarts, binary_leak (force-GCs every " <>
             "process), memory_breakdown, " <>
             "allocator_fragmentation, process_count, atom_table, ets_tables, ports, " <>
-            "schedulers, top_reductions"
+            "native_memory, native_code, schedulers (normal and dirty), " <>
+            "long_schedules (2s: native code holding a scheduler, long GCs, busy ports), " <>
+            "top_reductions"
       )
     end
 
@@ -692,8 +694,7 @@ defmodule OtpDebugMcp.Tools do
     end
 
     defp run(info, %{function: function}) when is_binary(function) do
-      with {:ok, name, arity} <- parse_function(function),
-           {:ok, rendered} <- OtpDebugMcp.ModuleCode.code(info, name, arity) do
+      with {:ok, rendered} <- OtpDebugMcp.ModuleCode.code(info, function) do
         {:ok,
          %{
            code:
@@ -756,22 +757,6 @@ defmodule OtpDebugMcp.Tools do
        else
          result
        end}
-    end
-
-    defp parse_function(function) do
-      case String.split(String.trim(function), "/") do
-        [name] ->
-          {:ok, name, nil}
-
-        [name, arity] ->
-          case Integer.parse(arity) do
-            {n, ""} -> {:ok, name, n}
-            _ -> {:error, "give function as a name or name/arity, e.g. handle_call/3"}
-          end
-
-        _ ->
-          {:error, "give function as a name or name/arity, e.g. handle_call/3"}
-      end
     end
 
     defp about(info) do

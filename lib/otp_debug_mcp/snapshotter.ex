@@ -71,6 +71,8 @@ defmodule OtpDebugMcp.Snapshotter do
              port_count_delta: new.port_count - old.port_count,
              atom_count_delta: new.atom_count - old.atom_count - ours.atoms,
              total_message_queue_delta: new.total_mq - old.total_mq,
+             rss_delta_mb: mb_delta(new.rss, old.rss),
+             native_memory_delta_mb: mb_delta(outside(new), outside(old)),
              excluded_footprint_of_this_tool: %{
                atoms: ours.atoms,
                code_mb: Float.round(ours.code_bytes / 1_048_576, 2)
@@ -79,7 +81,12 @@ defmodule OtpDebugMcp.Snapshotter do
              Positive deltas that keep growing across repeated diffs indicate \
              leaks: memory_delta.binary → refc binary leak (run binary_leak \
              check); process_count_delta → process leak; atom_count_delta > 0 \
-             is always worth investigating (atoms are never freed). The deltas \
+             is always worth investigating (atoms are never freed). \
+             native_memory_delta_mb is the growth of memory outside the VM's \
+             allocators (the node's RSS minus what they hold): memory NIFs and \
+             drivers allocate themselves, which erlang:memory() never shows, so \
+             growth there with memory_delta flat is a native leak (run the \
+             native_memory and native_code checks). The deltas \
              exclude what this tool itself added to the node in the window \
              (atoms it sent, code it caused to load), shown in \
              excluded_footprint_of_this_tool.\
@@ -88,6 +95,16 @@ defmodule OtpDebugMcp.Snapshotter do
         end
     end
   end
+
+  defp mb_delta(new, old) when is_integer(new) and is_integer(old),
+    do: Float.round((new - old) / 1_048_576, 2) + 0.0
+
+  defp mb_delta(_new, _old), do: nil
+
+  defp outside(%{rss: rss, allocated: allocated}) when is_integer(rss) and is_integer(allocated),
+    do: rss - allocated
+
+  defp outside(_snap), do: nil
 
   # Loaded code counts in erlang:memory's code, system and total.
   defp code_footprint(key, ours) when key in [:code, :system, :total], do: ours.code_bytes
@@ -99,8 +116,20 @@ defmodule OtpDebugMcp.Snapshotter do
          {:ok, port_count} <- Target.rpc(:erlang, :system_info, [:port_count]),
          {:ok, atom_count} <- Target.rpc(:erlang, :system_info, [:atom_count]),
          {:ok, total_mq} <- OtpDebugMcp.Checks.remote_eval(@total_message_queue) do
+      # Native memory needs the OS's RSS and recon_alloc: without either,
+      # the diff leaves it out.
+      rss = with {:ok, {:ok, bytes}} <- OtpDebugMcp.Checks.rss(), do: bytes, else: (_ -> nil)
+
+      allocated =
+        with {:ok, bytes} when is_integer(bytes) <-
+               Target.rpc(:recon_alloc, :memory, [:allocated]),
+             do: bytes,
+             else: (_ -> nil)
+
       {:ok,
        %{
+         rss: rss,
+         allocated: allocated,
          at: DateTime.utc_now(),
          memory: Map.new(memory),
          process_count: pcount,

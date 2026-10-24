@@ -1,0 +1,7 @@
+{application, native_shop,
+ [{description, "A shop whose NIFs block a scheduler and leak native memory"},
+  {vsn, "0.1.0"},
+  {modules, [native_nif, native_shop_app, native_shop_sup, native_shop_worker]},
+  {registered, [native_shop_sup, native_pricing, native_ingest]},
+  {applications, [kernel, stdlib, crypto]},
+  {mod, {native_shop_app, []}}]}.

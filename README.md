@@ -63,7 +63,7 @@ introspection primitives, but an encoded diagnostic playbook in the spirit of
 |---|---|
 | `connect` | Attach to a node (name + optional cookie) as a hidden node |
 | `diagnose` | Full health battery, findings ranked worst-first |
-| `run_check` | One check: `message_queues`, `supervisor_restarts`, `binary_leak`, `memory_breakdown`, `allocator_fragmentation`, `process_count`, `atom_table`, `ets_tables`, `ports`, `schedulers`, `top_reductions` |
+| `run_check` | One check: `message_queues`, `supervisor_restarts`, `binary_leak`, `memory_breakdown`, `allocator_fragmentation`, `process_count`, `atom_table`, `ets_tables`, `ports`, `native_memory`, `native_code`, `schedulers`, `long_schedules`, `top_reductions` |
 | `process_info` | Deep-inspect one process: recon:info, an age estimate, its supervisor's restart history, optional `sys:get_state` |
 | `supervision_tree` | Render an application's supervision tree, with each supervisor's strategy and restart history |
 | `trace_calls` | Rate-limited call tracing (isolated trace session on OTP 27+, recon_trace before) |
@@ -403,7 +403,8 @@ example prompt, the tools involved, and what to watch out for:
 
 - **Production problems:** memory growth, slow requests, high CPU, stuck
   processes and call timeouts, approaching system limits, crash loops and
-  intermittent failures, one bad node in a cluster, incident triage
+  intermittent failures, one bad node in a cluster, incident triage, NIFs
+  that block a scheduler or leak native memory
 - **Understanding and verifying:** tracing a runtime problem to the code in
   your repo, seeing what a function really receives, verifying a fix or a
   deploy, trying a fix on the live node, code that macros generated,
@@ -431,7 +432,7 @@ background, on this host with `-sname`, and `run.sh stop` stops them:
 | Language | Directory | Demos |
 |---|---|---|
 | Elixir | [examples/elixir](examples/elixir) | a mailbox that never drains, a crash loop, a cluster with one bad node, a billing service whose macro DSL records every charge twice, a Phoenix API whose search route is shadowed by one `resources` generates, and a Mix release with its own cookie |
-| Erlang | [examples/erlang](examples/erlang) | a mailbox that never drains, an OTP application in a crash loop, a session store leaking atoms and ETS rows, and a cluster with one bad node |
+| Erlang | [examples/erlang](examples/erlang) | a mailbox that never drains, an OTP application in a crash loop, a session store leaking atoms and ETS rows, a cluster with one bad node, and a C NIF library that blocks a scheduler and leaks native memory |
 | Gleam | [examples/gleam](examples/gleam) | a mailbox that never drains, a supervised actor whose `let assert` panics in a loop, and a job runner leaking processes |
 | LFE | [examples/lfe](examples/lfe) | a mailbox that never drains, an OTP application in a crash loop, and an index whose slices pin whole binaries |
 

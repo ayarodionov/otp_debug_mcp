@@ -143,6 +143,7 @@ defmodule OtpDebugMcp.ModuleCode do
             arity: arity,
             exported: {name, arity} in exports,
             lines: for({:line, {_, _} = loc} <- instrs, uniq: true, do: loc),
+            nif: nif?(instrs),
             instrs: instrs
           }
         end
@@ -243,13 +244,38 @@ defmodule OtpDebugMcp.ModuleCode do
     end
   end
 
-  @doc "How to show a function: name/arity, an anonymous fn after the function it's in."
+  @doc """
+  How to show a function: name/arity, an anonymous fn after the function
+  it's in, with the number that tells it from its parent's other fns.
+  """
   def label(f) do
     {name, arity} = source_name(f)
 
-    case Regex.run(~r{^-(.+)/(\d+)-fun-\d+-$}, name) do
-      [_, outer, outer_arity] -> "anonymous fn/#{arity} in #{outer}/#{outer_arity}"
+    case Regex.run(~r{^-(.+)/(\d+)-fun-(\d+)-$}, name) do
+      [_, outer, outer_arity, n] -> "anonymous fn/#{arity} in #{outer}/#{outer_arity} (fun-#{n})"
       nil -> "#{name}/#{arity}"
+    end
+  end
+
+  @doc """
+  The functions `spec` names: a label as listed, name/arity, or a name,
+  as the source names it or as compiled (`-init/1-fun-2-`), quoted or not.
+  """
+  def find(info, spec) do
+    spec = String.trim(spec)
+
+    case Enum.filter(info.functions, &(label(&1) == spec)) do
+      [] ->
+        {name, arity} =
+          case Regex.run(~r{^(.+)/(\d+)$}, spec) do
+            [_, name, arity] -> {name, String.to_integer(arity)}
+            nil -> {spec, nil}
+          end
+
+        Enum.filter(info.functions, &named?(&1, String.trim(name, "'"), arity))
+
+      by_label ->
+        by_label
     end
   end
 
@@ -270,14 +296,47 @@ defmodule OtpDebugMcp.ModuleCode do
   @doc """
   The origin of one function, as a map for the tool's output.
   """
-  def origin(%{debug_info: :elixir, defs: defs, source: source}, f) do
+  def origin(info, f) do
+    origin = source_origin(info, f)
+
+    if Map.get(f, :nif, false),
+      do:
+        Map.put(
+          origin,
+          :nif,
+          "native code: the module's NIF library replaces this function when it loads"
+        ),
+      else: origin
+  end
+
+  # A NIF: OTP 25+ starts a function in -nifs with nif_start, and the stub
+  # a library replaces calls erlang:nif_error/1,2, which also marks NIFs
+  # without -nifs (Rustler's, for one).
+  defp nif?(instrs) do
+    Enum.any?(instrs, fn
+      :nif_start ->
+        true
+
+      {call, _, {:extfunc, :erlang, :nif_error, _}}
+      when call in [:call_ext, :call_ext_only, :call_ext_last] ->
+        true
+
+      {:call_ext_last, _, {:extfunc, :erlang, :nif_error, _}, _} ->
+        true
+
+      _ ->
+        false
+    end)
+  end
+
+  defp source_origin(%{debug_info: :elixir, defs: defs, source: source}, f) do
     case Enum.find(defs.definitions, fn {fa, _, _, _} -> fa == def_key(f) end) do
       {_, kind, meta, clauses} -> elixir_origin(kind, meta, clauses, source, macro_lines(defs))
       nil -> compiler_origin(f) || line_origin(f, source)
     end
   end
 
-  def origin(%{source: source}, f), do: compiler_origin(f) || line_origin(f, source)
+  defp source_origin(%{source: source}, f), do: compiler_origin(f) || line_origin(f, source)
 
   # The lines where macros were called, and whose: where functions a
   # macro generated say it was called.
@@ -378,18 +437,38 @@ defmodule OtpDebugMcp.ModuleCode do
   lines.
   """
   def code(info, name, arity) do
-    matching =
-      Enum.filter(
-        info.functions,
-        &named?(&1, name, arity)
-      )
+    info
+    |> code_of(Enum.filter(info.functions, &named?(&1, name, arity)))
+    |> no_function(info, "#{name}#{if arity, do: "/#{arity}"}")
+  end
 
+  @doc "Like `code/3`, for the functions `find/2` finds for `spec`."
+  def code(info, spec), do: info |> code_of(find(info, spec)) |> no_function(info, spec)
+
+  defp no_function({:error, :none}, info, what),
+    do: {:error, "#{inspect(info.module)} has no function #{what}"}
+
+  defp no_function(result, _info, _what), do: result
+
+  defp code_of(info, matching) do
     case matching do
       [] ->
-        {:error, "#{inspect(info.module)} has no function #{name}#{if arity, do: "/#{arity}"}"}
+        {:error, :none}
 
       functions ->
-        {:ok, Enum.map(functions, &render(info, &1))}
+        {:ok,
+         Enum.map(functions, fn f ->
+           rendered = render(info, f)
+
+           if Map.get(f, :nif, false),
+             do:
+               Map.put(
+                 rendered,
+                 :note,
+                 "A NIF: this is only its Erlang stub. The code that runs is native, in the module's NIF library (see the native_code check); trace_calls and profile time it like any function."
+               ),
+             else: rendered
+         end)}
     end
   end
 

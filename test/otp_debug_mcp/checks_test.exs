@@ -124,7 +124,17 @@ defmodule OtpDebugMcp.ChecksTest do
     assert %{status: :ok, findings: [%{bytes: _, rows: _, owner: _} | _]} =
              Checks.run(:ets_tables)
 
-    assert %{status: :ok, findings: [%{scheduler: _, usage: _} | _]} = Checks.run(:schedulers)
+    assert %{
+             status: :ok,
+             findings: %{
+               normal: [%{scheduler: _, usage: _} | _],
+               normal_run_queue: _,
+               dirty_cpu: %{schedulers: dirty_cpu, usage_avg: _, run_queue: _},
+               dirty_io: %{schedulers: dirty_io, usage_max: _}
+             }
+           } = Checks.run(:schedulers)
+
+    assert dirty_cpu > 0 and dirty_io > 0
   end
 
   test "remote_eval evaluates Erlang on the target and reports syntax errors", %{target: target} do

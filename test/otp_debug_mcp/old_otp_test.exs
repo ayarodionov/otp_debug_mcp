@@ -61,6 +61,27 @@ defmodule OtpDebugMcp.OldOtpTest do
              Tracer.trace("queue", "new", 2, 5_000)
   end
 
+  test "long_schedules uses the node's system_monitor, and only when it's free" do
+    assert %{findings: %{via: "the node's system_monitor"}} = Checks.run(:long_schedules)
+    assert {:ok, :undefined} = Target.rpc(:erlang, :system_monitor, [])
+
+    {:ok, :ok} =
+      Checks.remote_eval("""
+      register(monitor_holder, spawn(fun() -> timer:sleep(infinity) end)),
+      erlang:system_monitor(whereis(monitor_holder), [{long_gc, 1000}]),
+      ok.
+      """)
+
+    on_exit(fn ->
+      Checks.remote_eval("erlang:system_monitor(undefined), exit(whereis(monitor_holder), kill).")
+    end)
+
+    assert %{status: :ok, findings: %{skipped: skipped}} = Checks.run(:long_schedules)
+    assert skipped =~ "held by"
+    {:ok, holder} = Target.rpc(:erlang, :whereis, [:monitor_holder])
+    assert {:ok, {^holder, [{:long_gc, 1000}]}} = Target.rpc(:erlang, :system_monitor, [])
+  end
+
   test "module_code reads an older OTP's .beam here" do
     assert {:ok, info} = OtpDebugMcp.ModuleCode.fetch("queue")
     assert info.disassembled == :here

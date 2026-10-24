@@ -15,7 +15,8 @@ examples/erlang/run.sh stop
 background, with `-sname` on this host and the cookie in
 `~/.erlang.cookie`, which is also the tool's default. Node names end in
 `_erl` or start with `erl_`, so they can run alongside the demos in the
-other languages.
+other languages. The `native` demo also needs a C compiler (`cc`, or set
+`CC`): `run.sh` builds its NIF library against this Erlang's `erl_nif.h`.
 
 | Command | Node | The bug | What finds it |
 |---|---|---|---|
@@ -23,6 +24,7 @@ other languages.
 | `payments` | `payments_erl` | An OTP application whose `payments_gateway` parses a malformed URL a second after each start and crashes, just under `payments_sup`'s restart limit | `diagnose` (`supervisor_restarts`, with the exit reason and line), `supervision_tree` |
 | `sessions` | `sessions_erl` | `sessions` makes an atom from every session id and never deletes its ETS rows: the atom table fills up in under an hour | `diagnose` (`atom_table`: the growth, and when the table will be full), snapshot diffs, `ets_tables`, `trace_calls` |
 | `cluster` | `erl_a`, `erl_b`, `erl_c` | Three connected nodes, only `erl_b` running the shop bug | `cluster` |
+| `native` | `native_erl` | `native_shop`, an OTP application with a C NIF library, `native_nif`, and two classic NIF bugs. `checksum/1` does 80 ms of work on a normal scheduler without yielding, called by `native_pricing` every 300 ms: every process on that scheduler stalls. `parse/1` mallocs 256 KB a call and never frees it, called by `native_ingest` every 100 ms: the OS sees the node grow while `erlang:memory()` stays flat | `diagnose` (`long_schedules`, `native_memory`, `native_code`), snapshot diffs (`native_memory_delta_mb`), `module_code` (marks the NIFs), `profile` |
 
 To run one by hand instead, in the foreground:
 

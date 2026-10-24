@@ -22,7 +22,10 @@ defmodule OtpDebugMcp.Checks do
     :atom_table,
     :ets_tables,
     :ports,
+    :native_memory,
+    :native_code,
     :schedulers,
+    :long_schedules,
     :top_reductions
   ]
 
@@ -42,9 +45,11 @@ defmodule OtpDebugMcp.Checks do
       :allocator_fragmentation,
       :process_count,
       :ets_tables,
-      :ports
+      :ports,
+      :native_memory,
+      :native_code
     ],
-    [:schedulers, :top_reductions, :atom_table]
+    [:schedulers, :long_schedules, :top_reductions, :atom_table]
   ]
 
   # A check that takes longer than this is reported as failed.
@@ -647,21 +652,291 @@ defmodule OtpDebugMcp.Checks do
     end
   end
 
-  # Scheduler utilization — the honest CPU number for a BEAM node.
+  # Scheduler utilization — the honest CPU number for a BEAM node — for
+  # the normal schedulers and both kinds of dirty ones, where NIFs and BIFs
+  # that would block a normal scheduler run, with their run queues. Two
+  # readings of scheduler_wall_time_all a window apart; its scheduler ids
+  # are the normal ones, then dirty CPU, then dirty I/O.
+  @scheduler_window_ms 1_000
+  @schedulers ~S"""
+  erlang:system_flag(scheduler_wall_time, true),
+  T0 = lists:sort(erlang:statistics(scheduler_wall_time_all)),
+  receive after Window -> ok end,
+  T1 = lists:sort(erlang:statistics(scheduler_wall_time_all)),
+  Usage = [{Id, case Tot1 - Tot0 of 0 -> 0.0; D -> (A1 - A0) / D end}
+           || {{Id, A0, Tot0}, {Id, A1, Tot1}} <- lists:zip(T0, T1)],
+  {erlang:system_info(schedulers), erlang:system_info(dirty_cpu_schedulers),
+   erlang:system_info(dirty_cpu_schedulers_online), erlang:system_info(dirty_io_schedulers),
+   Usage, erlang:statistics(run_queue_lengths_all)}.
+  """
   def run(:schedulers) do
-    with {:ok, usage} <- Target.rpc(:recon, :scheduler_usage, [1_000], 10_000) do
-      per_sched = for {id, u} <- usage, do: %{scheduler: id, usage: Float.round(u, 3)}
+    with {:ok, {normal, dirty_cpu, dirty_cpu_online, dirty_io, usage, queues}} <-
+           remote_eval(@schedulers, Window: @scheduler_window_ms) do
+      {normal_usage, rest} = Enum.split(usage, normal)
+      {cpu_usage, io_usage} = Enum.split(rest, dirty_cpu)
+      {normal_queues, dirty_queues} = Enum.split(queues, normal)
+
+      per_sched =
+        for {id, u} <- normal_usage, do: %{scheduler: id, usage: Float.round(u, 3)}
+
       busy = Enum.count(per_sched, &(&1.usage > 0.8))
 
-      status = if busy == length(per_sched) and busy > 0, do: :warning, else: :ok
+      dirty_cpu_busy =
+        dirty_summary(Enum.take(cpu_usage, dirty_cpu_online), Enum.at(dirty_queues, 0, 0))
 
-      result(:schedulers, status, per_sched, """
-      recon:scheduler_usage/1 over a 1s window — unlike OS CPU%, this excludes
-      busy-wait spinning. All schedulers pegged means genuine CPU saturation;
-      one pegged scheduler with the rest idle can mean a long-running NIF.
-      """)
+      dirty_io_busy = dirty_summary(io_usage, Enum.at(dirty_queues, 1, 0))
+
+      status =
+        cond do
+          busy == length(per_sched) and busy > 0 -> :warning
+          dirty_cpu_busy.saturated -> :warning
+          true -> :ok
+        end
+
+      findings = %{
+        normal: per_sched,
+        normal_run_queue: Enum.sum(normal_queues),
+        dirty_cpu: Map.put(dirty_cpu_busy, :schedulers, dirty_cpu_online),
+        dirty_io: Map.put(dirty_io_busy, :schedulers, dirty_io)
+      }
+
+      result(
+        :schedulers,
+        status,
+        Map.update!(findings, :dirty_cpu, &Map.delete(&1, :saturated))
+        |> Map.update!(:dirty_io, &Map.delete(&1, :saturated)),
+        """
+        Scheduler utilization over a 1s window: the time each scheduler was
+        busy, which unlike OS CPU% excludes busy-wait spinning. normal are the
+        schedulers that run Erlang code; all of them near 1.0 is genuine CPU
+        saturation, one pegged with the rest idle often a process stuck in
+        native code (see long_schedules). dirty_cpu and dirty_io are the
+        schedulers dirty NIFs and BIFs run on, so they can't block a normal
+        one; their run_queue counts jobs waiting for one. A dirty CPU
+        run_queue that stays above zero with its schedulers near 1.0 means
+        more dirty work than they can do: callers wait for every dirty NIF
+        call. dirty_io is busy while I/O NIFs wait, which costs no CPU.
+        """
+      )
     else
       err -> error_result(:schedulers, err)
+    end
+  end
+
+  # Processes that held a scheduler for longer than @long_schedule_ms
+  # without yielding, garbage collections longer than @long_gc_ms, and
+  # processes suspended sending to a busy port, over a window. On OTP 27+
+  # this runs in a trace session of its own (trace:system/3), so the node's
+  # system_monitor, which only one process can hold, isn't touched; before
+  # OTP 27 it uses system_monitor itself, and only if nobody holds it.
+  # For native code (a NIF or BIF), the runtime reports no function in or
+  # out, so that's how native code shows.
+  @long_schedule_ms 10
+  @long_gc_ms 50
+  @monitor_window_ms 2_000
+  @monitor_events 1_000
+  @system_monitor ~S"""
+  Sessions = code:ensure_loaded(trace) =:= {module, trace}
+             andalso erlang:function_exported(trace, system, 3),
+  Start = case Sessions of
+    true ->
+      S = trace:session_create(otp_debug_mcp_monitor, self(), []),
+      [ok = trace:system(S, K, V) || {K, V} <- [{long_schedule, LongSchedule}, {long_gc, LongGc},
+                                               {busy_port, true}, {busy_dist_port, true}]],
+      {session, fun() -> trace:session_destroy(S) end};
+    false ->
+      case erlang:system_monitor() of
+        undefined ->
+          erlang:system_monitor(self(), [{long_schedule, LongSchedule}, {long_gc, LongGc},
+                                         busy_port, busy_dist_port]),
+          Me = self(),
+          {system_monitor, fun() ->
+            case erlang:system_monitor() of
+              {Me, _} -> erlang:system_monitor(undefined);
+              _ -> ok
+            end
+          end};
+        {Holder, _} ->
+          {held, Holder}
+      end
+  end,
+  case Start of
+    {held, H} ->
+      {held, H, catch erlang:process_info(H, [registered_name, current_function])};
+    {How, Stop} ->
+      Deadline = erlang:monotonic_time(millisecond) + Window,
+      Collect = fun C(N, Acc) when N >= MaxEvents -> Acc;
+                    C(N, Acc) ->
+                      Left = max(0, Deadline - erlang:monotonic_time(millisecond)),
+                      receive {monitor, Who, Kind, Info} -> C(N + 1, [{Who, Kind, Info} | Acc])
+                      after Left -> Acc
+                      end
+                end,
+      Events = lists:reverse(Collect(0, [])),
+      Stop(),
+      Flush = fun F() -> receive {monitor, _, _, _} -> F() after 0 -> ok end end,
+      Flush(),
+      Who = lists:usort([W || {W, _, _} <- Events, is_pid(W)]),
+      Describe = fun(P) ->
+        {P, catch proc_lib:translate_initial_call(P),
+         catch erlang:process_info(P, [registered_name, current_function])}
+      end,
+      {How, Events, [Describe(P) || P <- Who]}
+  end.
+  """
+  def run(:long_schedules) do
+    bindings = [
+      LongSchedule: @long_schedule_ms,
+      LongGc: @long_gc_ms,
+      Window: @monitor_window_ms,
+      MaxEvents: @monitor_events
+    ]
+
+    case remote_eval(@system_monitor, bindings) do
+      {:ok, {:held, holder, info}} ->
+        result(
+          :long_schedules,
+          :ok,
+          %{
+            skipped: "the node's system_monitor is held by #{Format.inspect(holder)}",
+            holder: format_proc_info(holder, info)
+          },
+          """
+          Not measured: this node predates OTP 27's trace sessions, so watching
+          for long schedules needs the node's system_monitor, and another
+          process holds it, perhaps someone's monitoring. Taking it over would
+          end theirs.
+          """
+        )
+
+      {:ok, {how, events, processes}} ->
+        long_schedules_result(how, events, processes)
+
+      err ->
+        error_result(:long_schedules, err)
+    end
+  end
+
+  # Memory the OS sees for the node (RSS), against what the VM's
+  # allocators hold. The difference is memory they don't manage: what NIFs
+  # and drivers allocate with malloc, thread stacks, the emulator's own
+  # code. Linux has it in /proc, without running anything; elsewhere it
+  # takes `ps`.
+  @rss ~S"""
+  case os:type() of
+    {unix, linux} ->
+      case file:read_file("/proc/self/status") of
+        {ok, Status} ->
+          case re:run(Status, "VmRSS:\\s+(\\d+) kB", [{capture, all_but_first, list}]) of
+            {match, [Kb]} -> {ok, list_to_integer(Kb) * 1024};
+            nomatch -> unavailable
+          end;
+        _ -> unavailable
+      end;
+    {unix, _} ->
+      case string:to_integer(string:trim(os:cmd("ps -o rss= -p " ++ os:getpid()))) of
+        {Kb, []} when is_integer(Kb) -> {ok, Kb * 1024};
+        _ -> unavailable
+      end;
+    _ ->
+      unavailable
+  end.
+  """
+  def run(:native_memory) do
+    with {:ok, {:ok, rss}} <- rss(),
+         {:ok, allocated} <- Target.rpc(:recon_alloc, :memory, [:allocated]),
+         {:ok, total} <- Target.rpc(:erlang, :memory, [:total]) do
+      outside = rss - allocated
+
+      status = if outside > max(512 * 1024 * 1024, div(rss, 2)), do: :warning, else: :ok
+
+      result(
+        :native_memory,
+        status,
+        %{
+          rss_bytes: rss,
+          vm_allocated_bytes: allocated,
+          erlang_memory_total_bytes: total,
+          outside_vm_bytes: outside
+        },
+        """
+        rss_bytes is the node's memory as the OS sees it; vm_allocated_bytes
+        what the VM's allocators hold (see allocator_fragmentation), which
+        contains everything erlang:memory() reports. outside_vm_bytes is the
+        difference: memory the VM doesn't manage, which erlang:memory() never
+        shows. Part of it is always there: thread stacks, the emulator's own
+        code, shared libraries; tens of MB is normal. The rest is what NIFs
+        and drivers allocate themselves with malloc. It can be negative, since
+        the allocators count memory the OS hasn't backed yet. One reading
+        says little: a native leak is outside_vm_bytes that keeps growing,
+        which snapshot diffs show (native_memory_delta_bytes). Then
+        native_code lists the native libraries the node can load, and
+        long_schedules and profile can point at the NIF that's called.
+        """
+      )
+    else
+      {:ok, :unavailable} ->
+        result(
+          :native_memory,
+          :ok,
+          %{skipped: "the node's OS memory isn't available on this OS"},
+          ""
+        )
+
+      err ->
+        error_result(:native_memory, err)
+    end
+  end
+
+  # The native libraries the node can load: in each application's priv
+  # directory, OTP's own apart, since every node has crypto's; and the port
+  # drivers loaded now. Which modules are NIFs only their .beam files say
+  # (module_code marks them).
+  @native_code ~S"""
+  Root = code:root_dir(),
+  Libs = [{App, filename:dirname(Priv), Files, lists:prefix(Root, Priv)}
+          || {App, _, _} <- application:loaded_applications(),
+             Priv <- [code:priv_dir(App)], is_list(Priv),
+             Files <- [filelib:wildcard(filename:join(Priv, "**/*.{so,dylib,dll}"))],
+             Files =/= []],
+  {Libs, catch erl_ddll:loaded_drivers()}.
+  """
+  def run(:native_code) do
+    with {:ok, {libs, drivers}} <- remote_eval(@native_code) do
+      {otp, own} = Enum.split_with(libs, &elem(&1, 3))
+
+      result(
+        :native_code,
+        :ok,
+        %{
+          native_libraries:
+            for {app, dir, files, _} <- own do
+              %{
+                app: Format.inspect(app),
+                files: Enum.map(files, &Path.relative_to(to_string(&1), to_string(dir)))
+              }
+            end,
+          otp_apps_with_native_libraries: Enum.map(otp, &Format.inspect(elem(&1, 0))),
+          loaded_drivers:
+            case drivers do
+              {:ok, names} -> Enum.map(names, &to_string/1)
+              _ -> []
+            end
+        },
+        """
+        Native code the node can run, outside OTP's own: native_libraries are
+        the shared libraries in each application's priv directory, where NIF
+        libraries live (Rustler, elixir_make and rebar3 port compilers put
+        them there), and loaded_drivers the port drivers loaded now.
+        otp_apps_with_native_libraries are OTP's (crypto and others), on every
+        node. A crash in native code takes the whole node down, so these are
+        the first suspects for one; a long schedule or native memory growth
+        points at them too. module_code on a module marks the functions that
+        are NIFs.
+        """
+      )
+    else
+      err -> error_result(:native_code, err)
     end
   end
 
@@ -686,6 +961,135 @@ defmodule OtpDebugMcp.Checks do
   end
 
   # -- Helpers -------------------------------------------------------------------
+
+  @doc "The node's resident memory, as the OS sees it."
+  def rss, do: remote_eval(@rss)
+
+  defp dirty_summary([], queue),
+    do: %{usage_avg: 0.0, usage_max: 0.0, run_queue: queue, saturated: false}
+
+  defp dirty_summary(usage, queue) do
+    values = Enum.map(usage, &elem(&1, 1))
+    avg = Enum.sum(values) / length(values)
+
+    %{
+      usage_avg: Float.round(avg, 3),
+      usage_max: Float.round(Enum.max(values), 3),
+      run_queue: queue,
+      saturated: avg > 0.8 and queue > 0
+    }
+  end
+
+  defp long_schedules_result(how, events, processes) do
+    who = Map.new(processes, fn {pid, initial, info} -> {pid, {initial, info}} end)
+
+    # This tool's own remote calls run in erpc processes.
+    ours? = fn pid ->
+      match?({:erpc, _, _}, elem(Map.get(who, pid, {nil, nil}), 0)) or
+        match?({:rpc, _, _}, elem(Map.get(who, pid, {nil, nil}), 0))
+    end
+
+    events = Enum.reject(events, fn {w, _, _} -> is_pid(w) and ours?.(w) end)
+
+    long =
+      for {w, :long_schedule, info} <- events do
+        {w, info[:timeout], info[:in], info[:out]}
+      end
+      |> Enum.group_by(&elem(&1, 0))
+      |> Enum.map(fn {w, list} ->
+        times = Enum.map(list, &elem(&1, 1))
+        {_, _, inn, out} = Enum.max_by(list, &elem(&1, 1))
+
+        %{
+          pid: Format.inspect(w),
+          times: length(list),
+          max_ms: Enum.max(times),
+          total_ms: Enum.sum(times),
+          scheduled_in: Format.inspect(inn),
+          scheduled_out: Format.inspect(out)
+        }
+        |> Map.merge(describe_process(w, who))
+      end)
+      |> Enum.sort_by(&(-&1.max_ms))
+
+    gcs =
+      for {w, :long_gc, info} <- events do
+        %{pid: Format.inspect(w), ms: info[:timeout], heap_words: info[:heap_size]}
+        |> Map.merge(describe_process(w, who))
+      end
+      |> Enum.sort_by(&(-&1.ms))
+      |> Enum.take(5)
+
+    busy =
+      for {w, kind, port} <- events, kind in [:busy_port, :busy_dist_port] do
+        {kind, w, port}
+      end
+      |> Enum.frequencies()
+      |> Enum.map(fn {{kind, w, port}, n} ->
+        %{kind: kind, pid: Format.inspect(w), port: Format.inspect(port), times: n}
+        |> Map.merge(describe_process(w, who))
+      end)
+
+    worst = long |> Enum.map(& &1.max_ms) |> Enum.max(fn -> 0 end)
+
+    status =
+      cond do
+        worst >= 100 -> :critical
+        long != [] or gcs != [] or busy != [] -> :warning
+        true -> :ok
+      end
+
+    result(
+      :long_schedules,
+      status,
+      %{
+        watched_ms: @monitor_window_ms,
+        via: if(how == :session, do: "its own trace session", else: "the node's system_monitor"),
+        long_schedules: long,
+        long_gcs: gcs,
+        busy_ports: busy
+      },
+      """
+      Over a #{div(@monitor_window_ms, 1000)}s window: processes that held a
+      scheduler for more than #{@long_schedule_ms} ms without yielding
+      (long_schedules), garbage collections longer than #{@long_gc_ms} ms,
+      and processes suspended because a port they send to was busy. Erlang
+      code runs out of its reductions and yields well within a millisecond,
+      so a long schedule is native code, a NIF or a BIF, that ran for
+      max_ms without returning. scheduled_in and scheduled_out are the
+      functions the process was in when it was scheduled in and out (the
+      Erlang code around the call, or undefined), not the NIF. A NIF that
+      runs this long blocks every other process on its scheduler, so latency
+      spikes for all of them; it should finish within about 1 ms, yield
+      (enif_schedule_nif) or run as a dirty NIF. Next step: module_code on
+      the process's modules marks which functions are NIFs, and trace_calls
+      or profile on them shows which call takes how long. A long_gc names a
+      process with a large heap; busy_ports a port that can't keep up with
+      its senders.
+      """
+    )
+  end
+
+  defp describe_process(pid, who) when is_pid(pid) do
+    case Map.get(who, pid) do
+      {initial, info} when is_list(info) ->
+        %{
+          initial_call: Format.inspect(initial),
+          current_function: Format.inspect(info[:current_function])
+        }
+        |> then(fn m ->
+          case info[:registered_name] do
+            name when is_atom(name) and name != [] -> Map.put(m, :name, Format.inspect(name))
+            _ -> m
+          end
+        end)
+
+      _ ->
+        %{exited: true}
+    end
+  end
+
+  defp describe_process(_port, _who), do: %{}
 
   @doc "Erlang funs InitialCall/1 and History/1, for code evaluated on the target."
   def supervisor_funs, do: @supervisor_funs

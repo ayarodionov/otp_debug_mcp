@@ -19,17 +19,18 @@ Contents:
   - [6. Crash loops and intermittent failures](#6-crash-loops-and-intermittent-failures)
   - [7. One node in a cluster misbehaves](#7-one-node-in-a-cluster-misbehaves)
   - [8. Incident triage](#8-incident-triage)
+  - [9. Native code: a NIF that blocks or leaks](#9-native-code-a-nif-that-blocks-or-leaks)
 - **Understanding and verifying**
-  - [9. Finding the bug in the code, not just the node](#9-finding-the-bug-in-the-code-not-just-the-node)
-  - [10. Seeing what a function really receives](#10-seeing-what-a-function-really-receives)
-  - [11. Verifying a fix or a deploy](#11-verifying-a-fix-or-a-deploy)
-  - [12. Trying a fix on the live node](#12-trying-a-fix-on-the-live-node)
-  - [13. Code that macros generated](#13-code-that-macros-generated)
-  - [14. Watching a load test](#14-watching-a-load-test)
-  - [15. Getting to know an unfamiliar system](#15-getting-to-know-an-unfamiliar-system)
+  - [10. Finding the bug in the code, not just the node](#10-finding-the-bug-in-the-code-not-just-the-node)
+  - [11. Seeing what a function really receives](#11-seeing-what-a-function-really-receives)
+  - [12. Verifying a fix or a deploy](#12-verifying-a-fix-or-a-deploy)
+  - [13. Trying a fix on the live node](#13-trying-a-fix-on-the-live-node)
+  - [14. Code that macros generated](#14-code-that-macros-generated)
+  - [15. Watching a load test](#15-watching-a-load-test)
+  - [16. Getting to know an unfamiliar system](#16-getting-to-know-an-unfamiliar-system)
 - **Other kinds of targets**
-  - [16. Erlang products you didn't write](#16-erlang-products-you-didnt-write)
-  - [17. Your own node during development](#17-your-own-node-during-development)
+  - [17. Erlang products you didn't write](#17-erlang-products-you-didnt-write)
+  - [18. Your own node during development](#18-your-own-node-during-development)
 - [Before pointing it at production](#before-pointing-it-at-production)
 - [Not supported yet](#not-supported-yet)
 
@@ -101,7 +102,8 @@ top one then shows the arguments it's called with.
 > the time?
 
 **Typical findings.** Real saturation (all schedulers near 1.0) versus one
-pegged scheduler with the rest idle, which points to a long-running NIF.
+pegged scheduler with the rest idle, which points to a long-running NIF
+(scenario 9: `long_schedules` names it).
 A profile usually puts most of the time in a few functions: a loop over a
 large list, repeated encoding or decoding, a regex compiled on every call.
 
@@ -215,9 +217,60 @@ gone after a restart.
 
 ---
 
+### 9. Native code: a NIF that blocks or leaks
+
+**Situation.** Latency spikes for everything on the node now and then, or
+the OS shows the node's memory growing while `erlang:memory()` stays flat.
+Both point at native code: a NIF that runs too long without yielding, or
+one that allocates memory it never frees. Native code is invisible to most
+BEAM tooling, and a NIF that blocks a scheduler stalls every process on it.
+
+> `native_erl@yourhost` stalls for tens of milliseconds now and then, and
+> the OS says it uses more memory every minute, though erlang:memory()
+> doesn't change. Find out why.
+
+**What the agent does.**
+- `diagnose` runs `long_schedules`, which watches for two seconds for
+  processes that held a scheduler for more than 10 ms. Erlang code yields
+  long before that, so these are native calls, named by the process that
+  made them.
+- `module_code` on that process's modules marks which functions are NIFs.
+  `trace_calls` or `profile` on them shows which call takes how long.
+- For memory, `native_memory` compares the OS's view of the node (RSS) with
+  what the VM's allocators hold, and snapshot diffs show the gap growing,
+  as `native_memory_delta_mb`, while `memory_delta` stays flat.
+- `native_code` lists the native libraries the node can load.
+- `schedulers` covers the dirty schedulers that dirty NIFs run on, and
+  their run queues.
+
+In testing against the native demo (`examples/erlang/run.sh native`), a
+session with only these tools took a minute. `long_schedules` named the
+pricing worker holding a scheduler for 80 ms at a time, and a trace showed
+the NIF it calls, `native_nif:checksum/1`, taking 80 ms per call, and
+another worker's call starting 80 ms late, as soon as it returned.
+Snapshot diffs showed native memory growing about 1 MB a second while
+`erlang:memory()` grew 0.03 MB, and `native_code` showed `native_nif.so`
+as the only native library outside OTP.
+
+**Watch out.**
+- A NIF that crashes takes the node down with it, and nothing connected to
+  the node can help afterwards. Enable core dumps on the node's host to see
+  where it crashed, and run the NIF's tests on OTP's debug or
+  AddressSanitizer emulators (`-emu_type debug`, `-emu_type asan`).
+- On a node before OTP 27, `long_schedules` needs the node's single
+  `system_monitor`, and skips the check if another process holds it.
+- A single `native_memory` reading says little: the VM's allocators count
+  memory the OS hasn't backed yet. Watch it change in snapshot diffs. On
+  macOS the OS's figure is noisy, because it compresses memory nobody
+  touches, so give the diffs longer windows there.
+- Native memory is a total for the node. It says that native code leaks,
+  and `native_code` which libraries are suspects, but not which NIF:
+  that takes the library's source, or its tests under AddressSanitizer
+  or Valgrind.
+
 ## Understanding and verifying
 
-### 9. Finding the bug in the code, not just the node
+### 10. Finding the bug in the code, not just the node
 
 **Situation.** You want the fix, not just the diagnosis.
 
@@ -233,10 +286,10 @@ often line numbers, and the agent opens those files and reads the code. In
 testing, it went from a mailbox backlog to the `Process.sleep` in the
 offending `handle_cast/2` on its own.
 
-Functions that macros generate aren't in the source to open; scenario 13
+Functions that macros generate aren't in the source to open; scenario 14
 finds them on the node.
 
-### 10. Seeing what a function really receives
+### 11. Seeing what a function really receives
 
 **Situation.** Production behaves differently from your tests, and you
 suspect the inputs.
@@ -257,7 +310,7 @@ Long terms are truncated so the result fits the agent's context.
   refuses and says what it found. Forcing it ends their trace, so the agent
   should ask you first.
 
-### 11. Verifying a fix or a deploy
+### 12. Verifying a fix or a deploy
 
 **Situation.** You've shipped a fix and want evidence that it worked.
 
@@ -269,7 +322,7 @@ or so apart. A fixed leak shows near-zero deltas under the same load that
 used to produce growth. The same before-and-after comparison works for
 config changes, such as a new pool size.
 
-### 12. Trying a fix on the live node
+### 13. Trying a fix on the live node
 
 **Situation.** You have a fix and want to see it work on the node before
 going through a deploy, or you need a stopgap now.
@@ -299,7 +352,7 @@ is a recorded session of it on the Elixir payments demo.
   calling itself without its module name) keep running it. While they do,
   the tool refuses to load that module again, rather than kill them.
 
-### 13. Code that macros generated
+### 14. Code that macros generated
 
 **Situation.** A stack trace or a trace names a function you can't find in
 your source, or points into a library's file: `gen_server.ex:887`, a
@@ -347,7 +400,7 @@ generates and explained what each does with a message it doesn't handle.
   and after `load_module` the file may not be the code that runs; the tool
   says so.
 
-### 14. Watching a load test
+### 15. Watching a load test
 
 **Situation.** You're load testing and want to know what breaks first and
 why.
@@ -360,7 +413,7 @@ why.
 the point where schedulers saturate, is your capacity limit, and
 `process_info` says which code it's in.
 
-### 15. Getting to know an unfamiliar system
+### 16. Getting to know an unfamiliar system
 
 **Situation.** You've inherited a system, or are onboarding, and want to see
 how it's actually put together at runtime.
@@ -369,7 +422,7 @@ how it's actually put together at runtime.
 > applications, what each supervisor runs, and what looks unusual.
 
 **What the agent does.** `supervision_tree` for each application, plus a
-`diagnose` baseline. Combined with the source (scenario 9), it can map
+`diagnose` baseline. Combined with the source (scenario 10), it can map
 runtime processes to modules and explain restart strategies and limits,
 which the tree shows for every supervisor along with its recent restarts.
 That's often quicker than reading the code alone, because the runtime
@@ -380,7 +433,7 @@ have been restarting.
 
 ## Other kinds of targets
 
-### 16. Erlang products you didn't write
+### 17. Erlang products you didn't write
 
 **Situation.** A third-party system built on the BEAM misbehaves: a message
 broker, a database, an XMPP server, anything written in Erlang, Elixir, Gleam
@@ -402,7 +455,7 @@ is used as-is.
 too, such as RabbitMQ's `rabbitmq-diagnostics`; use both. Locate the cookie
 with care: it grants full control of the node.
 
-### 17. Your own node during development
+### 18. Your own node during development
 
 **Situation.** You're developing locally and want runtime answers while you
 code.

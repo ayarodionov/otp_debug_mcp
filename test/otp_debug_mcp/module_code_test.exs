@@ -34,6 +34,7 @@ defmodule OtpDebugMcp.ModuleCodeTest do
       OtpdbgCode.Routes.route("/stock", fn c -> {:stock, c} end)
       OtpdbgCode.Routes.kept(:double)
       for n <- [:a, :b], do: def(unquote(:"get_\#{n}")(), do: unquote(n))
+      def bump(list), do: Enum.map(list, fn x -> x + 1 end)
     end
 
     defmodule OtpdbgCode.Cache do
@@ -272,6 +273,20 @@ defmodule OtpDebugMcp.ModuleCodeTest do
     assert text =~ "twice(X) ->"
   end
 
+  test "an anonymous fn: by its label, or by its compiled name" do
+    {:ok, result} = code(%{module: "OtpdbgCode.Shop"})
+    [fun] = for f <- result["functions"], f["function"] =~ "anonymous fn", do: f["function"]
+    assert fun =~ ~r/^anonymous fn\/1 in bump\/1 \(fun-\d+\)$/
+
+    [_, n] = Regex.run(~r/\(fun-(\d+)\)/, fun)
+
+    for spec <- [fun, "-bump/1-fun-#{n}-", "'-bump/1-fun-#{n}-'/1", "-bump/1-fun-#{n}-/1"] do
+      assert {:ok, %{"code" => [%{"function" => ^fun}]}} =
+               code(%{module: "OtpdbgCode.Shop", function: spec}),
+             spec
+    end
+  end
+
   test "decodes line numbers that need the longer encodings" do
     assert {:ok, result} = code(%{module: "otpdbg_code_long"})
     assert function(result, "at_3000/0")["written_at"] =~ ~r/:3000$/
@@ -313,7 +328,7 @@ defmodule OtpDebugMcp.ModuleCodeTest do
     assert text =~ "no function nope"
 
     assert {:error, text} = code_error(%{module: "OtpdbgCode.Shop", function: "handle/x"})
-    assert text =~ "name/arity"
+    assert text =~ "no function handle/x"
   end
 
   defp code_error(params), do: call_tool(Tools.ModuleCode, params)

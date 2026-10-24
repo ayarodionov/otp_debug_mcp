@@ -94,7 +94,16 @@ raw introspection when a purpose-built tool exists.
   tool itself sends); `seconds_until_full` is when the node dies. Grep for
   `String.to_atom`, `list_to_atom`, `binary_to_term` without `:safe`.
 - All schedulers ~1.0 → genuine CPU saturation. One scheduler pegged, rest
-  idle → suspect a long-running NIF or a dirty-scheduler misconfiguration.
+  idle, or latency spikes for every process now and then → native code
+  holding a scheduler: `long_schedules` names the process (anything over
+  10 ms there is a NIF or BIF), `module_code` marks its modules' NIFs,
+  `trace_calls`/`profile` time them. A dirty CPU run queue that stays above
+  zero → more dirty NIF work than the dirty schedulers can do.
+- OS memory (RSS) growing while `erlang:memory()` is flat → native memory:
+  `native_memory`, then snapshot diffs (`native_memory_delta_mb` growing
+  with `memory_delta` flat is a NIF or driver leak), then `native_code` for
+  the libraries. A NIF crash takes the node down: no tool helps afterwards;
+  suggest core dumps and OTP's debug/ASan emulators for the NIF's tests.
 - `supervisor_restarts` with recent restarts → a crash loop. Below
   `max_restarts` it never fails over and shows up only as intermittent
   errors; `at_limit` means one more crash takes the supervisor and its

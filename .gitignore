@@ -24,5 +24,7 @@ otp_debug_mcp-*.tar
 
 /examples/elixir/ebin/
 /examples/erlang/ebin/
+/examples/erlang/native_shop/ebin/
+/examples/erlang/native_shop/priv/
 /examples/gleam/build/
 /examples/lfe/ebin/
