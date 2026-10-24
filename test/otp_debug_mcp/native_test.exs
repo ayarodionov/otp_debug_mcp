@@ -62,6 +62,10 @@ defmodule OtpDebugMcp.NativeTest do
     :ok
   end
 
+  # OTP 28 added trace:system/3, which lets a trace session watch for long
+  # schedules; before, the check uses the node's system_monitor.
+  defp sessions?, do: String.to_integer(System.otp_release()) >= 28
+
   # A registered process calling checksum/1 every 200 ms.
   defp start_spinner do
     {:ok, _} =
@@ -78,9 +82,10 @@ defmodule OtpDebugMcp.NativeTest do
   test "long_schedules names the process stuck in a NIF" do
     start_spinner()
 
-    assert %{status: status, findings: %{via: "its own trace session", long_schedules: long}} =
+    assert %{status: status, findings: %{via: via, long_schedules: long}} =
              Checks.run(:long_schedules)
 
+    assert via == if(sessions?(), do: "its own trace session", else: "the node's system_monitor")
     assert status in [:warning, :critical]
 
     assert %{name: ":native_spinner", max_ms: max, times: times} =
@@ -94,7 +99,12 @@ defmodule OtpDebugMcp.NativeTest do
     TestTarget.call(target, :erlang, :system_monitor, [holder, [{:long_gc, 1000}]])
     on_exit(fn -> TestTarget.call(target, :erlang, :system_monitor, [:undefined]) end)
 
-    %{findings: %{long_schedules: _}} = Checks.run(:long_schedules)
+    # With a session it measures anyway; with system_monitor it backs off.
+    case Checks.run(:long_schedules) do
+      %{findings: %{long_schedules: _}} -> assert sessions?()
+      %{findings: %{skipped: skipped}} -> assert skipped =~ "held by" and not sessions?()
+    end
+
     assert {^holder, [{:long_gc, 1000}]} = TestTarget.call(target, :erlang, :system_monitor, [])
   end
 

@@ -725,12 +725,12 @@ defmodule OtpDebugMcp.Checks do
 
   # Processes that held a scheduler for longer than @long_schedule_ms
   # without yielding, garbage collections longer than @long_gc_ms, and
-  # processes suspended sending to a busy port, over a window. On OTP 27+
-  # this runs in a trace session of its own (trace:system/3), so the node's
-  # system_monitor, which only one process can hold, isn't touched; before
-  # OTP 27 it uses system_monitor itself, and only if nobody holds it.
-  # For native code (a NIF or BIF), the runtime reports no function in or
-  # out, so that's how native code shows.
+  # processes suspended sending to a busy port, over a window. On OTP 28+
+  # this runs in a trace session of its own (trace:system/3, which OTP 27's
+  # sessions don't have yet), so the node's system_monitor, which only one
+  # process can hold, isn't touched; before OTP 28 it uses system_monitor
+  # itself, and only if nobody holds it. Erlang code yields well within
+  # @long_schedule_ms, so what holds a scheduler that long is native code.
   @long_schedule_ms 10
   @long_gc_ms 50
   @monitor_window_ms 2_000
@@ -802,10 +802,10 @@ defmodule OtpDebugMcp.Checks do
             holder: format_proc_info(holder, info)
           },
           """
-          Not measured: this node predates OTP 27's trace sessions, so watching
-          for long schedules needs the node's system_monitor, and another
-          process holds it, perhaps someone's monitoring. Taking it over would
-          end theirs.
+          Not measured: this node predates OTP 28, whose trace sessions can
+          watch for long schedules by themselves, so it needs the node's
+          system_monitor, and another process holds it, perhaps someone's
+          monitoring. Taking it over would end theirs.
           """
         )
 

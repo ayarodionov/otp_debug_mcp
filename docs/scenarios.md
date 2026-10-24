@@ -257,8 +257,9 @@ as the only native library outside OTP.
   the node can help afterwards. Enable core dumps on the node's host to see
   where it crashed, and run the NIF's tests on OTP's debug or
   AddressSanitizer emulators (`-emu_type debug`, `-emu_type asan`).
-- On a node before OTP 27, `long_schedules` needs the node's single
+- On a node before OTP 28, `long_schedules` needs the node's single
   `system_monitor`, and skips the check if another process holds it.
+  OTP 28's trace sessions watch for long schedules by themselves.
 - A single `native_memory` reading says little: the VM's allocators count
   memory the OS hasn't backed yet. Watch it change in snapshot diffs. On
   macOS the OS's figure is noisy, because it compresses memory nobody

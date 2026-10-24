@@ -8,9 +8,10 @@
   held a scheduler for more than 10 ms without yielding, which is native
   code (a NIF or BIF), with each process's name, initial call and the
   longest and total time; plus garbage collections over 50 ms and
-  processes suspended on busy ports. On OTP 27+ it runs in its own trace
-  session, so the node's `system_monitor` is left alone; before OTP 27 it
-  uses `system_monitor`, and skips the check if another process holds it.
+  processes suspended on busy ports. On OTP 28+ it runs in its own trace
+  session (`trace:system/3`), so the node's `system_monitor` is left
+  alone; before OTP 28 it uses `system_monitor`, and skips the check if
+  another process holds it.
 - `schedulers` also measures the dirty CPU and I/O schedulers, which dirty
   NIFs run on, and their run queues, and warns when the dirty CPU
   schedulers are saturated with work waiting.
