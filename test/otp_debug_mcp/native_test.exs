@@ -109,10 +109,16 @@ defmodule OtpDebugMcp.NativeTest do
   end
 
   test "native_memory and snapshot diffs see memory NIFs allocate", %{target: target} do
-    assert %{findings: %{rss_bytes: rss, vm_allocated_bytes: _, outside_vm_bytes: _}} =
+    assert %{findings: %{os_memory_bytes: os, os_memory_measure: measure, outside_vm_bytes: _}} =
              Checks.run(:native_memory)
 
-    assert rss > 0
+    assert os > 0
+
+    case :os.type() do
+      {:unix, :darwin} -> assert measure == "phys_footprint"
+      {:unix, :linux} -> assert measure == "VmRSS + VmSwap"
+      _ -> :ok
+    end
 
     {:ok, _} = Snapshotter.take()
     # 200 calls: 50 MB that erlang:memory() never sees.

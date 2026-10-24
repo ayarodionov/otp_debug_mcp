@@ -71,7 +71,7 @@ defmodule OtpDebugMcp.Snapshotter do
              port_count_delta: new.port_count - old.port_count,
              atom_count_delta: new.atom_count - old.atom_count - ours.atoms,
              total_message_queue_delta: new.total_mq - old.total_mq,
-             rss_delta_mb: mb_delta(new.rss, old.rss),
+             os_memory_delta_mb: mb_delta(new.os_memory, old.os_memory),
              native_memory_delta_mb: mb_delta(outside(new), outside(old)),
              excluded_footprint_of_this_tool: %{
                atoms: ours.atoms,
@@ -83,7 +83,7 @@ defmodule OtpDebugMcp.Snapshotter do
              check); process_count_delta → process leak; atom_count_delta > 0 \
              is always worth investigating (atoms are never freed). \
              native_memory_delta_mb is the growth of memory outside the VM's \
-             allocators (the node's RSS minus what they hold): memory NIFs and \
+             allocators (the OS's memory for the node minus what they hold): memory NIFs and \
              drivers allocate themselves, which erlang:memory() never shows, so \
              growth there with memory_delta flat is a native leak (run the \
              native_memory and native_code checks). The deltas \
@@ -101,8 +101,9 @@ defmodule OtpDebugMcp.Snapshotter do
 
   defp mb_delta(_new, _old), do: nil
 
-  defp outside(%{rss: rss, allocated: allocated}) when is_integer(rss) and is_integer(allocated),
-    do: rss - allocated
+  defp outside(%{os_memory: os, allocated: allocated})
+       when is_integer(os) and is_integer(allocated),
+       do: os - allocated
 
   defp outside(_snap), do: nil
 
@@ -118,7 +119,10 @@ defmodule OtpDebugMcp.Snapshotter do
          {:ok, total_mq} <- OtpDebugMcp.Checks.remote_eval(@total_message_queue) do
       # Native memory needs the OS's RSS and recon_alloc: without either,
       # the diff leaves it out.
-      rss = with {:ok, {:ok, bytes}} <- OtpDebugMcp.Checks.rss(), do: bytes, else: (_ -> nil)
+      os_memory =
+        with {:ok, {:ok, bytes, _how}} <- OtpDebugMcp.Checks.os_memory(),
+             do: bytes,
+             else: (_ -> nil)
 
       allocated =
         with {:ok, bytes} when is_integer(bytes) <-
@@ -128,7 +132,7 @@ defmodule OtpDebugMcp.Snapshotter do
 
       {:ok,
        %{
-         rss: rss,
+         os_memory: os_memory,
          allocated: allocated,
          at: DateTime.utc_now(),
          memory: Map.new(memory),

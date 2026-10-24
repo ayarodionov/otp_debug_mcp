@@ -817,61 +817,84 @@ defmodule OtpDebugMcp.Checks do
     end
   end
 
-  # Memory the OS sees for the node (RSS), against what the VM's
-  # allocators hold. The difference is memory they don't manage: what NIFs
-  # and drivers allocate with malloc, thread stacks, the emulator's own
-  # code. Linux has it in /proc, without running anything; elsewhere it
-  # takes `ps`.
-  @rss ~S"""
+  # Memory the OS charges the node, against what the VM's allocators hold.
+  # The difference is memory they don't manage: what NIFs and drivers
+  # allocate with malloc, thread stacks, the emulator's own code. Resident
+  # memory (RSS) alone isn't enough: memory nobody touches, which leaked
+  # memory is, gets compressed or swapped out under memory pressure and
+  # leaves RSS, so a leak can stop showing there at all. So: macOS's
+  # physical footprint, which counts compressed and swapped memory too
+  # (`footprint`, else `ps`'s RSS); on Linux VmRSS plus VmSwap from /proc,
+  # without running anything; elsewhere `ps`'s RSS.
+  @os_memory ~S"""
+  Pid = os:getpid(),
+  Ps = fun() ->
+         case string:to_integer(string:trim(os:cmd("ps -o rss= -p " ++ Pid))) of
+           {Kb, []} when is_integer(Kb) -> {ok, Kb * 1024, "rss (ps)"};
+           _ -> unavailable
+         end
+       end,
   case os:type() of
     {unix, linux} ->
       case file:read_file("/proc/self/status") of
         {ok, Status} ->
-          case re:run(Status, "VmRSS:\\s+(\\d+) kB", [{capture, all_but_first, list}]) of
-            {match, [Kb]} -> {ok, list_to_integer(Kb) * 1024};
-            nomatch -> unavailable
-          end;
-        _ -> unavailable
+          Kb = fun(Key) ->
+                 case re:run(Status, Key ++ ":\\s+(\\d+) kB", [{capture, all_but_first, list}]) of
+                   {match, [N]} -> list_to_integer(N);
+                   nomatch -> 0
+                 end
+               end,
+          {ok, (Kb("VmRSS") + Kb("VmSwap")) * 1024, "VmRSS + VmSwap"};
+        _ -> Ps()
+      end;
+    {unix, darwin} ->
+      Out = os:cmd("footprint -p " ++ Pid ++ " --format bytes 2>/dev/null"),
+      case re:run(Out, "phys_footprint: (\\d+) B", [{capture, all_but_first, list}]) of
+        {match, [B]} -> {ok, list_to_integer(B), "phys_footprint"};
+        nomatch -> Ps()
       end;
     {unix, _} ->
-      case string:to_integer(string:trim(os:cmd("ps -o rss= -p " ++ os:getpid()))) of
-        {Kb, []} when is_integer(Kb) -> {ok, Kb * 1024};
-        _ -> unavailable
-      end;
+      Ps();
     _ ->
       unavailable
   end.
   """
   def run(:native_memory) do
-    with {:ok, {:ok, rss}} <- rss(),
+    with {:ok, {:ok, os_bytes, measure}} <- os_memory(),
          {:ok, allocated} <- Target.rpc(:recon_alloc, :memory, [:allocated]),
          {:ok, total} <- Target.rpc(:erlang, :memory, [:total]) do
-      outside = rss - allocated
+      outside = os_bytes - allocated
 
-      status = if outside > max(512 * 1024 * 1024, div(rss, 2)), do: :warning, else: :ok
+      status = if outside > max(512 * 1024 * 1024, div(os_bytes, 2)), do: :warning, else: :ok
 
       result(
         :native_memory,
         status,
         %{
-          rss_bytes: rss,
+          os_memory_bytes: os_bytes,
+          os_memory_measure: to_string(measure),
           vm_allocated_bytes: allocated,
           erlang_memory_total_bytes: total,
           outside_vm_bytes: outside
         },
         """
-        rss_bytes is the node's memory as the OS sees it; vm_allocated_bytes
-        what the VM's allocators hold (see allocator_fragmentation), which
-        contains everything erlang:memory() reports. outside_vm_bytes is the
-        difference: memory the VM doesn't manage, which erlang:memory() never
-        shows. Part of it is always there: thread stacks, the emulator's own
-        code, shared libraries; tens of MB is normal. The rest is what NIFs
-        and drivers allocate themselves with malloc. It can be negative, since
-        the allocators count memory the OS hasn't backed yet. One reading
-        says little: a native leak is outside_vm_bytes that keeps growing,
-        which snapshot diffs show (native_memory_delta_bytes). Then
-        native_code lists the native libraries the node can load, and
-        long_schedules and profile can point at the NIF that's called.
+        os_memory_bytes is the memory the OS charges the node, measured as
+        os_memory_measure says: macOS's phys_footprint, or VmRSS + VmSwap on
+        Linux, both of which count memory compressed or swapped out, as
+        leaked memory nobody touches soon is; rss (ps) where neither is
+        available, which under memory pressure can miss a leak entirely.
+        vm_allocated_bytes is what the VM's allocators hold (see
+        allocator_fragmentation), which contains everything erlang:memory()
+        reports. outside_vm_bytes is the difference: memory the VM doesn't
+        manage, which erlang:memory() never shows. Part of it is always
+        there: thread stacks, the emulator's own code, shared libraries;
+        tens of MB is normal. The rest is what NIFs and drivers allocate
+        themselves with malloc. It can be negative, since the allocators
+        count memory the OS hasn't backed yet. One reading says little: a
+        native leak is outside_vm_bytes that keeps growing, which snapshot
+        diffs show (native_memory_delta_mb). Then native_code lists the
+        native libraries the node can load, and long_schedules and profile
+        can point at the NIF that's called.
         """
       )
     else
@@ -962,8 +985,8 @@ defmodule OtpDebugMcp.Checks do
 
   # -- Helpers -------------------------------------------------------------------
 
-  @doc "The node's resident memory, as the OS sees it."
-  def rss, do: remote_eval(@rss)
+  @doc "The memory the OS charges the node, and how it was measured."
+  def os_memory, do: remote_eval(@os_memory)
 
   defp dirty_summary([], queue),
     do: %{usage_avg: 0.0, usage_max: 0.0, run_queue: queue, saturated: false}

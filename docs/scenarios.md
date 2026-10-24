@@ -236,21 +236,26 @@ BEAM tooling, and a NIF that blocks a scheduler stalls every process on it.
   made them.
 - `module_code` on that process's modules marks which functions are NIFs.
   `trace_calls` or `profile` on them shows which call takes how long.
-- For memory, `native_memory` compares the OS's view of the node (RSS) with
-  what the VM's allocators hold, and snapshot diffs show the gap growing,
-  as `native_memory_delta_mb`, while `memory_delta` stays flat.
+- For memory, `native_memory` compares the memory the OS charges the node
+  with what the VM's allocators hold, and snapshot diffs show the gap
+  growing, as `native_memory_delta_mb`, while `memory_delta` stays flat.
+  The OS's figure includes memory compressed or swapped out (macOS's
+  physical footprint, `VmRSS` plus `VmSwap` on Linux): leaked memory
+  nobody touches gets compressed or swapped under memory pressure, and
+  resident memory (RSS) alone can stop showing the leak at all.
 - `native_code` lists the native libraries the node can load.
 - `schedulers` covers the dirty schedulers that dirty NIFs run on, and
   their run queues.
 
 In testing against the native demo (`examples/erlang/run.sh native`), a
-session with only these tools took a minute. `long_schedules` named the
-pricing worker holding a scheduler for 80 ms at a time, and a trace showed
-the NIF it calls, `native_nif:checksum/1`, taking 80 ms per call, and
-another worker's call starting 80 ms late, as soon as it returned.
-Snapshot diffs showed native memory growing about 1 MB a second while
-`erlang:memory()` grew 0.03 MB, and `native_code` showed `native_nif.so`
-as the only native library outside OTP.
+session with only these tools took a minute (walkthrough 7).
+`long_schedules` named the pricing worker holding a scheduler for over
+100 ms at a time, and a trace showed the NIF it calls,
+`native_nif:checksum/1`, taking that long per call, and another worker's
+call held until it returned. Snapshot diffs showed native memory growing
+about 2.5 MB a second while `erlang:memory()` grew 0.04 MB, and
+`native_code` showed `native_nif.so` as the only native library outside
+OTP.
 
 **Watch out.**
 - A NIF that crashes takes the node down with it, and nothing connected to
@@ -261,9 +266,7 @@ as the only native library outside OTP.
   `system_monitor`, and skips the check if another process holds it.
   OTP 28's trace sessions watch for long schedules by themselves.
 - A single `native_memory` reading says little: the VM's allocators count
-  memory the OS hasn't backed yet. Watch it change in snapshot diffs. On
-  macOS the OS's figure is noisy, because it compresses memory nobody
-  touches, so give the diffs longer windows there.
+  memory the OS hasn't backed yet. Watch it change in snapshot diffs.
 - Native memory is a total for the node. It says that native code leaks,
   and `native_code` which libraries are suspects, but not which NIF:
   that takes the library's source, or its tests under AddressSanitizer

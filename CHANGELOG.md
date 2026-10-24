@@ -15,10 +15,14 @@
 - `schedulers` also measures the dirty CPU and I/O schedulers, which dirty
   NIFs run on, and their run queues, and warns when the dirty CPU
   schedulers are saturated with work waiting.
-- `native_memory` (in `diagnose`): the node's RSS against what the VM's
-  allocators hold. The difference is memory NIFs and drivers allocate
-  themselves, which `erlang:memory()` never shows. Snapshot diffs report
-  its growth, `native_memory_delta_mb`, and `rss_delta_mb`.
+- `native_memory` (in `diagnose`): the memory the OS charges the node
+  against what the VM's allocators hold. The difference is memory NIFs and
+  drivers allocate themselves, which `erlang:memory()` never shows.
+  Snapshot diffs report its growth, `native_memory_delta_mb`, and
+  `os_memory_delta_mb`. The OS's figure counts memory compressed or
+  swapped out: macOS's physical footprint, `VmRSS` plus `VmSwap` on Linux.
+  Resident memory alone can miss a leak under memory pressure, since
+  leaked memory nobody touches is the first to be compressed or swapped.
 - `native_code` (in `diagnose`): the native libraries in applications'
   `priv` directories, OTP's own apart, and the loaded port drivers.
 - `module_code` marks NIFs: functions in `-nifs`, or whose stub calls
@@ -27,7 +31,8 @@
   library whose `checksum/1` holds a scheduler for 80 ms and whose
   `parse/1` leaks 256 KB a call. CI smoke-tests the release against it.
   `docs/scenarios.md` has a scenario for native code (9; the ones after
-  it are renumbered).
+  it are renumbered), and `docs/walkthroughs.md` a seventh recorded
+  session against the demo.
 
 ### Other changes
 

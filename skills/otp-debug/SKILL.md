@@ -99,7 +99,7 @@ raw introspection when a purpose-built tool exists.
   10 ms there is a NIF or BIF), `module_code` marks its modules' NIFs,
   `trace_calls`/`profile` time them. A dirty CPU run queue that stays above
   zero → more dirty NIF work than the dirty schedulers can do.
-- OS memory (RSS) growing while `erlang:memory()` is flat → native memory:
+- OS memory growing while `erlang:memory()` is flat → native memory:
   `native_memory`, then snapshot diffs (`native_memory_delta_mb` growing
   with `memory_delta` flat is a NIF or driver leak), then `native_code` for
   the libraries. A NIF crash takes the node down: no tool helps afterwards;

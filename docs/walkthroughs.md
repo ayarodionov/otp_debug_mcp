@@ -1,6 +1,6 @@
 # Walkthroughs
 
-Six debugging sessions against the demo nodes in `examples/`, start to
+Seven debugging sessions against the demo nodes in `examples/`, start to
 finish, for following along on your own machine. Each one gives the
 command that starts the demo, the prompt, every tool call the agent made
 with the part of its result that mattered, and the conclusion. The
@@ -24,7 +24,8 @@ Contents:
 4. [Trying the fix on the live node](#4-trying-the-fix-on-the-live-node)
 5. [Code that a macro generated](#5-code-that-a-macro-generated)
 6. [A Phoenix route that macros shadowed](#6-a-phoenix-route-that-macros-shadowed)
-7. [Cleaning up](#cleaning-up)
+7. [NIFs that block a scheduler and leak memory](#7-nifs-that-block-a-scheduler-and-leak-memory)
+8. [Cleaning up](#cleaning-up)
 
 ---
 
@@ -722,6 +723,127 @@ a real id.
   declared after it. `resources` generates them for `show`, `update`
   and `delete`, so `GET /products/:id` shadows `GET /products/search`,
   and `DELETE /products/:id` would shadow a `DELETE /products/all`.
+
+---
+
+## 7. NIFs that block a scheduler and leak memory
+
+```sh
+examples/erlang/run.sh native
+```
+
+`native_erl` runs `native_shop`, an Erlang application with a C NIF
+library, `priv/native_nif.so`, built with the system's C compiler. Two
+workers call its NIFs: `native_pricing` calls `native_nif:checksum/1` every
+300 ms, and `native_ingest` calls `native_nif:parse/1` every 100 ms.
+
+> `native_erl@yourhost` stalls for tens of milliseconds now and then, and
+> the OS says it uses more memory every minute, though erlang:memory()
+> doesn't change. Find out why.
+
+Only the otp-debug tools were allowed, so the agent couldn't read the C
+code: everything came from the node.
+
+**`connect`**, then **`diagnose`**. The checks for native code:
+
+```json
+{"check": "long_schedules", "status": "critical",
+ "findings": {"via": "its own trace session", "watched_ms": 2000,
+   "long_schedules": [{"name": "native_pricing", "pid": "<0.91.0>",
+     "initial_call": "{native_shop_worker,init,1}",
+     "times": 4, "max_ms": 118, "total_ms": 445,
+     "scheduled_in": "{gen_server,loop,5}", "scheduled_out": "{gen_server,loop,5}"}],
+   "long_gcs": [], "busy_ports": []}}
+{"check": "native_memory",
+ "findings": {"os_memory_bytes": 118670128, "os_memory_measure": "phys_footprint",
+   "vm_allocated_bytes": 84525056, "erlang_memory_total_bytes": 49571748,
+   "outside_vm_bytes": 34145072}}
+{"check": "native_code",
+ "findings": {"native_libraries": [{"app": "native_shop", "files": ["priv/native_nif.so"]}],
+   "otp_apps_with_native_libraries": ["crypto"],
+   "loaded_drivers": ["tcp_inet", "udp_inet", "ram_file_drv"]}}
+```
+
+`native_pricing` held a scheduler for up to 118 ms at a time, 445 ms of
+the 2 s window. Erlang code yields within a millisecond, so this is native
+code. `schedulers` agreed: one normal scheduler 24% busy, the other nine
+idle, the dirty schedulers unused. `native_code` shows the one native
+library outside OTP. The agent took a snapshot to watch memory.
+
+**`module_code`** on the workers' modules. `native_shop_worker` runs a
+`Fun` it's given on a timer, and `native_shop_sup:init/1` shows which:
+
+```erlang
+[Worker(native_pricing, 300, fun() -> native_nif:checksum(Order) end),
+ Worker(native_ingest, 100, fun() -> native_nif:parse(Record) end)]
+```
+
+and `module_code(module: "native_nif")` marks both as NIFs:
+
+```json
+{"function": "checksum/1", "nif": "native code: the module's NIF library replaces this function when it loads"}
+{"function": "parse/1", "nif": "native code: the module's NIF library replaces this function when it loads"}
+```
+
+**`trace_calls(module: "native_nif", max_events: 20)`** times the calls,
+and shows the stall:
+
+```
+18:39:36.559620Z <0.92.0> native_nif:parse/1 --> 1024
+18:39:36.655341Z <0.91.0> native_nif:checksum(<<11,250,21,...>>)
+18:39:36.762290Z <0.91.0> native_nif:checksum/1 --> 6584402008498996368
+18:39:36.762369Z <0.92.0> native_nif:parse(<<39,78,0,...>>)
+18:39:36.762790Z <0.92.0> native_nif:parse/1 --> 1024
+```
+
+`checksum/1` took 107 ms. `parse` is due every 100 ms, but its next call
+came 203 ms after the previous one, 79 µs after `checksum` returned: it
+was waiting for the scheduler `checksum` held. Every process on that
+scheduler waits the same way. `parse/1` itself takes about 0.5 ms.
+
+**`snapshot(diff)`**, 16 s after the first snapshot:
+
+```json
+{"window_seconds": 16, "os_memory_delta_mb": 36.05, "native_memory_delta_mb": 35.8,
+ "memory_delta_mb": {"total": 0.04, "binary": 0.01, ...},
+ "process_count_delta": 0, "atom_count_delta": 0}
+```
+
+36 MB more memory outside the VM in 16 s, about 2.5 MB/s, while
+`erlang:memory()` grew 0.04 MB. A second diff, over 4 s, gave 10.5 MB.
+`native_memory` a minute after the first reading showed 111 MB outside the
+VM, up from 34 MB.
+
+**The answer.** Both symptoms come from `native_nif.so`:
+
+- `checksum/1` runs for around 100 ms on a normal scheduler without
+  yielding. Every process on that scheduler stalls for as long, which is
+  the "tens of milliseconds now and then".
+- Native memory grows about 2.5 MB/s: memory the library allocates and
+  never frees, which `erlang:memory()` can't see.
+
+The agent couldn't tell which NIF leaks, and said so. Native memory is a
+total for the node, and both NIFs run all the time. It worked out what
+each would leak per call if it were the one: about 250 KB for `parse/1`,
+or 780 KB for `checksum/1`. (It's `parse/1`, at 256 KB a call.) It offered
+to call each NIF on its own through `remote_eval` and compare, which needs
+your approval because it leaks more memory on the node.
+
+**Fixes.**
+
+- **Don't block a normal scheduler.** A NIF should return within about
+  1 ms. Run `checksum` as a dirty CPU NIF (`ERL_NIF_DIRTY_JOB_CPU_BOUND`
+  in its `ErlNifFunc` entry), or split the work and yield with
+  `enif_schedule_nif`, using `enif_consume_timeslice` to know when.
+- **Free what the NIF allocates.** In `parse`, the buffer from `malloc` is
+  never freed. Free it before returning, or use `enif_alloc`/`enif_free`;
+  for data that outlives the call, a resource whose destructor frees it.
+- **Find the leaking NIF before production.** Run each NIF in a loop in a
+  test under AddressSanitizer or Valgrind, or OTP's `asan` emulator
+  (`-emu_type asan`): they report the allocation that's never freed.
+- **Watch native memory.** A snapshot diff with `native_memory_delta_mb`
+  growing and `memory_delta` flat is a native leak, which
+  `erlang:memory()`-based monitoring never alerts on.
 
 ---
 

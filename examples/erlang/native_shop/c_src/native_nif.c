@@ -1,27 +1,24 @@
 /* The native half of native_shop: two NIFs, each with a classic bug.
  *
- * checksum/1 does about 80 ms of work on a normal scheduler without
- * yielding: every other process on that scheduler waits for it.
+ * checksum/1 does tens of milliseconds of work on a normal scheduler
+ * without yielding: every other process on that scheduler waits for it.
  * parse/1 copies its input into a buffer it never frees: 256 KB of native
  * memory per call, which erlang:memory() never shows. */
 #include <erl_nif.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
-static double now_ms(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return ts.tv_sec * 1000.0 + ts.tv_nsec / 1e6;
-}
+#ifndef ROUNDS
+#define ROUNDS 38000
+#endif
 
 static ERL_NIF_TERM checksum(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     ErlNifBinary bin;
     if (!enif_inspect_binary(env, argv[0], &bin)) return enif_make_badarg(env);
-    /* The bug: 80 ms of rounds over the input, in one go. */
+    /* The bug: thousands of rounds over the input in one go, about 80 ms
+     * for the 4 KB the demo passes on a fast machine, without yielding. */
     unsigned long sum = 0;
-    double until = now_ms() + 80.0;
-    while (now_ms() < until)
+    for (int round = 0; round < ROUNDS; round++)
         for (size_t i = 0; i < bin.size; i++) sum = sum * 31 + bin.data[i];
     return enif_make_ulong(env, sum);
 }
