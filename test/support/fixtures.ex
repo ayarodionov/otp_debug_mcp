@@ -245,6 +245,142 @@ defmodule OtpDebugMcp.Fixtures.DyingApp do
     do: Supervisor.start_link([{Crasher, ms}], strategy: :one_for_one, max_restarts: 1)
 end
 
+defmodule OtpDebugMcp.Fixtures.Caller do
+  @moduledoc """
+  GenServers that call each other, for deadlocks, chains of calls and
+  bottlenecks. A `{:via, servers}` call makes each server call the next
+  while handling it; the last one waits forever.
+  """
+  use GenServer
+
+  def start(name), do: GenServer.start(__MODULE__, nil, name: name)
+
+  @doc "A process of its own that makes `request` to `server`, and waits."
+  def call_later(server, request) do
+    spawn(fn -> GenServer.call(server, request, :infinity) end)
+    :ok
+  end
+
+  @doc "Make `server` call `target` while handling a cast: a call from its callbacks."
+  def make_call(server, target, request), do: GenServer.cast(server, {:call, target, request})
+
+  @impl true
+  def init(nil), do: {:ok, nil}
+
+  @impl true
+  def handle_call({:via, [next | rest]}, _from, state),
+    do: {:reply, GenServer.call(next, {:via, rest}, :infinity), state}
+
+  def handle_call({:via, []}, _from, state) do
+    Process.sleep(:infinity)
+    {:reply, :ok, state}
+  end
+
+  @impl true
+  def handle_cast({:call, target, request}, state) do
+    GenServer.call(target, request, :infinity)
+    {:noreply, state}
+  end
+end
+
+defmodule OtpDebugMcp.Fixtures.Parser do
+  @moduledoc """
+  A registered process that parses a quantity every `ms` milliseconds,
+  catching what fails: one input in four isn't a number, and raises.
+  """
+
+  @inputs ["3", "1", "n/a", "2"]
+
+  def start(name, ms) do
+    Process.register(spawn(fn -> loop(ms, 0) end), name)
+    :ok
+  end
+
+  def quantity(text), do: String.to_integer(text)
+
+  defp loop(ms, i) do
+    try do
+      quantity(Enum.at(@inputs, rem(i, 4)))
+    rescue
+      ArgumentError -> :error
+    end
+
+    Process.sleep(ms)
+    loop(ms, i + 1)
+  end
+end
+
+defmodule OtpDebugMcp.Fixtures.Emitter do
+  @moduledoc """
+  Emits telemetry events every `ms` milliseconds, as Phoenix and Ecto do:
+  a request to one of two routes, the second one slow, with the query it
+  runs, and every fourth request an exception. The conns carry a big
+  assign, which the tool must not copy. A handler stands in for Phoenix's
+  logger's.
+  """
+
+  def start(ms) do
+    events = [[:phoenix, :router_dispatch, :stop], [:phoenix, :router_dispatch, :exception]]
+    :ok = :telemetry.attach_many("fixture-logger", events, &__MODULE__.log/4, nil)
+
+    spawn(fn -> loop(ms, 0) end)
+    :ok
+  end
+
+  def log(_event, _measurements, _metadata, _config), do: :ok
+
+  defp loop(ms, i) do
+    {route, path, action, took} =
+      if rem(i, 2) == 0,
+        do: {"/products/:id", "/products/#{i}", :show, 2},
+        else: {"/search", "/search", :search, 40}
+
+    conn = %{
+      __struct__: Plug.Conn,
+      method: "GET",
+      request_path: path,
+      status: 200,
+      host: "localhost",
+      assigns: %{page: String.duplicate("x", 100_000)}
+    }
+
+    :telemetry.execute(
+      [:shop, :repo, :query],
+      %{total_time: native(took - 1), queue_time: native(1), query_time: native(took - 2)},
+      %{
+        source: "products",
+        query: "SELECT p0.id FROM products AS p0 WHERE (p0.id = $1)",
+        params: [i],
+        result: {:ok, %{rows: [[i]]}},
+        repo: OtpDebugMcp.Fixtures.FakeRepo
+      }
+    )
+
+    meta = %{route: route, conn: conn, plug: ShopWeb.ProductController, plug_opts: action}
+
+    if rem(i, 4) == 3 do
+      :telemetry.execute(
+        [:phoenix, :router_dispatch, :exception],
+        %{duration: native(took)},
+        Map.merge(meta, %{kind: :error, reason: %ArgumentError{message: "bad id"}, stacktrace: []})
+      )
+    else
+      :telemetry.execute([:phoenix, :router_dispatch, :stop], %{duration: native(took)}, meta)
+    end
+
+    Process.sleep(ms)
+    loop(ms, i + 1)
+  end
+
+  defp native(ms), do: System.convert_time_unit(ms, :millisecond, :native)
+end
+
+defmodule OtpDebugMcp.Fixtures.FakeRepo do
+  @moduledoc "Looks like an Ecto repo to discovery: __adapter__/0 and config/0."
+  def __adapter__, do: :fake
+  def config, do: [telemetry_prefix: [:shop, :repo]]
+end
+
 defmodule OtpDebugMcp.Fixtures.Spawner do
   @moduledoc "Keeps a node busy spawning a short-lived process every `interval` ms."
 

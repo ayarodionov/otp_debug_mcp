@@ -164,7 +164,8 @@ defmodule OtpDebugMcp.Tools do
     schema do
       field(:check, {:required, :string},
         description:
-          "One of: message_queues, supervisor_restarts, binary_leak (force-GCs every " <>
+          "One of: message_queues, call_chains (1s: deadlocks, chains of calls, processes " <>
+            "many wait on), supervisor_restarts, binary_leak (force-GCs every " <>
             "process), memory_breakdown, " <>
             "allocator_fragmentation, process_count, atom_table, ets_tables, ports, " <>
             "native_memory, native_code, schedulers (normal and dirty), " <>
@@ -448,6 +449,64 @@ defmodule OtpDebugMcp.Tools do
     end
   end
 
+  defmodule Telemetry do
+    @moduledoc """
+    What the node's telemetry events say over a window: Phoenix requests
+    by route, Ecto queries by table and query (with time waiting for a
+    pool connection), Oban jobs by worker, HTTP client requests, each with
+    its count, durations (p50, p95, max) and slowest example, and the
+    errors of exception events. Far cheaper than tracing, and it sees what
+    the libraries measure. Without events, it listens to those the node's
+    own handlers listen to and the known events of its loaded libraries;
+    with list: true it only says which those are. Attaches a handler for
+    the window, detached afterwards; nothing is loaded on the node.
+    """
+    use Anubis.Server.Component, type: :tool
+
+    alias OtpDebugMcp.Tools
+
+    schema do
+      field(:events, {:list, :string},
+        description:
+          "Events to listen to, e.g. phoenix.router_dispatch.stop or my_app.repo.query; " <>
+            "default: those found on the node"
+      )
+
+      field(:duration_ms, :integer, description: "How long to listen (default 10000, max 60000)")
+
+      field(:list, :boolean, description: "Only list the events found on the node")
+    end
+
+    @impl true
+    def execute(%{list: true}, frame) do
+      case OtpDebugMcp.Telemetry.discover() do
+        {:ok, events} ->
+          Tools.json_response(frame, %{
+            events:
+              for(
+                {event, source} <- events,
+                do: %{event: OtpDebugMcp.Telemetry.event_name(event), from: source}
+              ),
+            hint:
+              "from: handlers means a handler on the node listens to it; otherwise it's a " <>
+                "known event of a library loaded there. Call telemetry without list to listen."
+          })
+
+        {:error, reason} ->
+          Tools.error_response(frame, reason)
+      end
+    end
+
+    def execute(params, frame) do
+      duration = (params[:duration_ms] || 10_000) |> min(60_000) |> max(100)
+
+      case OtpDebugMcp.Telemetry.listen(params[:events], duration) do
+        {:ok, report} -> Tools.json_response(frame, report)
+        {:error, reason} -> Tools.error_response(frame, reason)
+      end
+    end
+  end
+
   defmodule CrashDump do
     @moduledoc """
     Why a node died, from its crash dump (erl_crash.dump, or where
@@ -557,11 +616,16 @@ defmodule OtpDebugMcp.Tools do
     event count and duration, and an early stop if calls arrive too fast,
     so this cannot flood a production node.
 
+    With exceptions: true, only the calls that raise (an error, exit or
+    throw) are reported, each with its arguments and the exception: how to
+    see which calls fail on a busy function, and with what.
+
     On OTP 27+ targets the trace runs in its own isolated trace session and
     never affects other tracing on the node. On older targets it uses
-    recon_trace and refuses if other tracing is active (e.g. someone's
-    recon_trace session), because starting this trace would end it; ask the
-    user before retrying with force: true.
+    recon_trace (or, for exceptions, the legacy trace session) and refuses
+    if other tracing is active (e.g. someone's recon_trace session), because
+    starting this trace would end it; ask the user before retrying with
+    force: true.
     """
     use Anubis.Server.Component, type: :tool
 
@@ -582,6 +646,12 @@ defmodule OtpDebugMcp.Tools do
         description: "Stop after this long regardless (default 10000, max 60000)"
       )
 
+      field(:exceptions, :boolean,
+        description:
+          "Only the calls that raise, each with its arguments and the exception; " <>
+            "the calls that return aren't reported"
+      )
+
       field(:force, :boolean,
         description:
           "Pre-OTP 27 targets only: trace even though other tracing is active " <>
@@ -596,13 +666,17 @@ defmodule OtpDebugMcp.Tools do
              params[:function],
              max_events(params),
              (params[:duration_ms] || 10_000) |> min(60_000) |> max(100),
-             force: params[:force] == true
+             force: params[:force] == true,
+             exceptions: params[:exceptions] == true
            ) do
         {:ok, result} ->
           result =
             result
             |> Map.reject(fn {_k, v} -> is_nil(v) end)
-            |> Map.put(:stopped_by, stopped_by(result.events, max_events(params)))
+            |> Map.put(
+              :stopped_by,
+              stopped_by(result.events, max_events(params), params[:exceptions] == true)
+            )
 
           Tools.json_response(frame, result)
 
@@ -615,12 +689,22 @@ defmodule OtpDebugMcp.Tools do
 
     # The events say which limit ended the trace: a call and its return or
     # exception are two events.
-    defp stopped_by(events, max) do
+    defp stopped_by(events, max, exceptions?) do
       cond do
-        Enum.any?(events, &String.starts_with?(&1, "trace stopped early")) -> "overload"
-        Enum.any?(events, &(&1 =~ "rate limit tripped")) -> "overload"
-        length(events) >= max -> "max_events (a call and its return count as two)"
-        true -> "duration"
+        Enum.any?(events, &String.starts_with?(&1, "trace stopped early")) ->
+          "overload"
+
+        Enum.any?(events, &(&1 =~ "rate limit tripped")) ->
+          "overload"
+
+        length(events) >= max and exceptions? ->
+          "max_events (a call and its exception count as two)"
+
+        length(events) >= max ->
+          "max_events (a call and its return count as two)"
+
+        true ->
+          "duration"
       end
     end
   end

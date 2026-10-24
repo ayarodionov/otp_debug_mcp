@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### Deadlocks, telemetry and failing calls
+
+- `call_chains` (in `diagnose`): who waits on whom. It finds the processes
+  waiting in a call (`gen_server`, `GenServer`, `gen_statem`), in
+  `Task.await`, or in `start_link` for an init, and the process each
+  waits on. Sampling twice, a second apart, it keeps the calls still
+  pending on the same monitor and reports deadlocks (cycles), each
+  process with its request, its timeout and how many others wait on it;
+  chains of calls, ending at the process that holds them up; and the
+  processes most waited on. Critical for a deadlock.
+- `telemetry`: what the node's `:telemetry` events say over a window.
+  Phoenix requests by route, Ecto queries by table and query, Oban jobs
+  by worker, HTTP client requests by host, each with count, p50/p95/max
+  of each duration (Ecto's `queue_time` too) and the slowest example; the
+  errors of exception events; the events that didn't happen. Without
+  events it listens to those the node's handlers listen to and the known
+  events of the libraries running there (`list: true` lists them). A
+  handler that keeps only small metadata sends events to a collector on
+  the node, capped, detached afterwards; nothing is loaded.
+- `trace_calls` with `exceptions: true`: only the calls that raise, each
+  with its arguments and the exception, even when the caller catches it.
+  In its own trace session on OTP 27+; before, in the legacy session,
+  refused while others trace.
+- `examples/erlang/run.sh locks`: two gen_servers that deadlock, with
+  shoppers stuck behind them; CI smoke-tests the release against it.
+  Scenarios 2, 4 and 14 cover the new tools.
+
 ### Errors and crash dumps
 
 - `recent_errors`: the errors the node logs, grouped by who failed and

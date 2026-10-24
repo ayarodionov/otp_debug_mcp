@@ -86,6 +86,10 @@ else:
     results = json.loads(text)
     for r in results:
         print(f"  {r['check']}: {r['status']}")
+    # A demo with a known problem: SMOKE_EXPECT_CRITICAL names the check.
+    critical = os.environ.get("SMOKE_EXPECT_CRITICAL")
+    if critical and not any(r["check"] == critical and r["status"] == "critical" for r in results):
+        failures.append(f"diagnose: {critical} isn't critical")
     mq = next(r for r in results if r["check"] == "message_queues")
     if mq["findings"]:
         printed_pid = mq["findings"][0]["pid"]

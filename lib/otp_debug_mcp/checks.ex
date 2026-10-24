@@ -14,6 +14,7 @@ defmodule OtpDebugMcp.Checks do
 
   @checks [
     :message_queues,
+    :call_chains,
     :supervisor_restarts,
     :binary_leak,
     :memory_breakdown,
@@ -40,6 +41,7 @@ defmodule OtpDebugMcp.Checks do
   @phases [
     [
       :message_queues,
+      :call_chains,
       :supervisor_restarts,
       :binary_leak,
       :memory_breakdown,
@@ -89,6 +91,17 @@ defmodule OtpDebugMcp.Checks do
   defp status_rank(:ok), do: 3
 
   # -- Individual checks ---------------------------------------------------------
+
+  # Who waits on whom: deadlocks, chains of calls, bottlenecks.
+  def run(:call_chains) do
+    case OtpDebugMcp.CallChains.run() do
+      {:ok, status, findings, interpretation} ->
+        result(:call_chains, status, findings, interpretation)
+
+      err ->
+        error_result(:call_chains, err)
+    end
+  end
 
   # Processes with large mailboxes. The single most common BEAM production
   # problem: a bottleneck process that can't keep up, usually visible long

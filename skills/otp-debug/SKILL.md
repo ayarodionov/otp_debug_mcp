@@ -52,6 +52,18 @@ raw introspection when a purpose-built tool exists.
      files from before it listened (an error at boot is there). For rare
      errors, `watch_minutes` keeps listening in the background; call it
      again later, and with `stop: true` when done.
+   - Calls time out, or something hangs → `call_chains` (in `diagnose`):
+     a deadlock lists the processes calling each other with each one's
+     request; a chain ends at the process holding everyone up; then
+     `module_code` on their callbacks for where they call each other.
+   - Slow requests on an Elixir node (Phoenix, Ecto, Oban, HTTP clients)
+     → `telemetry` first: per route, query and job, the counts, p50/p95/max
+     and the slowest example, from events the libraries already emit,
+     much cheaper than tracing. `queue_time_ms` high on Ecto queries means
+     the pool is exhausted.
+   - Some calls fail, but you can't see which or with what arguments
+     (errors caught, or lost among many calls) → `trace_calls` with
+     `exceptions: true`: only the calls that raise, with their arguments.
    - CPU suspicion → `run_check(schedulers)` first; OS CPU% lies about the
      BEAM (busy-wait). Only if schedulers are pegged, use `top_reductions`,
      then `profile` on the module the top process is running, to see which

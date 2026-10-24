@@ -8,6 +8,7 @@
 #     examples/erlang/run.sh native      # native_erl: NIFs that block a scheduler and leak memory
 #     examples/erlang/run.sh ports       # ports_erl: leaked sockets, a slow consumer, external programs
 #     examples/erlang/run.sh orders      # orders_erl: errors that only its logs show
+#     examples/erlang/run.sh locks       # locks_erl: two gen_servers that deadlock
 #     examples/erlang/run.sh crash       # crash_erl: runs out of memory within a minute, leaving a crash dump
 #     examples/erlang/run.sh stop        # stop them all
 #
@@ -50,6 +51,7 @@ case "${1:-}" in
   payments) build; start payments_erl "{ok, _} = application:ensure_all_started(payments)" ;;
   sessions) build; start sessions_erl "sessions:start()" ;;
   ports) build; start ports_erl "ok = ports_shop:start()" ;;
+  locks) build; start locks_erl "ok = locks_shop:start()" ;;
   orders)
     build
     mkdir -p "$here/log"
@@ -87,11 +89,11 @@ case "${1:-}" in
     erl -sname "stopper_$$" -noshell -eval "
       [rpc:call(list_to_atom(N ++ \"@$host\"), init, stop, [], 2000)
        || N <- [\"shop_erl\", \"payments_erl\", \"sessions_erl\", \"native_erl\", \"ports_erl\",
-                \"orders_erl\", \"crash_erl\", \"erl_a\", \"erl_b\", \"erl_c\"]],
+                \"orders_erl\", \"crash_erl\", \"locks_erl\", \"erl_a\", \"erl_b\", \"erl_c\"]],
       halt()."
     ;;
   *)
-    echo "usage: $0 shop|payments|sessions|cluster|native|ports|orders|crash|stop" >&2
+    echo "usage: $0 shop|payments|sessions|cluster|native|ports|orders|locks|crash|stop" >&2
     exit 1
     ;;
 esac

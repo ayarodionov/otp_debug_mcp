@@ -185,6 +185,13 @@ jobs:
           SMOKE_CRASH_DUMP="$PWD/examples/erlang/dumps/crash_erl.dump" SMOKE_CRASH_CAUSE=out_of_memory \
             python3 scripts/mcp_smoke.py _build/prod/rel/otp_debug_mcp/bin/otp_debug_mcp \
             "orders_erl@$(hostname -s)" orders_payments
+      - name: Smoke test against the locks demo node
+        run: |
+          examples/erlang/run.sh locks
+          sleep 8
+          SMOKE_EXPECT_CRITICAL=call_chains \
+            python3 scripts/mcp_smoke.py _build/prod/rel/otp_debug_mcp/bin/otp_debug_mcp \
+            "locks_erl@$(hostname -s)" locks_shop
       - name: Smoke test against the Gleam demo node
         run: |
           examples/gleam/run.sh shop

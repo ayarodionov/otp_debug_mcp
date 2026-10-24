@@ -142,4 +142,20 @@ defmodule OtpDebugMcp.OldOtpTest do
 
     assert {:ok, ^before} = Target.rpc(:logger, :get_handler_ids, [])
   end
+
+  test "trace_calls with exceptions reports only the calls that raise" do
+    {:ok, looper} =
+      Checks.remote_eval(
+        "spawn(fun() -> group_leader(whereis(user), self()), " <>
+          "(fun L(N) -> catch queue:head(case N rem 2 of 0 -> queue:new(); 1 -> queue:from_list([N]) end), " <>
+          "timer:sleep(20), L(N + 1) end)(0) end)."
+      )
+
+    assert {:ok, %{events: [call, raised]}} =
+             Tracer.trace("queue", "head", 2, 5_000, exceptions: true)
+
+    assert call =~ "queue:head({[],[]})"
+    assert raised =~ "queue:head/1 raised error:empty"
+    Checks.remote_eval("exit(Pid, kill).", Pid: looper)
+  end
 end

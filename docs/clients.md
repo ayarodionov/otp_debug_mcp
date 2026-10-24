@@ -148,8 +148,8 @@ directory as a skill if your plan has skills.
 - **Approvals.** Clients ask before each tool call unless you allow a
   tool. Allowing the read-only ones (`diagnose`, `run_check`,
   `process_info`, `port_info`, `supervision_tree`, `snapshot`, `cluster`,
-  `module_code`, `crash_dump`, and `recent_errors`, which adds a logger
-  handler only while it listens) saves clicks; keep `trace_calls`,
+  `module_code`, `crash_dump`, and `recent_errors` and `telemetry`, which
+  add a handler only while they listen) saves clicks; keep `trace_calls`,
   `trace_port` and `profile` on ask for production nodes.
 - **`load_module` asks you to approve each load** in a dialog, using MCP
   2026-07-28 form elicitation. A client that can't do that gets a

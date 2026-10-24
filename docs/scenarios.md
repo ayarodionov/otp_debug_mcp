@@ -84,9 +84,23 @@ that a cache was handling 1 message for every 170 it received. If the
 process is busy rather than waiting, `profile` on its module shows which
 of its functions use the time.
 
+On an Elixir node, `telemetry` is often the faster start. It listens to
+the events Phoenix, Ecto, Oban, Finch and the like already emit, for ten
+seconds, and gives each route, query and job its count, its p50, p95 and
+maximum duration, and its slowest example. Ecto queries also come with
+`queue_time_ms`, the time spent waiting for a connection from the pool.
+It costs far less than tracing, so it's the right first look on a busy
+node. Against the Phoenix demo (`examples/elixir/run.sh phoenix`), it
+showed in its first call that every request to `/api/products/search`
+was dispatched to the route `/api/products/:id`, action `show`, and
+answered 404.
+
 **Typical findings.** One process serializing work for everyone (a registry,
 a single DB connection, the owner of an ETS table doing all writes), or
-fire-and-forget casts with no backpressure.
+fire-and-forget casts with no backpressure. From `telemetry`: one route or
+query far slower than the rest, a p95 far above the p50 (some calls wait
+on something), queries waiting on the pool (`queue_time_ms`), or one
+request running many fast queries.
 
 ### 3. High CPU
 
@@ -124,7 +138,22 @@ large list, repeated encoding or decoding, a regex compiled on every call.
 
 > Calls to `Billing.Ledger` time out after 5 seconds. Why?
 
-**What the agent does.** `process_info` on the process by name. Its age
+**What the agent does.** `diagnose` includes `call_chains`. It finds the
+processes waiting on another process: in a `gen_server`, `GenServer` or
+`gen_statem` call, in `Task.await`, or in `start_link` for a new
+process's init. It samples them twice, a second apart, and from the calls
+still pending it reports:
+- **deadlocks:** processes waiting on each other in a cycle, each with
+  its request and timeout, and how many others wait on it;
+- **chains:** calls waiting on calls, ending at the process that holds
+  them all up;
+- **the processes most waited on.**
+
+Against the locks demo (`examples/erlang/run.sh locks`), it named the two
+gen_servers calling each other and what each had asked the other, with
+timeout infinity, and the shoppers stuck behind them.
+
+`process_info` on the process by name tells more. Its age
 and its supervisor's restart history tell a long-stuck process from one
 that keeps crashing and coming back. `current_function` and the stack
 trace show where it's blocked: waiting on
@@ -133,9 +162,10 @@ fetches its state, and a `sys:get_state` timeout is itself a finding:
 the process is too busy or blocked to answer. `supervision_tree` shows
 what it depends on and what restarts with it.
 
-**Typical findings.** Two processes calling each other (deadlock),
-a call to a slow external service made inside a GenServer, or a process
-blocked behind its own backlog.
+**Typical findings.** Two processes calling each other (deadlock), often
+one calling back into the other from a callback, a call to a slow
+external service made inside a GenServer, or a process blocked behind its
+own backlog.
 
 ### 5. Approaching a system limit
 
@@ -456,6 +486,14 @@ suspect the inputs.
 **What the agent does.** `trace_calls` with a function name and a small
 `max_events`. Each event shows the arguments and, on return, the result.
 Long terms are truncated so the result fits the agent's context.
+
+When only some calls fail, `exceptions: true` reports only the calls that
+raise (an error, an exit or a throw), each with its arguments and the
+exception. That works even when the caller catches the error, so nothing
+is logged, and on a function called thousands of times a second, where
+the failing calls would be lost among the others. On the orders demo,
+`trace_calls` on `orders_importer:parse_line/1` with `exceptions: true`
+shows the line with `n/a` that raises `badarg`.
 
 **Watch out.**
 - Traced arguments are real production data and go to the AI provider

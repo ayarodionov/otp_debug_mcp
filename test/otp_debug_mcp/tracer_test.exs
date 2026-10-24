@@ -165,4 +165,63 @@ defmodule OtpDebugMcp.TracerTest do
                Tracer.trace(@ticker, "handle_info", 4, 5_000, backend: :recon_trace)
     end
   end
+
+  describe "exceptions only" do
+    @parser "OtpDebugMcp.Fixtures.Parser"
+
+    setup %{plain: plain} do
+      :ok =
+        TestTarget.call(plain, OtpDebugMcp.Fixtures.Parser, :start, [
+          :"parser_#{System.unique_integer([:positive])}",
+          10
+        ])
+
+      {:ok, _} = TestTarget.connect(plain)
+      :ok
+    end
+
+    defp assert_only_failing_calls(events) do
+      assert [call, raised, _, _] = events
+      assert call =~ ~s|quantity(<<"n/a">>)|
+      assert raised =~ ~r"quantity/1 raised error:"
+      assert raised =~ "badarg"
+
+      for {line, i} <- Enum.with_index(events),
+          rem(i, 2) == 0,
+          do: assert(line =~ "n/a", "a call that didn't raise: #{line}")
+    end
+
+    test "in a trace session, and nothing is left behind", %{plain: plain} do
+      assert {:ok, %{events: events, backend: "isolated trace session"}} =
+               Tracer.trace(@parser, "quantity", 4, 5_000, exceptions: true)
+
+      assert_only_failing_calls(events)
+      sessions = TestTarget.call(plain, :trace, :session_info, [:all])
+      refute Enum.any?(sessions, &match?({:otp_debug_mcp_exceptions, _}, &1))
+    end
+
+    test "in the legacy session, which it clears", %{plain: plain} do
+      assert {:ok, %{events: events, backend: "legacy trace session"}} =
+               Tracer.trace(@parser, "quantity", 4, 5_000,
+                 exceptions: true,
+                 backend: :recon_trace
+               )
+
+      assert_only_failing_calls(events)
+
+      mfa = {OtpDebugMcp.Fixtures.Parser, :quantity, 1}
+      assert TestTarget.call(plain, :erlang, :trace_info, [mfa, :traced]) == {:traced, false}
+      assert {:ok, nil} = Tracer.other_tracing()
+    end
+
+    test "the legacy session refuses while others trace, unless forced" do
+      operator_target()
+
+      assert {:error, %{refused: _, active_tracing: %{recon_trace_session: true}}} =
+               Tracer.trace(@ticker, "handle_info", 4, 1_000,
+                 exceptions: true,
+                 backend: :recon_trace
+               )
+    end
+  end
 end

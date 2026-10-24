@@ -111,6 +111,97 @@ defmodule OtpDebugMcp.Tracer do
   end.
   """
 
+  # For exceptions only: a holder that reports a call only when it raises.
+  # It keeps each process's calls in flight (the last 50), drops one when
+  # it returns, and sends the call, with its arguments, and the exception
+  # when it raises: through every traced function the exception passes.
+  # In its own trace session when Session is true, else in the legacy one.
+  @exceptions_holder ~S"""
+  group_leader(Collector, self()),
+  {M, F, MatchSpec} = Spec,
+  Me = self(),
+  {Stop, N} = case Session of
+    true ->
+      S = trace:session_create(otp_debug_mcp_exceptions, Me, []),
+      trace:process(S, all, true, [call, timestamp]),
+      trace:process(S, Me, false, [call, timestamp]),
+      {fun() -> trace:session_destroy(S) end, trace:function(S, {M, F, '_'}, MatchSpec, [local])};
+    false ->
+      erlang:trace(all, true, [call, timestamp, {tracer, Me}]),
+      erlang:trace(Me, false, [call, timestamp]),
+      {fun() ->
+         erlang:trace_pattern({M, F, '_'}, false, [local]),
+         erlang:trace(all, false, [call, timestamp])
+       end,
+       erlang:trace_pattern({M, F, '_'}, MatchSpec, [local])}
+  end,
+  Time = fun({_, _, Us} = TS) ->
+    {_, {H, Mi, Sec}} = calendar:now_to_universal_time(TS),
+    io_lib:format("~2..0w:~2..0w:~2..0w.~6..0wZ", [H, Mi, Sec, Us])
+  end,
+  Fmt = fun(Format, Args) -> io_lib:format(Format, Args, [{chars_limit, 1000}]) end,
+  Line = fun
+    ({trace_ts, P, call, {Mod, Fun, Args}, TS}) ->
+      Fmt("~s ~p ~tp:~tp(~ts)",
+          [Time(TS), P, Mod, Fun, lists:join(", ", [io_lib:format("~9999tP", [A, 20], [{chars_limit, 300}]) || A <- Args])]);
+    ({trace_ts, P, exception_from, {Mod, Fun, Arity}, {Class, Reason}, TS}) ->
+      Fmt("~s ~p ~tp:~tp/~p raised ~p:~9999tP", [Time(TS), P, Mod, Fun, Arity, Class, Reason, 20])
+  end,
+  _ = [Line(E) || E <- [{trace_ts, self(), call, {M, F, [x]}, os:timestamp()},
+                        {trace_ts, self(), exception_from, {M, F, 1}, {error, x}, os:timestamp()}]],
+  Owner ! {trace_started, self(), N},
+  Deadline = erlang:monotonic_time(millisecond) + Duration,
+  Busy = fun() ->
+    case erlang:process_info(self(), message_queue_len) of
+      {message_queue_len, Q} when Q > 1000 -> true;
+      _ -> false
+    end
+  end,
+  Loop = fun L(Count, Pending) ->
+    Left = max(0, Deadline - erlang:monotonic_time(millisecond)),
+    receive
+      stop ->
+        stopped;
+      {trace_ts, P, call, _, _} = Call ->
+        case Busy() of
+          true -> overloaded;
+          false -> L(Count, Pending#{P => lists:sublist([Call | maps:get(P, Pending, [])], 50)})
+        end;
+      {trace_ts, P, return_from, _, _, _} ->
+        case maps:get(P, Pending, []) of
+          [_ | Returned] -> L(Count, Pending#{P => Returned});
+          [] -> L(Count, Pending)
+        end;
+      {trace_ts, P, exception_from, _, _, _} = Exception ->
+        {Called, Rest} = case maps:get(P, Pending, []) of
+          [C | Cs] -> {[Line(C)], Cs};
+          [] -> {[], []}
+        end,
+        [Collector ! {trace_line, self(), T} || T <- Called ++ [Line(Exception)]],
+        Count2 = Count + length(Called) + 1,
+        case Busy() of
+          _ when Count2 >= Max -> max_events;
+          true -> overloaded;
+          false -> L(Count2, Pending#{P => Rest})
+        end;
+      _ ->
+        L(Count, Pending)
+    after Left ->
+      duration
+    end
+  end,
+  Reason = Loop(0, #{}),
+  Stop(),
+  case Reason of
+    overloaded ->
+      Collector ! {trace_line, self(),
+        "trace stopped early: calls arrived faster than they could be traced safely. "
+        "Trace a specific function instead of the whole module."};
+    _ ->
+      ok
+  end.
+  """
+
   # The holder's group leader is set to the collector first, so recon_trace's
   # own messages (e.g. "rate limit tripped") land in the results instead of
   # being forwarded to our stdout, which is the MCP protocol stream.
@@ -156,6 +247,10 @@ defmodule OtpDebugMcp.Tracer do
     * `:backend` - `:auto` (default) picks an isolated trace session when
       the target supports it, else recon_trace; `:recon_trace` forces the
       latter, for testing it on newer nodes
+    * `:exceptions` - report only the calls that raise, each with the
+      exception (default `false`). Without trace sessions this traces in
+      the node's legacy session rather than through recon_trace, refused
+      the same way while others trace.
   """
   @spec trace(String.t(), String.t() | nil, pos_integer(), pos_integer(), keyword()) ::
           {:ok, result()} | {:error, term()}
@@ -168,12 +263,12 @@ defmodule OtpDebugMcp.Tracer do
     with {:ok, true} <- Target.rpc(:code, :is_loaded, [mod]) |> loaded?(module_str),
          {:ok, target} <- Target.target(),
          {:ok, backend} <- backend(Keyword.get(opts, :backend, :auto)) do
-      case backend do
-        :session ->
-          session_trace(target, spec, max_events, duration_ms)
+      force = Keyword.get(opts, :force, false)
 
-        :recon_trace ->
-          recon_trace(target, spec, max_events, duration_ms, Keyword.get(opts, :force, false))
+      case {backend, Keyword.get(opts, :exceptions, false)} do
+        {:session, false} -> session_trace(target, spec, max_events, duration_ms)
+        {:recon_trace, false} -> recon_trace(target, spec, max_events, duration_ms, force)
+        {backend, true} -> exceptions_trace(target, backend, spec, max_events, duration_ms, force)
       end
     end
   end
@@ -220,6 +315,34 @@ defmodule OtpDebugMcp.Tracer do
       with {:ok, events} <-
              run_holder(target, @recon_holder, bindings, collector, spec, duration_ms) do
         {:ok, %{events: events, backend: "recon_trace", stopped_other_tracing: other}}
+      end
+    end
+  end
+
+  defp exceptions_trace(target, backend, spec, max_events, duration_ms, force) do
+    session? = backend == :session
+
+    with {:ok, other} <- if(session?, do: {:ok, nil}, else: other_tracing()),
+         :ok <- refuse_unless_forced(other, force, target) do
+      collector = start_collector(max_events)
+
+      bindings = [
+        Spec: spec,
+        Session: session?,
+        Max: max_events,
+        Duration: duration_ms,
+        Collector: collector,
+        Owner: self()
+      ]
+
+      with {:ok, events} <-
+             run_holder(target, @exceptions_holder, bindings, collector, spec, duration_ms) do
+        {:ok,
+         %{
+           events: events,
+           backend: if(session?, do: "isolated trace session", else: "legacy trace session"),
+           stopped_other_tracing: other
+         }}
       end
     end
   end
