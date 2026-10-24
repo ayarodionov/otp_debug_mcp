@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/ayarodionov/otp_debug_mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/ayarodionov/otp_debug_mcp/actions/workflows/ci.yml)
 
-> **Status: 0.5.0. [Releases](https://github.com/ayarodionov/otp_debug_mcp/releases).**
+> **Status: 0.6.0. [Releases](https://github.com/ayarodionov/otp_debug_mcp/releases).**
 > Tested from Claude Code against live nodes on Erlang/OTP 26 to 29, on the
 > same machine, over TLS distribution and across machines, with a test suite
 > and CI on every push. Still young: the TODO list below has the known gaps.
@@ -168,7 +168,7 @@ for:
 Set `target` to `macos-arm64`, `linux-x86_64` or `linux-arm64`:
 
 ```sh
-vsn=0.5.0
+vsn=0.6.0
 target=macos-arm64
 base=https://github.com/ayarodionov/otp_debug_mcp/releases/download/v$vsn
 curl -fLO "$base/otp_debug_mcp-$vsn-$target.tar.gz"
@@ -206,7 +206,7 @@ For nodes in Docker containers, the server can run in a container
 beside them, from the image published with each release:
 
 ```sh
-docker pull ghcr.io/ayarodionov/otp_debug_mcp:0.5.0
+docker pull ghcr.io/ayarodionov/otp_debug_mcp:0.6.0
 ```
 
 [Targets in Docker containers](docs/production.md#targets-in-docker-containers)
@@ -430,8 +430,9 @@ drains, a crash loop, one bad node in a cluster, trying the crash loop's
 fix on the node with `load_module`, a bug that exists only in code a
 macro generated, a Phoenix route shadowed by one `resources` generates,
 NIFs that block a scheduler and leak native memory, leaking sockets and
-external programs with a slow peer, errors only the logs show, and a node
-that died, from its crash dump.
+external programs with a slow peer, errors only the logs show, a node
+that died, from its crash dump, two gen_servers that deadlock, a Phoenix
+API seen through its telemetry, and failures that nothing logs.
 
 ## Demo targets
 

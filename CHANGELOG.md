@@ -1,6 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.6.0
+
+Debugging native code and ports, errors and crashes that already
+happened (`recent_errors`, `crash_dump`), deadlocks and chains of calls
+(`call_chains`), Elixir libraries' telemetry (`telemetry`), and the calls
+that fail (`trace_calls` with `exceptions: true`).
 
 ### Deadlocks, telemetry and failing calls
 
@@ -26,8 +31,10 @@
   In its own trace session on OTP 27+; before, in the legacy session,
   refused while others trace.
 - `examples/erlang/run.sh locks`: two gen_servers that deadlock, with
-  shoppers stuck behind them; CI smoke-tests the release against it.
-  Scenarios 2, 4 and 14 cover the new tools.
+  shoppers stuck behind them; CI smoke-tests the release against it. The
+  orders demo also has a coupon service that fails silently. Scenarios 2,
+  4 and 14 cover the new tools, and walkthroughs 11, 12 and 13 are
+  recorded sessions with them.
 
 ### Errors and crash dumps
 
