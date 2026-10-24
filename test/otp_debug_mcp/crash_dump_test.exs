@@ -20,7 +20,7 @@ defmodule OtpDebugMcp.CrashDumpTest do
       TestTarget.start(
         erlang: true,
         args: [~c"+MMscs", ~c"128", ~c"+MMsco", ~c"true", ~c"+Musac", ~c"false"],
-        env: [ERL_CRASH_DUMP: oom]
+        env: dump_env(oom)
       ),
       fn target ->
         eval(target, ~S"""
@@ -36,7 +36,7 @@ defmodule OtpDebugMcp.CrashDumpTest do
     app = Path.join(dir, "app.dump")
 
     mbox =
-      die(TestTarget.start(env: [ERL_CRASH_DUMP: app]), fn target ->
+      die(TestTarget.start(env: dump_env(app)), fn target ->
         pid = TestTarget.call(target, Mailbox, :start, [:mbox, 3])
         big = Map.new(1..40, &{:"key#{&1}", &1})
         TestTarget.call(target, :erlang, :send, [:mbox, {:big, "text", 1.5, -7, 2 ** 70, big}])
@@ -47,6 +47,12 @@ defmodule OtpDebugMcp.CrashDumpTest do
 
     %{oom: oom, app: app, mbox: mbox}
   end
+
+  # Where to write the dump. Without the test run's ERL_FLAGS: these nodes
+  # aren't connected to, and TLS distribution, say, takes memory the
+  # out-of-memory node needs for writing its dump. And a writer stuck
+  # without memory gives up after 20 seconds.
+  defp dump_env(path), do: [ERL_CRASH_DUMP: path, ERL_FLAGS: "", ERL_CRASH_DUMP_SECONDS: 20]
 
   # Start the node's death with `fun`, and wait until it's dead and its
   # dump written. Returns what `fun` returns.
