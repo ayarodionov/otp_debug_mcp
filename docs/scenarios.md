@@ -8,6 +8,10 @@ The prompts are only starting points. The agent picks tools itself; with the
 `otp-debug` skill installed it follows the same playbook: connect, run
 `diagnose`, drill into what it flags, then confirm trends with `snapshot`.
 
+[talks/three-scenarios.pptx](../talks/three-scenarios.pptx) is a 15-minute
+talk, with speaker notes, on scenarios 6 and 16, 7 and 8, with the tool
+output of their walkthroughs.
+
 Contents:
 
 - **Production problems**

@@ -421,7 +421,10 @@ example prompt, the tools involved, and what to watch out for:
   databases), and your own node during development
 
 It ends with a checklist for production use and the scenarios the tool
-doesn't support yet.
+doesn't support yet. [talks/three-scenarios.pptx](talks/three-scenarios.pptx)
+is a 15-minute talk, with speaker notes, on three of them: a crash loop
+and its fix tried on the live node, errors only the logs show, and a node
+that died.
 
 [docs/walkthroughs.md](docs/walkthroughs.md) has whole sessions to
 follow along with on the demo nodes below: the prompt, every tool call
