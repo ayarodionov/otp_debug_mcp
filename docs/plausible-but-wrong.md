@@ -21,6 +21,8 @@ How it was run:
 
 The nodes are in [examples/books](../examples/books): `examples/books/run.sh
 all` starts them, and its README lists the symptom to give for each.
+There's also a 7-minute talk about it, with speaker notes:
+[talks/plausible-but-wrong.pptx](../talks/plausible-but-wrong.pptx).
 
 All six found the cause and the book's fix, in 42–75 seconds and for
 $0.28–0.67 each. One run found a bug in this tool, fixed since (see

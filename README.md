@@ -455,7 +455,8 @@ background, on this host with `-sname`, and `run.sh stop` stops them:
 [examples/books](examples/books) has six "Plausible but wrong" examples
 from the books Learning Erlang from Claude and Learning Elixir from Claude,
 in Erlang and Elixir; [docs/plausible-but-wrong.md](docs/plausible-but-wrong.md)
-shows what an agent found on each.
+shows what an agent found on each, and [talks/plausible-but-wrong.pptx](talks/plausible-but-wrong.pptx)
+is a 7-minute talk about it, with speaker notes.
 
 Point Claude Code at one without saying what's wrong:
 
