@@ -51,8 +51,9 @@ defmodule OtpDebugMcp.CrashDumpTest do
   # Where to write the dump. Without the test run's ERL_FLAGS: these nodes
   # aren't connected to, and TLS distribution, say, takes memory the
   # out-of-memory node needs for writing its dump. And a writer stuck
-  # without memory gives up after 20 seconds.
-  defp dump_env(path), do: [ERL_CRASH_DUMP: path, ERL_FLAGS: "", ERL_CRASH_DUMP_SECONDS: 20]
+  # without memory gives up after 60 seconds: a slow CI runner can take
+  # more than 20 to write the out-of-memory node's whole dump.
+  defp dump_env(path), do: [ERL_CRASH_DUMP: path, ERL_FLAGS: "", ERL_CRASH_DUMP_SECONDS: 60]
 
   # Start the node's death with `fun`, and wait until it's dead and its
   # dump written. Returns what `fun` returns.
@@ -63,7 +64,7 @@ defmodule OtpDebugMcp.CrashDumpTest do
     receive do
       {:DOWN, ^ref, _, _, _} -> result
     after
-      60_000 -> flunk("the node didn't die")
+      120_000 -> flunk("the node didn't die")
     end
   end
 
