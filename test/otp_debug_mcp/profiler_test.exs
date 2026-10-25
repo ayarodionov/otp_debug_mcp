@@ -61,8 +61,13 @@ defmodule OtpDebugMcp.ProfilerTest do
     # doesn't include crunch's, which is.
     assert crunch["time_us"] > 10 * light["time_us"]
     assert crunch["time_us"] > step["time_us"]
-    assert crunch["memory_bytes"] > 0
-    assert [%{"function" => "OtpDebugMcp.Fixtures.Busy.crunch/1"} | _] = result["by_memory"]
+    # crunch allocates the most of the functions doing the work (OTP 27
+    # sometimes charges loop/1, waiting in its receive, with as much).
+    assert crunch["memory_bytes"] > 100 * step["memory_bytes"]
+
+    assert crunch["function"] in (result["by_memory"]
+                                  |> Enum.take(2)
+                                  |> Enum.map(& &1["function"]))
 
     assert crunch["percent"] + square["percent"] > 80
 
