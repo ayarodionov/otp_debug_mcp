@@ -56,6 +56,9 @@ raw introspection when a purpose-built tool exists.
      a deadlock lists the processes calling each other with each one's
      request; a chain ends at the process holding everyone up; then
      `module_code` on their callbacks for where they call each other.
+     `call_chains` sees a deadlock only while it lasts: one that a call
+     timeout breaks after 5 s shows up afterwards in `recent_errors`'s
+     `deadlocks`, the processes that crashed calling each other.
    - Slow requests on an Elixir node (Phoenix, Ecto, Oban, HTTP clients)
      → `telemetry` first: per route, query and job, the counts, p50/p95/max
      and the slowest example, from events the libraries already emit,
@@ -63,7 +66,11 @@ raw introspection when a purpose-built tool exists.
      the pool is exhausted.
    - Some calls fail, but you can't see which or with what arguments
      (errors caught, or lost among many calls) → `trace_calls` with
-     `exceptions: true`: only the calls that raise, with their arguments.
+     `exceptions: true`: only the calls that raise, with their arguments
+     and where each was called from. Don't know which function raises?
+     Give the process instead of a module (`process` and `exceptions:
+     true`, no `module`): every exported function and BIF that raises in
+     it, even when it catches the exception.
    - CPU suspicion → `run_check(schedulers)` first; OS CPU% lies about the
      BEAM (busy-wait). Only if schedulers are pegged, use `top_reductions`,
      then `profile` on the module the top process is running, to see which

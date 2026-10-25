@@ -214,6 +214,107 @@ defmodule OtpDebugMcp.TracerTest do
       assert {:ok, nil} = Tracer.other_tracing()
     end
 
+    # Two parsers, of which only the first is traced.
+    defp two_parsers(plain) do
+      for _ <- 1..2 do
+        name = :"parser_#{System.unique_integer([:positive])}"
+        :ok = TestTarget.call(plain, OtpDebugMcp.Fixtures.Parser, :start, [name, 10])
+        TestTarget.call(plain, :erlang, :whereis, [name])
+      end
+    end
+
+    # A pid as the target prints it, <0.N.0>, from ours.
+    defp printed(pid), do: String.replace(inspect(pid), ~r/^#PID<\d+\./, "<0.")
+
+    # Elixir inlines String.to_integer/1, and quantity/1 tail-calls it: the
+    # BIF raises, with its argument, called from loop/2, at its line.
+    defp assert_failure_chain(events, pid) do
+      assert [bif, raised | _] = events
+      assert bif =~ ~s|erlang:binary_to_integer(<<"n/a">>) from |
+      # With its line in a trace session (caller_line), not in the legacy one.
+      assert bif =~ ~r"Parser':loop/2( \(test/support/fixtures.ex:\d+\))?$"
+      assert raised =~ "erlang:binary_to_integer/1 raised error:badarg"
+      assert Enum.all?(events, &(&1 =~ " #{printed(pid)} ")), "events of another process"
+    end
+
+    test "one process's exceptions, in every function it calls", %{plain: plain} do
+      [traced, _other] = two_parsers(plain)
+
+      assert {:ok, %{events: events, backend: "isolated trace session"}} =
+               Tracer.trace(nil, nil, 6, 5_000, exceptions: true, process: traced)
+
+      assert_failure_chain(events, traced)
+      assert hd(events) =~ "fixtures.ex:"
+      sessions = TestTarget.call(plain, :trace, :session_info, [:all])
+      refute Enum.any?(sessions, &match?({:otp_debug_mcp_exceptions, _}, &1))
+    end
+
+    test "one process's exceptions in the legacy session, which it clears", %{plain: plain} do
+      [traced, _other] = two_parsers(plain)
+
+      assert {:ok, %{events: events, backend: "legacy trace session"}} =
+               Tracer.trace(nil, nil, 6, 5_000,
+                 exceptions: true,
+                 process: traced,
+                 backend: :recon_trace
+               )
+
+      assert_failure_chain(events, traced)
+
+      assert TestTarget.call(plain, :erlang, :trace_info, [
+               {:erlang, :binary_to_integer, 1},
+               :traced
+             ]) == {:traced, false}
+
+      assert {:ok, nil} = Tracer.other_tracing()
+    end
+
+    test "one process's calls to a module", %{plain: plain} do
+      [traced, _other] = two_parsers(plain)
+
+      for backend <- [:auto, :recon_trace] do
+        assert {:ok, %{events: [_ | _] = events}} =
+                 Tracer.trace(@parser, "quantity", 8, 2_000, process: traced, backend: backend)
+
+        assert Enum.all?(events, &(&1 =~ " #{printed(traced)} ")), "events of another process"
+      end
+    end
+
+    test "the tool: a process by name, with no module", %{plain: plain} do
+      name = :"parser_#{System.unique_integer([:positive])}"
+      :ok = TestTarget.call(plain, OtpDebugMcp.Fixtures.Parser, :start, [name, 10])
+      trace = &OtpDebugMcp.ToolCase.call_tool_json(OtpDebugMcp.Tools.TraceCalls, &1)
+
+      assert {:ok, result} =
+               trace.(%{process: Atom.to_string(name), exceptions: true, max_events: 2})
+
+      assert [_, _] = result["events"]
+      assert result["traced"] =~ "every exported function and BIF"
+
+      assert {:error, text} =
+               OtpDebugMcp.ToolCase.call_tool(OtpDebugMcp.Tools.TraceCalls, %{exceptions: true})
+
+      assert text =~ "a module is needed"
+
+      assert {:error, text} =
+               OtpDebugMcp.ToolCase.call_tool(OtpDebugMcp.Tools.TraceCalls, %{
+                 process: "no_such_parser",
+                 exceptions: true
+               })
+
+      assert text =~ "no_such_parser"
+    end
+
+    test "every function only for one process's exceptions", %{plain: plain} do
+      [traced, _other] = two_parsers(plain)
+      assert {:error, text} = Tracer.trace(nil, nil, 4, 1_000, exceptions: true)
+      assert text =~ "a module is needed"
+      assert {:error, _} = Tracer.trace(nil, nil, 4, 1_000, process: traced)
+
+      dead = TestTarget.call(plain, :erlang, :spawn, [:erlang, :now, []])
+      assert {:error, "process " <> _} = Tracer.trace(@parser, nil, 4, 1_000, process: dead)
+    end
+
     test "the legacy session refuses while others trace, unless forced" do
       operator_target()
 

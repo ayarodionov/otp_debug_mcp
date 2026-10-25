@@ -63,7 +63,15 @@ rates  {{timeout,{gen_server,call,[rates,sum]}},{gen_server,call,[tally,rate]}} 
 ```
 
 `module_code` on both `handle_call/3` functions showed the calls and their
-lines. The fix it gave: make one direction a cast, or reply later from
+lines. Since these runs, `recent_errors` puts the two together itself, as
+a deadlock:
+
+```
+deadlocks: [{times: 2, calls: [
+  {who: rates, was_calling: tally, request: "rate"},
+  {who: tally, was_calling: rates, request: "sum"}]}]
+```
+ The fix it gave: make one direction a cast, or reply later from
 another process with `gen_server:reply/2`, so neither calls the other from
 inside a callback. It also noted that a longer timeout only makes the hang
 longer.
@@ -212,6 +220,16 @@ trace_calls module: erlang, function: binary_to_integer, exceptions: true
 That gave it each input that fails and how. Its fix was the book's:
 `Integer.parse/1`, checking that nothing is left over. It added trimming,
 a range check, and logging the reason for each rejection.
+
+The session had to choose which function to trace, from the code. Since
+these runs, the process is enough: `trace_calls` with `process:
+"Gateway"`, `exceptions: true` and no module reports every function that
+raises in it, and where it was called:
+
+```
+<0.101.0> erlang:binary_to_integer(<<"80 ">>) from 'Elixir.Gateway':parse_port/1 (examples/books/elixir/gateway.ex:10)
+<0.101.0> erlang:binary_to_integer/1 raised error:badarg
+```
 
 ## A handler that raises once and disappears
 

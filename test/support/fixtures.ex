@@ -300,6 +300,11 @@ defmodule OtpDebugMcp.Fixtures.Caller do
     GenServer.call(target, request, :infinity)
     {:noreply, state}
   end
+
+  def handle_cast({:call, target, request, timeout}, state) do
+    GenServer.call(target, request, timeout)
+    {:noreply, state}
+  end
 end
 
 defmodule OtpDebugMcp.Fixtures.Parser do

@@ -434,6 +434,13 @@ defmodule OtpDebugMcp.Tools do
       A log group is one message logged from one place. log_files holds the \
       newest error entries of the node's log files, from before listening \
       started; entries are told apart by their format, so check the text. \
+      deadlocks are processes that crashed within 2 s of each other, each \
+      while calling the next in a cycle (was_calling, with its request): \
+      they waited on each other until a call timed out, and the others' \
+      calls ended with it. run_check call_chains sees a deadlock only while \
+      it lasts; this finds it afterwards. For one, module_code on each \
+      one's callback for the call it makes; the fix is a cast, or a reply \
+      from another process, instead of calling back. \
       Next step: module_code with at: file:line for a frame of the stack, \
       and trace_calls on that function to see the calls that fail.\
       """
@@ -641,6 +648,12 @@ defmodule OtpDebugMcp.Tools do
     throw) are reported, each with its arguments and the exception: how to
     see which calls fail on a busy function, and with what.
 
+    process limits it to the calls one process makes. With process and
+    exceptions: true, module can be left out: then every exported function
+    and BIF that raises in that process is reported, wherever it is, even
+    when the process catches the exception (for 10 s at most, since every
+    call on the node is a little slower meanwhile).
+
     On OTP 27+ targets the trace runs in its own isolated trace session and
     never affects other tracing on the node. On older targets it uses
     recon_trace (or, for exceptions, the legacy trace session) and refuses
@@ -653,9 +666,17 @@ defmodule OtpDebugMcp.Tools do
     alias OtpDebugMcp.{Tools, Tracer}
 
     schema do
-      field(:module, {:required, :string}, description: "Module, e.g. Elixir.MyApp.Worker or ets")
+      field(:module, :string,
+        description:
+          "Module, e.g. Elixir.MyApp.Worker or ets; may be omitted only with process " <>
+            "and exceptions: true"
+      )
 
       field(:function, :string, description: "Function name; omit for all functions")
+
+      field(:process, :string,
+        description: "Only the calls this process makes: a pid (<0.123.0>) or registered name"
+      )
 
       field(:max_events, :integer,
         description:
@@ -664,7 +685,9 @@ defmodule OtpDebugMcp.Tools do
       )
 
       field(:duration_ms, :integer,
-        description: "Stop after this long regardless (default 10000, max 60000)"
+        description:
+          "Stop after this long regardless (default 10000, max 60000; without a " <>
+            "module, default 5000, max 10000)"
       )
 
       field(:exceptions, :boolean,
@@ -680,30 +703,47 @@ defmodule OtpDebugMcp.Tools do
       )
     end
 
+    @whole_node "every exported function and BIF on the node, for this process's calls " <>
+                  "only. An exception raised in a private function shows as the first " <>
+                  "exported function it passed through, with that call's arguments."
+
     @impl true
-    def execute(%{module: mod} = params, frame) do
-      case Tracer.trace(
-             mod,
-             params[:function],
-             max_events(params),
-             (params[:duration_ms] || 10_000) |> min(60_000) |> max(100),
-             force: params[:force] == true,
-             exceptions: params[:exceptions] == true
-           ) do
-        {:ok, result} ->
-          result =
-            result
-            |> Map.reject(fn {_k, v} -> is_nil(v) end)
-            |> Map.put(
-              :stopped_by,
-              stopped_by(result.events, max_events(params), params[:exceptions] == true)
-            )
+    def execute(params, frame) do
+      whole_node? = params[:module] == nil
 
-          Tools.json_response(frame, result)
+      with {:ok, process} <- process(params[:process]),
+           {:ok, result} <-
+             Tracer.trace(
+               params[:module],
+               params[:function],
+               max_events(params),
+               duration(params, whole_node?),
+               force: params[:force] == true,
+               exceptions: params[:exceptions] == true,
+               process: process
+             ) do
+        result =
+          result
+          |> Map.reject(fn {_k, v} -> is_nil(v) end)
+          |> Map.put(
+            :stopped_by,
+            stopped_by(result.events, max_events(params), params[:exceptions] == true)
+          )
+          |> then(&if(whole_node?, do: Map.put(&1, :traced, @whole_node), else: &1))
 
-        {:error, reason} ->
-          Tools.error_response(frame, reason)
+        Tools.json_response(frame, result)
+      else
+        {:error, reason} -> Tools.error_response(frame, reason)
       end
+    end
+
+    defp process(nil), do: {:ok, nil}
+    defp process(name), do: Tools.resolve_process(name)
+
+    # Tracing every function slows every call on the node a little.
+    defp duration(params, whole_node?) do
+      {default, max} = if whole_node?, do: {5_000, 10_000}, else: {10_000, 60_000}
+      (params[:duration_ms] || default) |> min(max) |> max(100)
     end
 
     defp max_events(params), do: (params[:max_events] || 20) |> min(100) |> max(1)

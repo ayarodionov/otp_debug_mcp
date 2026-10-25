@@ -8,6 +8,17 @@
   other the plain way, the commonest kind, broke the check that finds it.
   It now reads the request and timeout of `gen_server:call/2` and of
   `gen_statem:call/3` with `infinity` too.
+- `recent_errors` reports `deadlocks`: processes that crashed within 2
+  seconds of each other, each while calling the next in a cycle, with each
+  one's request. That's a deadlock a call's timeout broke, which
+  `call_chains` sees only while it lasts.
+- `trace_calls` takes a `process`: only the calls that process makes.
+  With `exceptions: true` the module can be left out, to see every
+  exported function and BIF that raises in that process, even when it
+  catches the exception (5 s by default, at most 10, since every call on
+  the node is a little slower meanwhile). With `exceptions: true`, each
+  failing call also says where it was called from, with the line on OTP
+  27+.
 - `telemetry` with `list: true` says when no handler is attached to any
   event on the node: what's left when telemetry has detached a handler
   that raised.

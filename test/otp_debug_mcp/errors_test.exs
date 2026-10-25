@@ -67,9 +67,36 @@ defmodule OtpDebugMcp.ErrorsTest do
       assert [top | _] = crash["stack"]
       assert top =~ "OtpDebugMcp.Fixtures.Crasher.handle_info/2"
       assert crash["example"] =~ "crash loop fixture"
+      refute Map.has_key?(result, "deadlocks")
 
       # The handler is gone once the window ends.
       assert handlers(elixir) == before
+    end
+
+    test "finds gen_servers that crashed calling each other: a deadlock a timeout ended" do
+      # dl_alpha calls dl_beta with a timeout, and dl_beta calls dl_alpha
+      # back; dl_slow is only slow, and its caller's timeout isn't a deadlock.
+      later(100, """
+      Caller = 'Elixir.OtpDebugMcp.Fixtures.Caller',
+      [{ok, _} = Caller:start(N) || N <- [dl_alpha, dl_beta, dl_slow, dl_caller]],
+      gen_server:cast(dl_alpha, {call, dl_beta, {via, [dl_alpha]}, 300}),
+      gen_server:cast(dl_caller, {call, dl_slow, {via, []}, 300})
+      """)
+
+      assert {:ok, result} = recent_errors(%{duration_ms: 1_500})
+      assert [%{"times" => 1, "calls" => calls, "first" => _}] = result["deadlocks"]
+
+      assert Enum.sort_by(calls, & &1["who"]) == [
+               %{
+                 "who" => ":dl_alpha",
+                 "was_calling" => ":dl_beta",
+                 "request" => "{:via, [:dl_alpha]}"
+               },
+               %{"who" => ":dl_beta", "was_calling" => ":dl_alpha", "request" => "{:via, []}"}
+             ]
+
+      # The caller that only timed out is a crash group, not a deadlock.
+      assert Enum.any?(result["groups"], &(&1["who"] == ":dl_caller"))
     end
 
     test "groups log messages by where they were logged and what they say" do

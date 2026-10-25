@@ -48,9 +48,9 @@ defmodule OtpDebugMcp.Tracer do
   group_leader(Collector, self()),
   {M, F, MatchSpec} = Spec,
   S = trace:session_create(otp_debug_mcp, self(), []),
-  trace:process(S, all, true, [call, timestamp]),
+  trace:process(S, Procs, true, [call, timestamp]),
   trace:process(S, self(), false, [call, timestamp]),
-  N = trace:function(S, {M, F, '_'}, MatchSpec, [local]),
+  N = trace:function(S, {M, F, '_'}, MatchSpec, [Scope]),
   Time = fun({_, _, Us} = TS) ->
     {_, {H, Mi, Sec}} = calendar:now_to_universal_time(TS),
     io_lib:format("~2..0w:~2..0w:~2..0w.~6..0wZ", [H, Mi, Sec, Us])
@@ -123,31 +123,42 @@ defmodule OtpDebugMcp.Tracer do
   {Stop, N} = case Session of
     true ->
       S = trace:session_create(otp_debug_mcp_exceptions, Me, []),
-      trace:process(S, all, true, [call, timestamp]),
+      trace:process(S, Procs, true, [call, timestamp]),
       trace:process(S, Me, false, [call, timestamp]),
-      {fun() -> trace:session_destroy(S) end, trace:function(S, {M, F, '_'}, MatchSpec, [local])};
+      {fun() -> trace:session_destroy(S) end, trace:function(S, {M, F, '_'}, MatchSpec, [Scope])};
     false ->
-      erlang:trace(all, true, [call, timestamp, {tracer, Me}]),
+      erlang:trace(Procs, true, [call, timestamp, {tracer, Me}]),
       erlang:trace(Me, false, [call, timestamp]),
       {fun() ->
-         erlang:trace_pattern({M, F, '_'}, false, [local]),
-         erlang:trace(all, false, [call, timestamp])
+         erlang:trace_pattern({M, F, '_'}, false, [Scope]),
+         %% The traced process may have exited since.
+         catch erlang:trace(Procs, false, [call, timestamp])
        end,
-       erlang:trace_pattern({M, F, '_'}, MatchSpec, [local])}
+       erlang:trace_pattern({M, F, '_'}, MatchSpec, [Scope])}
   end,
   Time = fun({_, _, Us} = TS) ->
     {_, {H, Mi, Sec}} = calendar:now_to_universal_time(TS),
     io_lib:format("~2..0w:~2..0w:~2..0w.~6..0wZ", [H, Mi, Sec, Us])
   end,
   Fmt = fun(Format, Args) -> io_lib:format(Format, Args, [{chars_limit, 1000}]) end,
+  %% Where the call was made, from the match spec's caller_line or caller.
+  From = fun({Cm, Cf, Ca, {File, Ln}}) -> io_lib:format(" from ~tp:~tp/~p (~ts:~p)", [Cm, Cf, Ca, File, Ln]);
+            ({Cm, Cf, Ca}) -> io_lib:format(" from ~tp:~tp/~p", [Cm, Cf, Ca]);
+            (_) -> ""
+         end,
   Line = fun
     ({trace_ts, P, call, {Mod, Fun, Args}, TS}) ->
       Fmt("~s ~p ~tp:~tp(~ts)",
           [Time(TS), P, Mod, Fun, lists:join(", ", [io_lib:format("~9999tP", [A, 20], [{chars_limit, 300}]) || A <- Args])]);
+    ({trace_ts, P, call, {Mod, Fun, Args}, Caller, TS}) ->
+      Fmt("~s ~p ~tp:~tp(~ts)~ts",
+          [Time(TS), P, Mod, Fun, lists:join(", ", [io_lib:format("~9999tP", [A, 20], [{chars_limit, 300}]) || A <- Args]),
+           From(Caller)]);
     ({trace_ts, P, exception_from, {Mod, Fun, Arity}, {Class, Reason}, TS}) ->
       Fmt("~s ~p ~tp:~tp/~p raised ~p:~9999tP", [Time(TS), P, Mod, Fun, Arity, Class, Reason, 20])
   end,
   _ = [Line(E) || E <- [{trace_ts, self(), call, {M, F, [x]}, os:timestamp()},
+                        {trace_ts, self(), call, {M, F, [x]}, {M, F, 1, {"x.erl", 1}}, os:timestamp()},
                         {trace_ts, self(), exception_from, {M, F, 1}, {error, x}, os:timestamp()}]],
   Owner ! {trace_started, self(), N},
   Deadline = erlang:monotonic_time(millisecond) + Duration,
@@ -162,12 +173,21 @@ defmodule OtpDebugMcp.Tracer do
     receive
       stop ->
         stopped;
-      {trace_ts, P, call, _, _} = Call ->
+      Call when element(1, Call) =:= trace_ts, element(3, Call) =:= call ->
+        P = element(2, Call),
         case Busy() of
           true -> overloaded;
           false -> L(Count, Pending#{P => lists:sublist([Call | maps:get(P, Pending, [])], 50)})
         end;
       {trace_ts, P, return_from, _, _, _} ->
+        case maps:get(P, Pending, []) of
+          [_ | Returned] -> L(Count, Pending#{P => Returned});
+          [] -> L(Count, Pending)
+        end;
+      {trace_ts, P, exception_from, {erlang, Raise, _}, _, _}
+          when Raise =:= error; Raise =:= exit; Raise =:= throw; Raise =:= raise;
+               Raise =:= nif_error ->
+        %% The raise itself, traced with every function: what called it is the news.
         case maps:get(P, Pending, []) of
           [_ | Returned] -> L(Count, Pending#{P => Returned});
           [] -> L(Count, Pending)
@@ -239,6 +259,8 @@ defmodule OtpDebugMcp.Tracer do
 
   @doc """
   Trace calls to `module_str` (and `function_str`, or all its functions).
+  With no module, for the exceptions of one process (`:process` and
+  `:exceptions`), every exported function and BIF on the node.
 
   Options:
 
@@ -251,25 +273,57 @@ defmodule OtpDebugMcp.Tracer do
       exception (default `false`). Without trace sessions this traces in
       the node's legacy session rather than through recon_trace, refused
       the same way while others trace.
+    * `:process` - only the calls this process makes (a pid on the target;
+      default: every process)
   """
-  @spec trace(String.t(), String.t() | nil, pos_integer(), pos_integer(), keyword()) ::
+  @spec trace(String.t() | nil, String.t() | nil, pos_integer(), pos_integer(), keyword()) ::
           {:ok, result()} | {:error, term()}
   def trace(module_str, function_str, max_events, duration_ms, opts \\ []) do
-    mod = resolve_module(module_str)
+    exceptions? = Keyword.get(opts, :exceptions, false)
+    procs = Keyword.get(opts, :process) || :all
+    {mod, scope} = if module_str, do: {resolve_module(module_str), :local}, else: {:_, :global}
     fun = if function_str, do: String.to_atom(function_str), else: :_
     # exception_trace reports returns, like return_trace, and exceptions too.
     spec = {mod, fun, [{:_, [], [{:exception_trace}]}]}
+    scope = %{procs: procs, scope: scope}
 
-    with {:ok, true} <- Target.rpc(:code, :is_loaded, [mod]) |> loaded?(module_str),
+    with :ok <- whole_node_allowed(mod, procs, exceptions?),
+         {:ok, true} <- loaded(mod, module_str),
+         {:ok, true} <- alive(procs),
          {:ok, target} <- Target.target(),
          {:ok, backend} <- backend(Keyword.get(opts, :backend, :auto)) do
       force = Keyword.get(opts, :force, false)
+      run = {spec, scope, max_events, duration_ms}
 
-      case {backend, Keyword.get(opts, :exceptions, false)} do
-        {:session, false} -> session_trace(target, spec, max_events, duration_ms)
-        {:recon_trace, false} -> recon_trace(target, spec, max_events, duration_ms, force)
-        {backend, true} -> exceptions_trace(target, backend, spec, max_events, duration_ms, force)
+      case {backend, exceptions?} do
+        {:session, false} -> session_trace(target, run)
+        {:recon_trace, false} -> recon_trace(target, run, force)
+        {backend, true} -> exceptions_trace(target, backend, run, force)
       end
+    end
+  end
+
+  # Every function on the node is traced only for one process's exceptions:
+  # they're few, where all its calls would flood the trace.
+  defp whole_node_allowed(:_, procs, true) when is_pid(procs), do: :ok
+
+  defp whole_node_allowed(:_, _procs, _exceptions?),
+    do:
+      {:error,
+       "a module is needed, except for one process's exceptions (process and exceptions: true)"}
+
+  defp whole_node_allowed(_mod, _procs, _exceptions?), do: :ok
+
+  defp loaded(:_, _module_str), do: {:ok, true}
+  defp loaded(mod, module_str), do: Target.rpc(:code, :is_loaded, [mod]) |> loaded?(module_str)
+
+  defp alive(:all), do: {:ok, true}
+
+  defp alive(pid) do
+    case Target.rpc(:erlang, :is_process_alive, [pid]) do
+      {:ok, true} -> {:ok, true}
+      {:ok, false} -> {:error, "process #{Format.inspect(pid)} isn't alive"}
+      err -> err
     end
   end
 
@@ -281,11 +335,13 @@ defmodule OtpDebugMcp.Tracer do
     end
   end
 
-  defp session_trace(target, spec, max_events, duration_ms) do
+  defp session_trace(target, {spec, scope, max_events, duration_ms}) do
     collector = start_collector(max_events)
 
     bindings = [
       Spec: spec,
+      Procs: scope.procs,
+      Scope: scope.scope,
       Max: max_events,
       Duration: duration_ms,
       Collector: collector,
@@ -298,7 +354,7 @@ defmodule OtpDebugMcp.Tracer do
     end
   end
 
-  defp recon_trace(target, spec, max_events, duration_ms, force) do
+  defp recon_trace(target, {spec, scope, max_events, duration_ms}, force) do
     with {:ok, other} <- other_tracing(),
          :ok <- refuse_unless_forced(other, force, target) do
       collector = start_collector(max_events)
@@ -306,7 +362,7 @@ defmodule OtpDebugMcp.Tracer do
       bindings = [
         Spec: spec,
         Max: max_events,
-        Opts: [scope: :local, io_server: collector],
+        Opts: [scope: :local, io_server: collector, pid: scope.procs],
         Duration: duration_ms,
         Collector: collector,
         Owner: self()
@@ -319,8 +375,13 @@ defmodule OtpDebugMcp.Tracer do
     end
   end
 
-  defp exceptions_trace(target, backend, spec, max_events, duration_ms, force) do
+  defp exceptions_trace(target, backend, {spec, scope, max_events, duration_ms}, force) do
     session? = backend == :session
+    # Each call also says where it was made: its caller, with the line on
+    # OTP 27+ (caller_line is OTP 26's).
+    {mod, fun, _} = spec
+    caller = if session?, do: :caller_line, else: :caller
+    spec = {mod, fun, [{:_, [], [{:exception_trace}, {:message, {caller}}]}]}
 
     with {:ok, other} <- if(session?, do: {:ok, nil}, else: other_tracing()),
          :ok <- refuse_unless_forced(other, force, target) do
@@ -328,6 +389,8 @@ defmodule OtpDebugMcp.Tracer do
 
       bindings = [
         Spec: spec,
+        Procs: scope.procs,
+        Scope: scope.scope,
         Session: session?,
         Max: max_events,
         Duration: duration_ms,

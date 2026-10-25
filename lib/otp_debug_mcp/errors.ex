@@ -490,6 +490,8 @@ defmodule OtpDebugMcp.Errors do
       |> Enum.map(fn {_key, entries} -> group(entries) end)
       |> Enum.sort_by(&{rank(&1.level), -&1.events})
 
+    deadlocks = deadlocks(entries, names)
+
     %{
       events: Enum.sum(Map.values(report.totals)),
       by_level: report.totals,
@@ -497,6 +499,7 @@ defmodule OtpDebugMcp.Errors do
       dropped_while_overloaded: report.dropped,
       groups: Enum.take(groups, @max_groups)
     }
+    |> put_if(deadlocks != [], :deadlocks, deadlocks)
     |> put_if(length(groups) > @max_groups, :more_groups, length(groups) - @max_groups)
     |> put_if(
       Enum.sum(Map.values(report.totals)) > length(report.entries),
@@ -524,6 +527,105 @@ defmodule OtpDebugMcp.Errors do
       who_text: who || "processes that aren't registered",
       reason_text: reason
     })
+  end
+
+  # Processes that crashed calling each other in a cycle, within
+  # @deadlock_window_us of each other: a deadlock that a call's timeout
+  # broke (the first to time out crashes, and the others' calls to it end
+  # with it). Each cycle of names, however often it happened.
+  @deadlock_window_us 2_000_000
+  @call_modules [:gen_server, :gen_statem, GenServer]
+
+  defp deadlocks(entries, names) do
+    crashes =
+      entries
+      |> Enum.filter(&(&1.kind not in [:log, :supervisor] and is_pid(&1[:crashed])))
+      |> Enum.group_by(& &1.crashed)
+      |> Enum.flat_map(fn {pid, es} ->
+        case Enum.find_value(es, &call_in(&1.reason)) do
+          nil ->
+            []
+
+          {server, request} ->
+            [
+              %{
+                pid: pid,
+                at:
+                  es |> Enum.map(& &1.at) |> Enum.filter(&is_integer/1) |> Enum.min(fn -> nil end),
+                aliases: [pid | for(%{who: w} <- es, is_atom(w) and w != nil, do: w)],
+                server: server,
+                request: request,
+                name: names[pid] || Enum.find_value(es, &name/1) || Format.inspect(pid)
+              }
+            ]
+        end
+      end)
+
+    by_pid = Map.new(crashes, &{&1.pid, &1})
+
+    edges =
+      Map.new(crashes, fn c ->
+        callee =
+          Enum.find(crashes, fn o ->
+            o.pid != c.pid and called?(c.server, o.aliases) and near?(c.at, o.at)
+          end)
+
+        {c.pid, callee && callee.pid}
+      end)
+
+    edges
+    |> Map.keys()
+    |> Enum.flat_map(&cycle(&1, edges, [&1]))
+    |> Enum.uniq_by(&Enum.sort/1)
+    |> Enum.map(fn cycle -> Enum.map(cycle, &by_pid[&1]) end)
+    |> Enum.group_by(fn cycle -> cycle |> Enum.map(& &1.name) |> Enum.sort() end)
+    |> Enum.map(fn {_names, [cycle | _] = all} ->
+      ats = all |> List.flatten() |> Enum.map(& &1.at) |> Enum.filter(&is_integer/1)
+
+      %{
+        times: length(all),
+        first: time(Enum.min(ats, fn -> nil end)),
+        last: time(Enum.max(ats, fn -> nil end)),
+        calls:
+          for c <- cycle do
+            %{
+              who: c.name,
+              was_calling: by_pid[edges[c.pid]].name,
+              request: truncate(Format.inspect(c.request, limit: 10), 300)
+            }
+          end
+      }
+    end)
+  end
+
+  # The call a process crashed in: the outermost one in its exit reason,
+  # {Reason, {gen_server, call, [Server, Request | _]}} (gen_statem's and
+  # GenServer's alike), Reason being timeout or the callee's own exit.
+  defp call_in({_, {mod, :call, [server, request | _]}}) when mod in @call_modules,
+    do: {server, request}
+
+  defp call_in(_), do: nil
+
+  defp called?({name, node}, aliases) when is_atom(node), do: called?(name, aliases)
+  defp called?({:global, name}, aliases), do: called?(name, aliases)
+  defp called?({:via, _, name}, aliases), do: called?(name, aliases)
+  defp called?(server, aliases), do: server in aliases
+
+  defp near?(a, b) when is_integer(a) and is_integer(b), do: abs(a - b) <= @deadlock_window_us
+  defp near?(_, _), do: false
+
+  defp cycle(pid, edges, path) do
+    case edges[pid] do
+      nil ->
+        []
+
+      next ->
+        case Enum.find_index(path, &(&1 == next)) do
+          nil -> cycle(next, edges, path ++ [next])
+          0 -> [path]
+          _ -> []
+        end
+    end
   end
 
   # The best name each crashed process has in any report: its registered

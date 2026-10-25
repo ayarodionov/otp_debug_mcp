@@ -64,12 +64,12 @@ introspection primitives, but an encoded diagnostic playbook in the spirit of
 | `connect` | Attach to a node (name + optional cookie) as a hidden node |
 | `diagnose` | Full health battery, findings ranked worst-first |
 | `run_check` | One check: `message_queues`, `call_chains`, `supervisor_restarts`, `binary_leak`, `memory_breakdown`, `allocator_fragmentation`, `process_count`, `atom_table`, `ets_tables`, `ports`, `native_memory`, `native_code`, `schedulers`, `long_schedules`, `socket_traffic`, `top_reductions` |
-| `recent_errors` | The errors the node logs, grouped by who failed and why: crashes with their stack and the reports they caused, error and warning messages with where they were logged, and the errors in the node's log files from before; listens for a window, or in the background |
+| `recent_errors` | The errors the node logs, grouped by who failed and why: crashes with their stack and the reports they caused, error and warning messages with where they were logged, and the errors in the node's log files from before, and processes that crashed calling each other (a deadlock a call timeout ended); listens for a window, or in the background |
 | `crash_dump` | Why a node died, from its `erl_crash.dump`: what the slogan means, the process that was running, the biggest processes and mailboxes with their stacks, the first messages of the longest mailbox, memory, ETS and ports; no connection needed |
 | `process_info` | Deep-inspect one process: recon:info, an age estimate, its supervisor's restart history, optional `sys:get_state` |
 | `supervision_tree` | Render an application's supervision tree, with each supervisor's strategy and restart history |
 | `port_info` | Deep-inspect one port: a socket's addresses, statistics and options, an external program's OS pid, its owner and queue |
-| `trace_calls` | Rate-limited call tracing (isolated trace session on OTP 27+, recon_trace before); with `exceptions: true`, only the calls that raise, with their arguments |
+| `trace_calls` | Rate-limited call tracing (isolated trace session on OTP 27+, recon_trace before); with `exceptions: true`, only the calls that raise, with their arguments and caller; with `process`, one process's calls, and with no module, every function that raises in it |
 | `trace_port` | A port's traffic, or the ports opened and closed in a window with who opened them; rate-limited, in its own trace session on OTP 27+ |
 | `telemetry` | What the node's `:telemetry` events say over a window: Phoenix requests by route, Ecto queries by table and query (with pool wait time), Oban jobs, HTTP client calls, each with count, p50/p95/max and the slowest example, and the errors of exception events |
 | `profile` | Where the CPU time goes, by function: calls, own time and memory per function over a short window, for one module, one function or one process |
