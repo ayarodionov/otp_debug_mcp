@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Fixed: `call_chains`, and with it `diagnose`, failed with "Internal
+  error" while processes waited in `gen_server:call/2` (the default
+  timeout) or `Task.await`, so a deadlock of two gen_servers calling each
+  other the plain way, the commonest kind, broke the check that finds it.
+  It now reads the request and timeout of `gen_server:call/2` and of
+  `gen_statem:call/3` with `infinity` too.
+- `telemetry` with `list: true` says when no handler is attached to any
+  event on the node: what's left when telemetry has detached a handler
+  that raised.
+
 ## 0.6.0
 
 Debugging native code and ports, errors and crashes that already

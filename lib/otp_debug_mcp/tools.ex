@@ -481,16 +481,20 @@ defmodule OtpDebugMcp.Tools do
     def execute(%{list: true}, frame) do
       case OtpDebugMcp.Telemetry.discover() do
         {:ok, events} ->
-          Tools.json_response(frame, %{
-            events:
-              for(
-                {event, source} <- events,
-                do: %{event: OtpDebugMcp.Telemetry.event_name(event), from: source}
-              ),
-            hint:
-              "from: handlers means a handler on the node listens to it; otherwise it's a " <>
-                "known event of a library loaded there. Call telemetry without list to listen."
-          })
+          Tools.json_response(
+            frame,
+            %{
+              events:
+                for(
+                  {event, source} <- events,
+                  do: %{event: OtpDebugMcp.Telemetry.event_name(event), from: source}
+                ),
+              hint:
+                "from: handlers means a handler on the node listens to it; otherwise it's a " <>
+                  "known event of a library loaded there. Call telemetry without list to listen."
+            }
+            |> no_handlers(events)
+          )
 
         {:error, reason} ->
           Tools.error_response(frame, reason)
@@ -503,6 +507,23 @@ defmodule OtpDebugMcp.Tools do
       case OtpDebugMcp.Telemetry.listen(params[:events], duration) do
         {:ok, report} -> Tools.json_response(frame, report)
         {:error, reason} -> Tools.error_response(frame, reason)
+      end
+    end
+
+    # No handler attached to anything: telemetry may have detached one.
+    defp no_handlers(response, events) do
+      if Enum.any?(events, fn {_, source} -> source == :handlers end) do
+        response
+      else
+        Map.put(
+          response,
+          :no_handlers,
+          "No handler is attached to any event on this node. If metrics or logs " <>
+            "built on telemetry went quiet, a handler that raised was detached: " <>
+            "telemetry does that on the first exception, logging \"Handler ... has " <>
+            "failed and has been detached\" once, at error level (recent_errors " <>
+            "finds it in log files). Listening shows whether the events still happen."
+        )
       end
     end
   end

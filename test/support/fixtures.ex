@@ -261,6 +261,22 @@ defmodule OtpDebugMcp.Fixtures.Caller do
     :ok
   end
 
+  @doc """
+  Processes of their own that call `server` each other way a call is made,
+  and wait: gen_server:call/2 (its default timeout), gen_statem:call/3 with
+  infinity, and a task's call awaited by another process.
+  """
+  def call_each_way(server) do
+    spawn(fn -> :gen_server.call(server, {:form, 2}) end)
+    spawn(fn -> :gen_statem.call(server, {:statem, 3}, :infinity) end)
+
+    spawn(fn ->
+      Task.async(fn -> GenServer.call(server, :in_task, :infinity) end) |> Task.await(:infinity)
+    end)
+
+    :ok
+  end
+
   @doc "Make `server` call `target` while handling a cast: a call from its callbacks."
   def make_call(server, target, request), do: GenServer.cast(server, {:call, target, request})
 
@@ -275,6 +291,9 @@ defmodule OtpDebugMcp.Fixtures.Caller do
     Process.sleep(:infinity)
     {:reply, :ok, state}
   end
+
+  # Any other request waits for a reply that never comes.
+  def handle_call(_request, _from, state), do: {:noreply, state}
 
   @impl true
   def handle_cast({:call, target, request}, state) do
@@ -328,6 +347,9 @@ defmodule OtpDebugMcp.Fixtures.Emitter do
   end
 
   def log(_event, _measurements, _metadata, _config), do: :ok
+
+  @doc "A metrics handler that needs a :source in the metadata, as many do."
+  def metrics(_event, _measurements, %{source: _}, _config), do: :ok
 
   defp loop(ms, i) do
     {route, path, action, took} =

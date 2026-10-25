@@ -60,10 +60,12 @@ defmodule OtpDebugMcp.CallChains do
       _ -> undefined
     end,
     {Timeout, Request, Server} =
-      case {CallFun, Regs(Caller)} of
-        {Cf, [Tm, Rq, Sv | _]} when Cf =:= <<"gen_server:call/3">>;
-                                    Cf =:= <<"'Elixir.GenServer':call/3">>;
-                                    Cf =:= <<"gen_statem:call/3">> -> {Tm, Rq, Sv};
+      case {CallFun, [V || V <- Regs(Caller), binary:longest_common_prefix([V, <<"Catch ">>]) < 6]} of
+        {Cf, [Tm, Rq, Sv]} when Cf =:= <<"gen_server:call/3">>;
+                                Cf =:= <<"'Elixir.GenServer':call/3">>;
+                                Cf =:= <<"gen_statem:call/3">> -> {Tm, Rq, Sv};
+        {<<"gen_server:call/2">>, [Rq, Sv]} -> {<<"5000">>, Rq, Sv};
+        {<<"gen_statem:call/3">>, [Rq, Sv]} -> {<<"infinity">>, Rq, Sv};
         _ -> {undefined, undefined, undefined}
       end,
     Monitored = case erlang:process_info(P, monitors) of
@@ -116,7 +118,14 @@ defmodule OtpDebugMcp.CallChains do
 
       edges =
         Map.new(waited, fn {pid, kind, callee, _ref, fun, timeout, request} ->
-          {pid, %{kind: kind, callee: callee, fun: fun, timeout: timeout, request: request}}
+          {pid,
+           %{
+             kind: kind,
+             callee: defined(callee),
+             fun: defined(fun),
+             timeout: defined(timeout),
+             request: defined(request)
+           }}
         end)
 
       deadlocks = cycles(edges)
@@ -158,6 +167,9 @@ defmodule OtpDebugMcp.CallChains do
       {:ok, status, findings, interpretation()}
     end
   end
+
+  defp defined(:undefined), do: nil
+  defp defined(value), do: value
 
   # Each process waits on at most one: following the waits from every
   # process finds each cycle, kept once.

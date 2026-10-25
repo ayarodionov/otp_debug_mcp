@@ -64,4 +64,24 @@ defmodule OtpDebugMcp.CallChainsTest do
     assert f.waiting_over_1s == 6
     assert f.by_kind == %{call: 6}
   end
+
+  test "reads the request and timeout of each form of call", %{target: target} do
+    start(target, [:stuck])
+    TestTarget.call(target, Caller, :call_later, [:stuck, {:via, []}])
+    TestTarget.call(target, Caller, :call_each_way, [:stuck])
+
+    assert %{findings: %{most_waited_on: [stuck], chains: [chain]}} = check()
+    assert stuck.name == ":stuck"
+    steps = Map.new(stuck.some_waiters ++ chain, &{&1[:request], &1})
+
+    assert %{call: "gen_server:call/2", timeout: 5000} = steps["{:form, 2}"]
+    assert %{call: "gen_statem:call/3", timeout: ":infinity"} = steps["{:statem, 3}"]
+
+    # The process awaiting the task waits on it, and the task on :stuck.
+    assert [awaiting, task, end_of_chain] = chain
+    assert awaiting.waits_on =~ "the task"
+    refute Map.has_key?(awaiting, :request)
+    assert task.request == ":in_task"
+    assert end_of_chain.name == ":stuck"
+  end
 end

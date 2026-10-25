@@ -96,6 +96,23 @@ defmodule OtpDebugMcp.TelemetryTest do
            |> Enum.all?(&(&1 != :otp_debug_mcp_quiet))
   end
 
+  test "says when no handler is attached, as after one that raised was detached" do
+    other = TestTarget.start(telemetry: true)
+    on_exit(fn -> TestTarget.stop(other) end)
+    handler = ["db-metrics", [:repo, :query], &Emitter.metrics/4, nil]
+    :ok = TestTarget.call(other, :telemetry, :attach, handler)
+    {:ok, _} = TestTarget.connect(other)
+
+    assert {:ok, r} = telemetry(%{list: true})
+    refute Map.has_key?(r, "no_handlers")
+
+    # A query without a source: the handler raises, and telemetry detaches it.
+    :ok = TestTarget.call(other, :telemetry, :execute, [[:repo, :query], %{total_time: 1}, %{}])
+    assert {:ok, %{"events" => events, "no_handlers" => note}} = telemetry(%{list: true})
+    refute Enum.any?(events, &(&1["from"] == "handlers"))
+    assert note =~ "detached"
+  end
+
   test "explains a node without telemetry", %{plain: plain} do
     {:ok, _} = TestTarget.connect(plain)
     assert {:error, text} = call_tool(Tools.Telemetry, %{})
