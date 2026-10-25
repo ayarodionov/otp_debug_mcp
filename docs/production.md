@@ -169,7 +169,7 @@ release for amd64 and arm64: the Linux release on Ubuntu 22.04, built from
 the repository's `Dockerfile`. Get it with:
 
 ```sh
-docker pull ghcr.io/ayarodionov/otp_debug_mcp:0.6.0
+docker pull ghcr.io/ayarodionov/otp_debug_mcp:0.7.0
 ```
 
 `latest` follows the newest release. To build it yourself instead, run
@@ -193,7 +193,7 @@ container beside `myapp` (your container's name), with the node's cookie:
 claude mcp add otp-debug --scope local \
   -e OTP_DEBUG_MCP_COOKIE=the-cookie \
   -- docker run -i --rm --network container:myapp -e OTP_DEBUG_MCP_COOKIE \
-  ghcr.io/ayarodionov/otp_debug_mcp:0.6.0
+  ghcr.io/ayarodionov/otp_debug_mcp:0.7.0
 ```
 
 - `-i` connects the server's stdin and stdout to Claude Code. Don't add
@@ -211,7 +211,7 @@ install it as in the README's [Setup](../README.md#register-it-with-claude-code)
 or copy it out of the image:
 
 ```sh
-id=$(docker create ghcr.io/ayarodionov/otp_debug_mcp:0.6.0)
+id=$(docker create ghcr.io/ayarodionov/otp_debug_mcp:0.7.0)
 mkdir -p ~/.claude/skills && docker cp "$id:/opt/otp_debug_mcp/skills/otp-debug" ~/.claude/skills/
 docker rm "$id"
 ```

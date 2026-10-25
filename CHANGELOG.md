@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.7.0
+
+Found by running the "Plausible but wrong" examples of the books
+Learning Erlang from Claude and Learning Elixir from Claude on live nodes
+(`examples/books`, `docs/plausible-but-wrong.md`): deadlocks that a
+timeout already ended, the exceptions of one process wherever they're
+raised, and a fix for `call_chains` on the commonest deadlock.
 
 - Fixed: `call_chains`, and with it `diagnose`, failed with "Internal
   error" while processes waited in `gen_server:call/2` (the default

@@ -91,7 +91,7 @@ deadlocks: [[
 failed on these calls, which take the default timeout. `diagnose`
 returned "Internal error". The session fell back to individual checks and
 still found the cause, but the check that exists for this bug failed on its
-most common form. The fix is in the CHANGELOG's Unreleased section.
+most common form. It's fixed in 0.7.0.
 
 ## Keeping a small slice of a huge binary
 
@@ -259,7 +259,7 @@ one line on the console. Its fix was a clause that doesn't require
 `recent_errors` couldn't help here: the detach was logged once, 30
 seconds before the session, and only to the console. A node with log files
 keeps it, and `recent_errors` reads those. Since this run, a `list: true`
-that finds no handler says what that usually means (see the CHANGELOG).
+that finds no handler says what that usually means (0.7.0).
 
 ## What this shows
 

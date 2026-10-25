@@ -8,7 +8,7 @@
 #
 # CI publishes it as ghcr.io/ayarodionov/otp_debug_mcp for each release.
 FROM ubuntu:22.04
-ARG VSN=0.6.0
+ARG VSN=0.7.0
 ARG TARGETARCH
 LABEL org.opencontainers.image.source="https://github.com/ayarodionov/otp_debug_mcp" \
       org.opencontainers.image.description="MCP server for debugging live Erlang/Elixir/OTP nodes" \
