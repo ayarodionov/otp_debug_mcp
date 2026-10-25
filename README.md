@@ -434,6 +434,11 @@ external programs with a slow peer, errors only the logs show, a node
 that died, from its crash dump, two gen_servers that deadlock, a Phoenix
 API seen through its telemetry, and failures that nothing logs.
 
+[docs/plausible-but-wrong.md](docs/plausible-but-wrong.md) runs six
+"Plausible but wrong" examples from the books Learning Erlang from Claude
+and Learning Elixir from Claude, each on a live node, and shows an agent
+given only the symptom finding each one with these tools.
+
 ## Demo targets
 
 `examples/` has demo nodes in each BEAM language, each with a bug for the
@@ -446,6 +451,11 @@ background, on this host with `-sname`, and `run.sh stop` stops them:
 | Erlang | [examples/erlang](examples/erlang) | a mailbox that never drains, an OTP application in a crash loop, a session store leaking atoms and ETS rows, a cluster with one bad node, a C NIF library that blocks a scheduler and leaks native memory, a shop that leaks sockets and external programs and fills a slow peer's socket, an orders service whose errors only its logs show, a node that runs out of memory and leaves a crash dump, and two gen_servers that deadlock |
 | Gleam | [examples/gleam](examples/gleam) | a mailbox that never drains, a supervised actor whose `let assert` panics in a loop, and a job runner leaking processes |
 | LFE | [examples/lfe](examples/lfe) | a mailbox that never drains, an OTP application in a crash loop, and an index whose slices pin whole binaries |
+
+[examples/books](examples/books) has six "Plausible but wrong" examples
+from the books Learning Erlang from Claude and Learning Elixir from Claude,
+in Erlang and Elixir; [docs/plausible-but-wrong.md](docs/plausible-but-wrong.md)
+shows what an agent found on each.
 
 Point Claude Code at one without saying what's wrong:
 

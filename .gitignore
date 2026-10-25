@@ -30,3 +30,4 @@ otp_debug_mcp-*.tar
 /examples/lfe/ebin/
 /examples/erlang/log/
 /examples/erlang/dumps/
+/examples/books/ebin/
