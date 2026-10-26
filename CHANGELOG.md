@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.8.0
+
+Tools for two kinds of system, a Phoenix or Bandit web server (`bandit`)
+and a riak_core cluster (`riak_core`), a look inside ETS tables
+(`ets_table`), and four more checks in `diagnose`: where the logs go,
+where scheduler time goes, code that isn't what's on disk, and traffic
+between nodes. Each comes with a demo, a scenario and a walkthrough.
 
 - `riak_core`: a riak_core cluster (Riak KV, riak_core_lite, and systems
   built on them) from one member, through riak_core's own API: the
