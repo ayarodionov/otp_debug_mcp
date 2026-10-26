@@ -30,15 +30,32 @@ defmodule OtpDebugMcp.TestTarget do
     OtpDebugMcp.Fixtures.AtomLeak,
     OtpDebugMcp.Fixtures.ProcLeak,
     OtpDebugMcp.Fixtures.SliceKeeper,
-    OtpDebugMcp.Fixtures.Fussy
+    OtpDebugMcp.Fixtures.Fussy,
+    OtpDebugMcp.Fixtures.EtsOwner,
+    OtpDebugMcp.Fixtures.OldLoop,
+    OtpDebugMcp.Fixtures.WebShop
   ]
 
   defstruct [:peer, :node, :cookie, :name, :opts]
 
+  # Bandit and what it runs on, for `bandit: true`.
+  @bandit_apps [
+    :bandit,
+    :thousand_island,
+    :plug,
+    :plug_crypto,
+    :mime,
+    :websock,
+    :hpax,
+    :telemetry,
+    :eex
+  ]
+
   @doc """
   Start a target node. Options: `:name`, `:cookie`, `longnames: true` (as
   `name@127.0.0.1`), `:env` (environment variables, as `{name, value}`),
-  `telemetry: true` (the telemetry application started), `recon: true`
+  `telemetry: true` (the telemetry application started), `bandit: true`
+  (Bandit and what it needs started), `recon: true`
   (recon application loaded, as in a
   release that depends on it), `:args` (more VM flags, as charlists),
   `erlang: true` (the Elixir application isn't started, so the node looks
@@ -54,8 +71,10 @@ defmodule OtpDebugMcp.TestTarget do
 
     paths =
       elixir_paths() ++
+        [fixtures_dir()] ++
         if(opts[:recon], do: [lib_ebin(:recon)], else: []) ++
-        if(opts[:telemetry], do: [lib_ebin(:telemetry)], else: [])
+        if(opts[:telemetry], do: [lib_ebin(:telemetry)], else: []) ++
+        if(opts[:bandit], do: Enum.map(@bandit_apps, &lib_ebin/1), else: [])
 
     peer_opts = %{
       name: name,
@@ -85,12 +104,38 @@ defmodule OtpDebugMcp.TestTarget do
     if opts[:telemetry],
       do: {:ok, _} = call(target, :application, :ensure_all_started, [:telemetry])
 
+    if opts[:bandit],
+      do: {:ok, _} = call(target, :application, :ensure_all_started, [:bandit])
+
     for mod <- @fixtures do
-      {^mod, bin, file} = :code.get_object_code(mod)
+      {^mod, bin, _} = :code.get_object_code(mod)
+      file = String.to_charlist(Path.join(fixtures_dir(), "#{mod}.beam"))
       {:module, ^mod} = call(target, :code, :load_binary, [mod, file, bin])
     end
 
     target
+  end
+
+  # The fixtures' .beam files, written once per test run to a directory on
+  # every target's code path, so that they're loaded from the code path as
+  # a real node's modules are (the stale_code check looks there).
+  defp fixtures_dir do
+    case :persistent_term.get({__MODULE__, :fixtures_dir}, nil) do
+      nil ->
+        dir = Path.join(System.tmp_dir!(), "otpdbg_fixtures_#{System.pid()}")
+        File.mkdir_p!(dir)
+
+        for mod <- @fixtures do
+          {^mod, bin, _} = :code.get_object_code(mod)
+          File.write!(Path.join(dir, "#{mod}.beam"), bin)
+        end
+
+        :persistent_term.put({__MODULE__, :fixtures_dir}, String.to_charlist(dir))
+        String.to_charlist(dir)
+
+      dir ->
+        dir
+    end
   end
 
   @doc """

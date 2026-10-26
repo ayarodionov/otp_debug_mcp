@@ -317,8 +317,19 @@ defmodule OtpDebugMcp.ModuleCodeTest do
     assert result["loaded"] =~ "hot-loaded"
   end
 
-  test "explains what it can't read" do
-    assert {:error, text} = code_error(%{module: "OtpDebugMcp.Fixtures.Busy"})
+  test "explains what it can't read", %{target: target} do
+    # A module with no .beam on the code path: compiled in memory.
+    forms = [
+      {:attribute, 1, :module, :otpdbg_nowhere},
+      {:attribute, 1, :export, [f: 0]},
+      {:function, 1, :f, 0, [{:clause, 1, [], [], [{:atom, 1, :ok}]}]}
+    ]
+
+    {:ok, :otpdbg_nowhere, bin} = :compile.forms(forms)
+    file = ~c"/elsewhere/otpdbg_nowhere.beam"
+    {:module, _} = TestTarget.call(target, :code, :load_binary, [:otpdbg_nowhere, file, bin])
+
+    assert {:error, text} = code_error(%{module: "otpdbg_nowhere"})
     assert text =~ "not from a file on the target's code path"
 
     assert {:error, text} = code_error(%{module: "no_such_module"})

@@ -29,6 +29,9 @@ defmodule OtpDebugMcp.Target do
   @rpc_timeout 5_000
   @recon_modules [:recon, :recon_alloc, :recon_lib, :recon_map, :recon_rec, :recon_trace]
   @injected_marker :otp_debug_mcp_injected
+
+  @doc "recon's modules, which connect injects into a node that lacks them."
+  def recon_modules, do: @recon_modules
   @spawns :otp_debug_mcp_target_spawns
   # The debugger's own footprint on the target: atoms known to exist there,
   # functions already called there, and what first-time calls added.

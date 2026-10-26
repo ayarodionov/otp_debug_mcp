@@ -608,3 +608,136 @@ defmodule OtpDebugMcp.Fixtures.Fussy do
     end
   end
 end
+
+defmodule OtpDebugMcp.Fixtures.EtsOwner do
+  @moduledoc """
+  A registered process that owns three tables: otpdbg_set, a named public
+  set of 2,000 small rows and one large one (:big, a list of 20,000
+  integers); otpdbg_bag, an unnamed bag whose key :hot has 30 rows; and
+  otpdbg_private, a named private table.
+  """
+
+  def start(name) do
+    parent = self()
+
+    pid =
+      spawn(fn ->
+        set = :ets.new(:otpdbg_set, [:named_table, :public, :set])
+        for i <- 1..2_000, do: :ets.insert(set, {i, "row #{i}"})
+        :ets.insert(set, {:big, Enum.to_list(1..20_000)})
+
+        bag = :ets.new(:otpdbg_bag, [:bag, :public])
+        for i <- 1..30, do: :ets.insert(bag, {:hot, i})
+        for i <- 1..5, do: :ets.insert(bag, {i, i})
+
+        :ets.new(:otpdbg_private, [:named_table, :private])
+        send(parent, :ready)
+
+        receive do
+          :stop -> :ok
+        end
+      end)
+
+    Process.register(pid, name)
+
+    receive do
+      :ready -> :ok
+    end
+  end
+end
+
+defmodule OtpDebugMcp.Fixtures.OldLoop do
+  @moduledoc """
+  A registered process whose receive loop calls itself locally, as plain
+  receive loops do: loading the module again leaves it in the old code.
+  """
+
+  def start(name) do
+    Process.register(spawn(fn -> loop() end), name)
+    :ok
+  end
+
+  defp loop do
+    receive do
+      :stop -> :ok
+    after
+      100 -> loop()
+    end
+  end
+end
+
+defmodule OtpDebugMcp.Fixtures.WebShop do
+  @moduledoc """
+  A plug served by Bandit: / answers at once, /slow after `slow_ms`, /boom
+  raises. `start/2` starts the server under a process of its own, with
+  the given Thousand Island options, and returns its port; `clients/2`
+  starts processes that each keep requesting `path` on their own
+  connection.
+  """
+  @behaviour Plug
+
+  @impl true
+  def init(opts), do: opts
+
+  @impl true
+  def call(%{request_path: "/slow"} = conn, _opts) do
+    Process.sleep(:persistent_term.get({__MODULE__, :slow_ms}, 2_000))
+    Plug.Conn.send_resp(conn, 200, "slow")
+  end
+
+  def call(%{request_path: "/boom"}, _opts), do: raise("boom")
+  def call(conn, _opts), do: Plug.Conn.send_resp(conn, 200, "ok")
+
+  def start(thousand_island_options, slow_ms) do
+    :persistent_term.put({__MODULE__, :slow_ms}, slow_ms)
+    parent = self()
+
+    spawn(fn ->
+      {:ok, server} =
+        Bandit.start_link(
+          plug: __MODULE__,
+          port: 0,
+          ip: :loopback,
+          startup_log: false,
+          thousand_island_options: thousand_island_options
+        )
+
+      {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
+      send(parent, {:port, port})
+      Process.sleep(:infinity)
+    end)
+
+    receive do
+      {:port, port} -> port
+    end
+  end
+
+  def clients(port, n, path) do
+    for _ <- 1..n do
+      spawn(fn -> client(port, path) end)
+    end
+
+    :ok
+  end
+
+  # One connection, a request after another on it; a new connection when
+  # it's closed (refused, or timed out).
+  defp client(port, path) do
+    case :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, active: false], 1_000) do
+      {:ok, socket} -> requests(socket, path)
+      _ -> :ok
+    end
+
+    Process.sleep(50)
+    client(port, path)
+  end
+
+  defp requests(socket, path) do
+    with :ok <- :gen_tcp.send(socket, "GET #{path} HTTP/1.1\r\nhost: shop\r\n\r\n"),
+         {:ok, _} <- :gen_tcp.recv(socket, 0, 10_000) do
+      requests(socket, path)
+    else
+      _ -> :gen_tcp.close(socket)
+    end
+  end
+end

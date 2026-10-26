@@ -40,7 +40,9 @@ raw introspection when a purpose-built tool exists.
      allocator carriers, and which allocator holds it.
    - Memory suspicion → `run_check(binary_leak)`, `run_check(ets_tables)`,
      then `snapshot(take)` → wait 30-60s of real load → `snapshot(diff)`.
-     Only a growing delta proves a leak.
+     Only a growing delta proves a leak. `ets_table` on a large or growing
+     table shows what's in it: keys from input never deleted, a few huge
+     rows, a bag's hot key.
    - Intermittent failures or crash reports → `run_check(supervisor_restarts)`:
      its `restarting_children` carry the exit reason and stack trace (file
      and line) when a child dies during the sample; then `trace_calls` on
@@ -51,7 +53,17 @@ raw introspection when a purpose-built tool exists.
      warnings with where they were logged, and the errors in the node's log
      files from before it listened (an error at boot is there). For rare
      errors, `watch_minutes` keeps listening in the background; call it
-     again later, and with `stop: true` when done.
+     again later, and with `stop: true` when done. If `diagnose`'s `logs`
+     check says no file keeps the node's logs, errors from before you
+     connected are gone: start the watch early.
+   - A fix or deploy that doesn't seem to take → `stale_code` (in
+     `diagnose`): modules whose `.beam` on the code path differs from the
+     code running, and processes still in a module's old code after a hot
+     load.
+   - Several nodes, or slowness when talking to one → `distribution` (in
+     `diagnose`): each connection's traffic, and bytes waiting against the
+     busy limit (past it, every sender to that node is suspended); then
+     `cluster` to compare the nodes.
    - Calls time out, or something hangs → `call_chains` (in `diagnose`):
      a deadlock lists the processes calling each other with each one's
      request; a chain ends at the process holding everyone up; then
@@ -64,6 +76,11 @@ raw introspection when a purpose-built tool exists.
      and the slowest example, from events the libraries already emit,
      much cheaper than tracing. `queue_time_ms` high on Ecto queries means
      the pool is exhausted.
+   - A Phoenix or Bandit service whose clients get connection resets, or
+     wait before the first byte, while request times look fine → `bandit`:
+     the connection limit and how full it is, acceptors waiting for room,
+     what the busy connections wait in, and connections refused at the
+     limit (Thousand Island logs none of this).
    - Some calls fail, but you can't see which or with what arguments
      (errors caught, or lost among many calls) → `trace_calls` with
      `exceptions: true`: only the calls that raise, with their arguments
@@ -72,7 +89,9 @@ raw introspection when a purpose-built tool exists.
      true`, no `module`): every exported function and BIF that raises in
      it, even when it catches the exception.
    - CPU suspicion → `run_check(schedulers)` first; OS CPU% lies about the
-     BEAM (busy-wait). Only if schedulers are pegged, use `top_reductions`,
+     BEAM (busy-wait). `scheduler_time` (in `diagnose`) says what
+     busy schedulers spend the time on: Erlang code, garbage collection
+     (`gc_share_of_work`), ports, or spinning. If schedulers are pegged running code, use `top_reductions`,
      then `profile` on the module the top process is running, to see which
      functions use the time. Narrow it to a function or a process if the
      module is busy. `profile` counts only time spent running: a function

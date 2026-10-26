@@ -168,9 +168,14 @@ defmodule OtpDebugMcp.Tools do
             "many wait on), supervisor_restarts, binary_leak (force-GCs every " <>
             "process), memory_breakdown, " <>
             "allocator_fragmentation, process_count, atom_table, ets_tables, ports, " <>
-            "native_memory, native_code, schedulers (normal and dirty), " <>
+            "native_memory, native_code, stale_code (old code still running after a hot " <>
+            "load, modules unlike their .beam on the code path), logs (where the node's " <>
+            "logs go, and whether a file keeps them), distribution (1s: connections to " <>
+            "other nodes, their traffic and bytes waiting), schedulers (normal and dirty), " <>
             "long_schedules (2s: native code holding a scheduler, long GCs, busy ports), " <>
-            "socket_traffic (1s: the sockets moving the most bytes), top_reductions"
+            "socket_traffic (1s: the sockets moving the most bytes), top_reductions, " <>
+            "scheduler_time (2s: where scheduler time goes: Erlang code, " <>
+            "garbage collection, ports, I/O polling, busy-waiting)"
       )
     end
 
@@ -531,6 +536,76 @@ defmodule OtpDebugMcp.Tools do
             "failed and has been detached\" once, at error level (recent_errors " <>
             "finds it in log files). Listening shows whether the events still happen."
         )
+      end
+    end
+  end
+
+  defmodule EtsTable do
+    @moduledoc """
+    What's in one ETS table: its type, protection, owner and heir, row
+    count and memory, its first rows, and a bounded scan of its rows (the
+    average row size, the largest rows, and for a bag the keys with the
+    most rows). The ets_tables check (in diagnose) names the largest
+    tables. Rows are read in chunks and a large row is shown by its key
+    and size, so a big table is never copied whole. A private table can
+    only be read by its owner: then only its settings are shown.
+    """
+    use Anubis.Server.Component, type: :tool
+
+    alias OtpDebugMcp.{Ets, Tools}
+
+    schema do
+      field(:table, {:required, :string},
+        description:
+          "The table's name, as the ets_tables check prints it, e.g. sessions or MyApp.Cache"
+      )
+
+      field(:rows, :integer, description: "First rows to show (default 10, max 50)")
+
+      field(:scan, :integer,
+        description: "Rows to read for sizes and repeated keys (default 10000, max 100000)"
+      )
+    end
+
+    @impl true
+    def execute(%{table: table} = params, frame) do
+      rows = (params[:rows] || 10) |> min(50) |> max(0)
+      scan = (params[:scan] || 10_000) |> min(100_000) |> max(1)
+
+      case Ets.inspect(table, rows, scan) do
+        {:ok, report} -> Tools.json_response(frame, report)
+        {:error, reason} -> Tools.error_response(frame, reason)
+      end
+    end
+  end
+
+  defmodule Bandit do
+    @moduledoc """
+    The node's Bandit web servers (Thousand Island underneath): for each,
+    where it listens, its connection limit and how full it is (in total
+    and per acceptor), its timeouts, and its connections now: idle
+    keep-alives, reading or sending, or handling a request, the busy ones
+    grouped by where they wait (a slow upstream, a pool). Then, over a
+    window, its telemetry: requests per second by status, the slowest
+    routes, failed requests and exceptions, socket errors by reason, and
+    connections refused because the limit was reached, which Thousand
+    Island doesn't log. Findings come first, worst first.
+    """
+    use Anubis.Server.Component, type: :tool
+
+    alias OtpDebugMcp.Tools
+
+    schema do
+      field(:duration_ms, :integer, description: "How long to listen (default 5000, max 30000)")
+    end
+
+    @impl true
+    def execute(params, frame) do
+      duration = (params[:duration_ms] || 5_000) |> min(30_000) |> max(500)
+
+      case OtpDebugMcp.Bandit.report(duration) do
+        {:ok, report} -> Tools.json_response(frame, report)
+        {:error, reason} -> Tools.error_response(frame, reason)
       end
     end
   end

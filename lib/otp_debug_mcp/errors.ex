@@ -276,7 +276,9 @@ defmodule OtpDebugMcp.Errors do
 
   ## Log files
 
-  @log_files ~S"""
+  # The log files the node writes: its logger handlers' files (the newest
+  # of a disk_log's wrap files) and a release's console log, from run_erl.
+  @log_paths ~S"""
   Files = [F || #{config := #{file := F}} <- logger:get_handler_config()],
   Current = fun(F) ->
     case filelib:is_regular(F) of
@@ -303,23 +305,49 @@ defmodule OtpDebugMcp.Errors do
                D =/= false],
   Paths = lists:usort(lists:append([Current(unicode:characters_to_list(F)) || F <- Files]
                                    ++ [RunErl(D) || D <- Dirs])),
-  %% All of a small file; of a big one its start and its end.
-  Read = fun(P) ->
-    Size = filelib:file_size(P),
-    case file:open(P, [read, binary, raw]) of
-      {ok, Fd} ->
-        Pread = fun(At, N) -> case file:pread(Fd, At, N) of {ok, D} -> D; _ -> <<>> end end,
-        Data = case Size =< Head + Tail of
-          true -> {all, Pread(0, Size)};
-          false -> {parts, Pread(0, Head), Pread(Size - Tail, Tail)}
-        end,
-        file:close(Fd),
-        {P, Size, calendar:local_time_to_universal_time_dst(filelib:last_modified(P)), Data};
-      {error, Why} -> {P, Size, undefined, {error, Why}}
-    end
-  end,
-  [Read(P) || P <- Paths].
   """
+
+  @log_files @log_paths <>
+               ~S"""
+               %% All of a small file; of a big one its start and its end.
+               Read = fun(P) ->
+                 Size = filelib:file_size(P),
+                 case file:open(P, [read, binary, raw]) of
+                   {ok, Fd} ->
+                     Pread = fun(At, N) -> case file:pread(Fd, At, N) of {ok, D} -> D; _ -> <<>> end end,
+                     Data = case Size =< Head + Tail of
+                       true -> {all, Pread(0, Size)};
+                       false -> {parts, Pread(0, Head), Pread(Size - Tail, Tail)}
+                     end,
+                     file:close(Fd),
+                     {P, Size, calendar:local_time_to_universal_time_dst(filelib:last_modified(P)), Data};
+                   {error, Why} -> {P, Size, undefined, {error, Why}}
+                 end
+               end,
+               [Read(P) || P <- Paths].
+               """
+
+  # Where the node's logs go, without reading them: its primary level, its
+  # handlers, and the files they and run_erl write.
+  @log_setup @log_paths <>
+               ~S"""
+               Handlers = [{Id, Module, maps:get(level, H, all),
+                            case maps:get(config, H, #{}) of
+                              #{file := F} -> unicode:characters_to_binary(F);
+                              #{type := T} -> T;
+                              _ -> undefined
+                            end}
+                           || #{id := Id, module := Module} = H <- logger:get_handler_config()],
+               {maps:get(level, logger:get_primary_config()), Handlers,
+                [{unicode:characters_to_binary(P), filelib:file_size(P),
+                  calendar:local_time_to_universal_time_dst(filelib:last_modified(P))} || P <- Paths]}.
+               """
+
+  @doc """
+  Where the node's logs go: `{primary_level, handlers, files}`, each handler
+  `{id, module, level, file or type}`, each file `{path, size, modified}`.
+  """
+  def log_setup, do: Checks.remote_eval(@log_setup)
 
   @head_bytes 65_536
   @tail_bytes 196_608
@@ -387,6 +415,9 @@ defmodule OtpDebugMcp.Errors do
       do: Enum.take(groups, 5) ++ Enum.take(groups, 5 - @entries_per_file),
       else: groups
   end
+
+  @doc "A file's modification time, as `log_setup/0` gives it, in ISO 8601."
+  def modified_at(utc), do: modified(utc)
 
   defp modified([{{_, _, _}, {_, _, _}} = utc | _]), do: datetime(utc)
   defp modified({{_, _, _}, {_, _, _}} = utc), do: datetime(utc)

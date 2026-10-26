@@ -43,7 +43,9 @@ defmodule OtpDebugMcp.MixProject do
       # Production-safe BEAM introspection. Loaded locally; its object code is
       # injected into the target node at connect time (see OtpDebugMcp.Target),
       # so the target app needs no recon dependency of its own.
-      {:recon, "~> 2.5"}
+      {:recon, "~> 2.5"},
+      # Only so tests can run a Bandit server on a target node.
+      {:bandit, "~> 1.13", only: :test}
     ]
   end
 end

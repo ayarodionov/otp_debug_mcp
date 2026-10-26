@@ -1,5 +1,55 @@
 # Changelog
 
+## Unreleased
+
+- `bandit`: Phoenix and Bandit web servers, through Thousand Island
+  under them. For each server: where it listens, its connection limit
+  (acceptors × connections per acceptor) and how full it is, in total
+  and per acceptor; acceptors waiting for room for a new connection,
+  while new clients wait unaccepted; its timeouts; and its connections,
+  idle keep-alives, reading, sending or handling a request, the busy ones
+  grouped by the function they wait in and the first frame of the
+  application's code. Then, over a window, from its telemetry: requests
+  per second by status, the slowest routes, requests that raised, socket
+  errors by reason, and connections refused at the limit, which Thousand
+  Island doesn't log. Findings, worst first: refused connections are
+  critical.
+- `telemetry` groups Bandit's requests by method, path and status
+  (`GET /products/:id -> 200`), failed ones by their error, and Thousand
+  Island's events by their error; Bandit's exception events now show
+  their exception.
+- `ets_table`: what's in one ETS table. Its type, protection, owner and
+  heir, row count and memory, its first rows, and a scan of up to 10,000
+  rows (100,000 at most) read in chunks: the average row, the largest
+  rows, and for a bag the keys with the most rows. A large row comes back
+  as its key and size only, and a private table, which only its owner can
+  read, as its settings only.
+- `logs` check, in `diagnose`: where the node's logs go (its primary
+  level, its handlers and what they write to, the files found with their
+  size and last write). With no file, it says that errors from before
+  anyone listened are gone and to start a `recent_errors` watch early; a
+  primary level that hides errors is a warning.
+- `stale_code` check, in `diagnose`: modules with old code still loaded
+  after a hot load, and the processes still running it (killed by the
+  module's next load), and loaded modules whose `.beam` on the code path
+  is different (a deploy that was never loaded, or code loaded by hand),
+  or whose file is gone. A module merely off the code path, as Mix leaves
+  Hex's, isn't flagged, nor is recon when connect injected it.
+- `distribution` check, in `diagnose`: the node's connections to other
+  nodes over 1 s, with their type and state, bytes sent and received per
+  second, and bytes waiting to be sent against the VM's busy limit; a
+  connection near the limit, or stuck pending, is a warning. This tool's
+  own connection is marked.
+- `scheduler_time` check, in `diagnose`: where the time of each
+  kind of VM thread goes over 2 s, from microstate accounting: Erlang
+  code, garbage collection, ports, I/O polling, and busy-waiting (in
+  `other`). `gc_share_of_work` counts the dirty CPU schedulers too, where
+  large heaps are collected, and `gc_schedulers` is the schedulers' worth
+  of time garbage collection took: 30% of the work and half a scheduler
+  or more is a warning, whatever the machine's size. Accounting is turned on only for the window,
+  and left alone if someone else has it on. It runs alongside
+  `long_schedules`' 2 s window, so `diagnose` takes no longer.
+
 ## 0.7.0
 
 Found by running the "Plausible but wrong" examples of the books

@@ -25,13 +25,23 @@ defmodule OtpDebugMcp.Checks do
     :ports,
     :native_memory,
     :native_code,
+    :stale_code,
+    :logs,
+    :distribution,
     :schedulers,
     :long_schedules,
     :socket_traffic,
-    :top_reductions
+    :top_reductions,
+    :scheduler_time
   ]
 
   def all_checks, do: @checks
+
+  # Checks diagnose leaves out, run only when asked for with run_check.
+  @on_request []
+
+  @doc "The checks that run only on request, not in `run_all/0`."
+  def on_request, do: @on_request
 
   # run_all runs the checks in parallel, in two phases. The second measures
   # load (scheduler usage, the busiest processes) and atom growth, so it
@@ -50,9 +60,19 @@ defmodule OtpDebugMcp.Checks do
       :ets_tables,
       :ports,
       :native_memory,
-      :native_code
+      :native_code,
+      :stale_code,
+      :logs
     ],
-    [:schedulers, :long_schedules, :socket_traffic, :top_reductions, :atom_table]
+    [
+      :schedulers,
+      :scheduler_time,
+      :long_schedules,
+      :socket_traffic,
+      :distribution,
+      :top_reductions,
+      :atom_table
+    ]
   ]
 
   # A check that takes longer than this is reported as failed.
@@ -620,6 +640,254 @@ defmodule OtpDebugMcp.Checks do
     end
   end
 
+  # Where the node's logs go, and whether anything is kept: errors logged
+  # before an agent connects are only in a file, if anywhere it can read.
+  @no_log_file "Nothing the node logs is kept in a file: errors logged before " <>
+                 "recent_errors listens are only on the console, if anywhere. " <>
+                 "Start recent_errors with watch_minutes now to catch the next ones."
+
+  @hiding_errors [:critical, :alert, :emergency, :none]
+  def run(:logs) do
+    with {:ok, {primary, handlers, files}} <- OtpDebugMcp.Errors.log_setup() do
+      files =
+        for {path, size, modified} <- files do
+          %{file: path, size_bytes: size, modified: OtpDebugMcp.Errors.modified_at(modified)}
+        end
+
+      findings =
+        %{
+          primary_level: primary,
+          handlers:
+            for {id, module, level, writes} <- handlers do
+              %{
+                id: Format.inspect(id),
+                module: Format.inspect(module),
+                level: level,
+                writes: writes(writes)
+              }
+            end,
+          files: files
+        }
+        |> then(&if(files == [], do: Map.put(&1, :note, @no_log_file), else: &1))
+
+      status = if primary in @hiding_errors, do: :warning, else: :ok
+
+      result(:logs, status, findings, """
+      Where the node's logs go: the primary level (nothing below it is logged
+      at all; #{Enum.join(@hiding_errors, ", ")} hide errors), each logger
+      handler and where it writes, and the log files found (handlers' files,
+      and a release's run_erl console log), with their size and last write.
+      recent_errors reads these files' newest error entries, so errors from
+      before anyone listened are there. With no file, only the console has
+      them: a terminal, or a container's log (docker logs, kubectl logs).
+      Next step: recent_errors; for problems that come and go, start it with
+      watch_minutes early, so it catches the next one.
+      """)
+    else
+      err -> error_result(:logs, err)
+    end
+  end
+
+  # Code that isn't what it should be: modules with old code still loaded
+  # after a hot load, the processes still running it, and loaded modules
+  # whose .beam on the code path is different or missing
+  # (code:module_status/1 looks there, not at the file loaded from). Only processes in the first
+  # @max_old_modules modules with old code are looked for.
+  @max_old_modules 20
+  @stale_code ~S"""
+  Old = [M || {M, _} <- code:all_loaded(), erlang:check_old_code(M)],
+  InOld = [{M, [P || P <- erlang:processes(),
+                     erlang:check_process_code(P, M, [{allow_gc, false}]) =:= true]}
+           || M <- lists:sublist(Old, MaxOld)],
+  Pids = lists:usort(lists:append([Ps || {_, Ps} <- InOld])),
+  Infos = [{P, catch erlang:process_info(P, [registered_name, current_function, initial_call])}
+           || P <- lists:sublist(Pids, 20)],
+  %% removed: not on the code path, and the file it was loaded from gone
+  %% too. (Mix takes Hex's and the build tools' directories off the code
+  %% path once the project is built, with their modules still loaded.)
+  Disk = [{M, S, F} || {M, F} <- code:all_loaded(), is_list(F),
+                       S <- [catch code:module_status(M)],
+                       S =:= modified orelse (S =:= removed andalso not filelib:is_regular(F))],
+  {length(Old), InOld, Infos, Disk}.
+  """
+  def run(:stale_code) do
+    with {:ok, {old_count, in_old, infos, disk}} <-
+           remote_eval(@stale_code, MaxOld: @max_old_modules) do
+      infos = Map.new(infos, fn {pid, info} -> {pid, format_proc_info(pid, info)} end)
+
+      old =
+        for {mod, pids} <- in_old do
+          %{module: Format.inspect(mod), processes_in_it: length(pids)}
+          |> then(fn m ->
+            if pids == [],
+              do: m,
+              else:
+                Map.put(
+                  m,
+                  :some,
+                  for(
+                    p <- Enum.take(pids, 5),
+                    do: Map.put(infos[p] || %{}, :pid, Format.inspect(p))
+                  )
+                )
+          end)
+        end
+
+      # recon, injected by connect, isn't on the node's code path: the
+      # tool's own, not the node's. (A release that ships recon has it there.)
+      disk =
+        Enum.reject(disk, fn {mod, status, _} ->
+          status == :removed and mod in Target.recon_modules()
+        end)
+
+      out_of_step =
+        for {mod, status, file} <- disk do
+          %{module: Format.inspect(mod), file: to_string(file), on_disk: status}
+        end
+
+      status =
+        if Enum.any?(in_old, fn {_, pids} -> pids != [] end) or out_of_step != [],
+          do: :warning,
+          else: :ok
+
+      findings =
+        %{
+          modules_with_old_code: old_count,
+          old_code: old,
+          different_on_disk: out_of_step
+        }
+        |> then(
+          &if(old_count > @max_old_modules,
+            do:
+              Map.put(
+                &1,
+                :note,
+                "only the first #{@max_old_modules} modules with old code were searched for processes"
+              ),
+            else: &1
+          )
+        )
+
+      result(:stale_code, status, findings, """
+      Code that isn't what it seems. old_code: modules loaded again while
+      running (a hot load: a release upgrade, load_module, a remote shell's
+      l/1), whose previous version is still in memory, with the processes
+      still running it. Such a process hasn't called into the module by its
+      name since the load (a receive loop that calls itself locally does
+      that forever), so it runs the old code, and the next load of the
+      module kills it. different_on_disk: loaded modules whose .beam on the
+      code path differs from the code running (modified: a deploy whose
+      files were never loaded, or code loaded by hand that isn't on disk),
+      or whose file is gone, from the code path and from where it was
+      loaded (removed: a deploy deleted it). A restart loads what's
+      on the code path, so for these the running code and a restart's
+      differ. Next step: process_info on a process in old code (make its loop call
+      itself as ?MODULE:loop, or restart it); module_code on a modified
+      module, to see which version is running.
+      """)
+    else
+      err -> error_result(:stale_code, err)
+    end
+  end
+
+  # The node's connections to other nodes: their type and state, and over
+  # a @dist_window_ms window the bytes each sent and received, the bytes
+  # waiting to go out and the controller's queue, against the VM's busy
+  # limit for a connection. A connection's controller is a port for TCP,
+  # a process for TLS and other carriers.
+  @dist_window_ms 1_000
+  @distribution ~S"""
+  Stats = fun(C) when is_port(C) ->
+                case inet:getstat(C, [send_oct, recv_oct, send_pend]) of
+                  {ok, S} ->
+                    Q = case erlang:port_info(C, queue_size) of {queue_size, N} -> N; _ -> 0 end,
+                    {port, proplists:get_value(send_oct, S), proplists:get_value(recv_oct, S),
+                     proplists:get_value(send_pend, S) + Q};
+                  _ -> {port, undefined, undefined, undefined}
+                end;
+             (C) when is_pid(C) ->
+                case erlang:process_info(C, message_queue_len) of
+                  {message_queue_len, N} -> {process, undefined, undefined, N};
+                  _ -> {process, undefined, undefined, undefined}
+                end
+          end,
+  Ctrl = erlang:system_info(dist_ctrl),
+  Before = [{N, Stats(C)} || {N, C} <- Ctrl],
+  timer:sleep(Window),
+  After = [{N, C, Stats(C)} || {N, C} <- erlang:system_info(dist_ctrl)],
+  Info = case net_kernel:nodes_info() of {ok, I} -> I; _ -> [] end,
+  {node(), net_kernel:get_net_ticktime(), erlang:system_info(dist_buf_busy_limit),
+   Before, After, Info}.
+  """
+  def run(:distribution) do
+    with {:ok, {self_node, tick, busy_limit, before, later, info}} <-
+           remote_eval(@distribution, Window: @dist_window_ms) do
+      before = Map.new(before)
+      info = Map.new(info)
+      tool = Node.self()
+
+      connections =
+        for {peer, ctrl, {kind, out, in_, pending}} <- later do
+          i = Map.get(info, peer, [])
+          {_, out0, in0, _} = Map.get(before, peer, {kind, nil, nil, nil})
+
+          %{
+            node: Atom.to_string(peer),
+            type: i[:type],
+            state: i[:state],
+            controller: "#{kind} #{Format.inspect(ctrl)}",
+            pending_bytes: pending
+          }
+          |> put_rate(:sent_bytes_per_s, out0, out)
+          |> put_rate(:received_bytes_per_s, in0, in_)
+          |> then(&if(peer == tool, do: Map.put(&1, :this_tool, true), else: &1))
+        end
+        |> Enum.sort_by(&{&1[:this_tool] == true, -(&1.pending_bytes || 0)})
+
+      others = Enum.reject(connections, & &1[:this_tool])
+
+      backed_up =
+        Enum.filter(
+          others,
+          &(is_integer(&1.pending_bytes) and &1.pending_bytes >= div(busy_limit, 2))
+        )
+
+      pending = Enum.filter(others, &(&1.state == :pending))
+      status = if backed_up != [] or pending != [], do: :warning, else: :ok
+
+      result(
+        :distribution,
+        status,
+        %{
+          node: Atom.to_string(self_node),
+          net_ticktime_s: tick,
+          busy_limit_bytes: busy_limit,
+          connections: connections
+        },
+        """
+        The node's connections to other nodes, over a #{@dist_window_ms} ms
+        window: type (normal, or hidden like this tool's own, marked
+        this_tool), state (pending: still being set up, or stuck),
+        bytes sent and received per second, and pending_bytes, what's
+        waiting to be sent on the connection (for a TCP one, the socket's
+        unsent bytes and the port's queue; for TLS and other carriers,
+        the controller process's message queue length instead). Past
+        busy_limit_bytes (the VM's dist_buf_busy_limit, +zdbbl) the
+        connection is busy: every process sending to that node is
+        suspended until it drains, so one slow node or a large message
+        stalls senders everywhere (long_schedules counts busy_dist_port
+        events). A connection with a steady stream far above the others is
+        a node shipping big terms or chatty calls. net_ticktime_s: a node
+        unresponsive for about that long is disconnected. Next step:
+        cluster to compare the nodes; trace_calls on the sending side for
+        what is sent.
+        """
+      )
+    else
+      err -> error_result(:distribution, err)
+    end
+  end
+
   # Largest ETS tables by memory.
   def run(:ets_tables) do
     code = """
@@ -645,7 +913,7 @@ defmodule OtpDebugMcp.Checks do
       result(:ets_tables, :ok, top, """
       Ten largest ETS tables (informational). A cache without eviction or a
       table keyed on unbounded input grows forever. Compare against a later
-      snapshot to confirm growth.
+      snapshot to confirm growth, and see what's in one with ets_table.
       """)
     else
       err -> error_result(:ets_tables, err)
@@ -881,10 +1149,94 @@ defmodule OtpDebugMcp.Checks do
         run_queue that stays above zero with its schedulers near 1.0 means
         more dirty work than they can do: callers wait for every dirty NIF
         call. dirty_io is busy while I/O NIFs wait, which costs no CPU.
+        scheduler_time says what busy schedulers spend the time on (Erlang
+        code, garbage collection, ports).
         """
       )
     else
       err -> error_result(:schedulers, err)
+    end
+  end
+
+  # Where the schedulers' time goes, from microstate accounting: the
+  # counters of every VM thread over a window, by thread type and state.
+  # Turned on for the window if it's off, and left on, and not reset, if
+  # someone else is using it.
+  @scheduler_time_ms 2_000
+  @msacc ~S"""
+  Was = erlang:system_flag(microstate_accounting, true),
+  Before = erlang:statistics(microstate_accounting),
+  timer:sleep(Window),
+  After = erlang:statistics(microstate_accounting),
+  case Was of
+    false -> erlang:system_flag(microstate_accounting, false);
+    true -> ok
+  end,
+  {Was, Before, After}.
+  """
+  def run(:scheduler_time) do
+    with {:ok, {was_on, before, later}} <- remote_eval(@msacc, Window: @scheduler_time_ms),
+         true <-
+           (is_list(before) and is_list(later)) or
+             {:error, "microstate accounting was turned off during the window"} do
+      sums = msacc_sums(before, later)
+
+      by_type =
+        Map.new(sums, fn {type, {threads, counters}} ->
+          {type, msacc_shares(threads, counters)}
+        end)
+
+      {gc_share, gc_schedulers} = gc_share(sums)
+      status = if gc_share >= 0.3 and gc_schedulers >= 0.5, do: :warning, else: :ok
+
+      # Thread types that did next to nothing are left out, but for the
+      # normal schedulers.
+      shown = Map.filter(by_type, fn {type, t} -> type == :scheduler or t.busy >= 0.01 end)
+
+      findings =
+        %{
+          window_ms: @scheduler_time_ms,
+          by_thread_type: shown,
+          gc_share_of_work: gc_share,
+          gc_schedulers: gc_schedulers
+        }
+        |> then(
+          &if(was_on,
+            do:
+              Map.put(
+                &1,
+                :note,
+                "microstate accounting was already on; it's left on, and not reset"
+              ),
+            else: &1
+          )
+        )
+
+      result(:scheduler_time, status, findings, """
+      Where each kind of VM thread spent the #{@scheduler_time_ms} ms window,
+      from microstate accounting (turned on only for the window). busy is
+      the share of time not asleep, over all the type's threads; types busy
+      under 1% are left out, but for the normal schedulers. work splits the
+      busy time, adding up to 1: emulator is running Erlang code (with
+      BIFs, NIFs and sends, unless the VM was built with extra states), gc
+      garbage collection, port running port drivers (sockets, files),
+      check_io polling for I/O, aux timers and deferred work, other the
+      rest, including schedulers busy-waiting for work: high other with
+      little emulator is spinning, not load. scheduler is the normal
+      schedulers, dirty_cpu_scheduler and dirty_io_scheduler run dirty NIFs
+      and BIFs, poll does I/O polling. Large heaps are collected on the
+      dirty CPU schedulers, so gc_share_of_work is garbage collection's
+      share of the work of both, and gc_schedulers the schedulers' worth
+      of time it took (1.0: one scheduler collecting all the time). A
+      share of 0.3 or more, taking half a scheduler or more, means a third
+      of the work is collecting garbage, from big heaps or many
+      short-lived terms. Find the processes with process_info's
+      garbage_collection, or profile's memory column. Next
+      step: if emulator dominates, top_reductions and profile say which
+      code runs.
+      """)
+    else
+      err -> error_result(:scheduler_time, err)
     end
   end
 
@@ -1695,6 +2047,76 @@ defmodule OtpDebugMcp.Checks do
   end
 
   defp format_proc_info(_pid, other), do: Format.inspect(other)
+
+  # Per thread type: its thread count, and each state's counter growth
+  # over the window, summed over its threads.
+  defp msacc_sums(before, later) do
+    start = Map.new(before, &{{&1.type, &1.id}, &1.counters})
+
+    later
+    |> Enum.group_by(& &1.type)
+    |> Map.new(fn {type, threads} ->
+      deltas =
+        for %{id: id, counters: c} <- threads do
+          old = Map.get(start, {type, id}, %{})
+          Map.new(c, fn {state, v} -> {state, v - Map.get(old, state, 0)} end)
+        end
+
+      {type,
+       {length(threads), Enum.reduce(deltas, %{}, &Map.merge(&2, &1, fn _k, a, b -> a + b end))}}
+    end)
+  end
+
+  # The share of time not asleep, and how that time split between states.
+  defp msacc_shares(threads, sums) do
+    total = sums |> Map.values() |> Enum.sum()
+    awake = total - Map.get(sums, :sleep, 0)
+    work = sums |> Map.delete(:sleep) |> Map.new(fn {state, v} -> {state, ratio(v, awake)} end)
+    %{threads: threads, busy: ratio(awake, total), work: work}
+  end
+
+  # Garbage collection's share of the work of the normal and dirty CPU
+  # schedulers, where large heaps are collected, and the schedulers' worth
+  # of time it took: a type's gc time over one of its threads' time.
+  defp gc_share(sums) do
+    types =
+      for type <- [:scheduler, :dirty_cpu_scheduler],
+          {threads, c} <- [sums[type]],
+          do: {threads, c}
+
+    gc = types |> Enum.map(fn {_, c} -> Map.get(c, :gc, 0) end) |> Enum.sum()
+
+    awake =
+      types
+      |> Enum.map(fn {_, c} -> Enum.sum(Map.values(c)) - Map.get(c, :sleep, 0) end)
+      |> Enum.sum()
+
+    schedulers =
+      types
+      |> Enum.map(fn {threads, c} ->
+        ratio(Map.get(c, :gc, 0) * threads, Enum.sum(Map.values(c)))
+      end)
+      |> Enum.sum()
+
+    {ratio(gc, awake), Float.round(schedulers, 2)}
+  end
+
+  defp ratio(_part, whole) when whole <= 0, do: 0.0
+  defp ratio(part, whole), do: Float.round(part / whole, 3)
+
+  # A per-second rate from two counter readings, when both are known.
+  defp put_rate(map, key, from, to) when is_integer(from) and is_integer(to),
+    do: Map.put(map, key, round((to - from) * 1000 / @dist_window_ms))
+
+  defp put_rate(map, _key, _from, _to), do: map
+
+  # Where a logger handler writes.
+  defp writes(file) when is_binary(file), do: file
+  defp writes(:standard_io), do: "the console (standard_io)"
+  defp writes(:standard_error), do: "the console (standard_error)"
+  defp writes(nil), do: "elsewhere: see the handler's module"
+  defp writes(:undefined), do: "elsewhere: see the handler's module"
+  defp writes(other), do: Format.inspect(other)
 
   defp result(check, status, findings, interpretation) do
     %{

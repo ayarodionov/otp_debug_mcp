@@ -116,7 +116,7 @@ defmodule OtpDebugMcp.Telemetry do
       %% What groups events: a route, a query, a worker, a controller action.
       Str = fun(V) when is_binary(V) -> V; (V) when is_atom(V) -> atom_to_binary(V); (V) -> Text(V) end,
       Path = fun(P) -> re:replace(P, "/[0-9]+(?=/|$)", "/:id", [global, {return, binary}]) end,
-      Key = fun(Md) ->
+      Key0 = fun(Md) ->
         Conn = maps:get(conn, Md, #{}),
         Method = Str(maps:get(method, Conn, <<>>)),
         case Md of
@@ -133,9 +133,18 @@ defmodule OtpDebugMcp.Telemetry do
           _ -> <<>>
         end
       end,
+      %% Bandit's requests by path and status, failed ones by their error,
+      %% Thousand Island's errors by reason.
+      Key = fun([bandit, request | _], #{conn := #{request_path := P} = C}) ->
+                  <<(Str(maps:get(method, C, <<>>)))/binary, " ", (Path(P))/binary, " -> ",
+                    (Str(maps:get(status, C, <<"no status">>)))/binary>>;
+               ([bandit | _], #{error := E}) -> <<"error: ", (Str(E))/binary>>;
+               ([thousand_island | _], #{error := E}) -> Str(E);
+               (_, Md) -> Key0(Md)
+            end,
       Times = [duration, total_time, query_time, queue_time, decode_time, idle_time],
       Add = fun({event, Event, Ms, Md}, Groups) ->
-        G = maps:get({Event, Key(Md)}, Groups, #{count => 0, samples => #{}, slowest => none, error => none}),
+        G = maps:get({Event, Key(Event, Md)}, Groups, #{count => 0, samples => #{}, slowest => none, error => none}),
         Us = maps:from_list([{T, erlang:convert_time_unit(V, native, microsecond)}
                              || T <- Times, V <- [maps:get(T, Ms, none)], is_integer(V)]),
         Samples = maps:fold(fun(T, V, Acc) ->
@@ -150,10 +159,12 @@ defmodule OtpDebugMcp.Telemetry do
           {_, S0} -> S0
         end,
         Error = case lists:last(Event) of
-          exception -> #{kind => maps:get(kind, Md, undefined), reason => maps:get(reason, Md, undefined)};
+          %% Bandit's carries the error as exception, not reason.
+          exception -> #{kind => maps:get(kind, Md, undefined),
+                         reason => maps:get(reason, Md, maps:get(exception, Md, undefined))};
           _ -> maps:get(error, G)
         end,
-        Groups#{{Event, Key(Md)} => G#{count := maps:get(count, G) + 1, samples := Samples,
+        Groups#{{Event, Key(Event, Md)} => G#{count := maps:get(count, G) + 1, samples := Samples,
                                        slowest := Slowest, error := Error}}
       end,
       Collect = fun() ->
