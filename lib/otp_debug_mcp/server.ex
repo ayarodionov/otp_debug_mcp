@@ -22,6 +22,7 @@ defmodule OtpDebugMcp.Server do
   component(Tools.CrashDump)
   component(Tools.Telemetry)
   component(Tools.Bandit)
+  component(Tools.RiakCore)
   component(Tools.ProcessInfo)
   component(Tools.PortInfo)
   component(Tools.EtsTable)

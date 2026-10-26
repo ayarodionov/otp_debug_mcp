@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- `riak_core`: a riak_core cluster (Riak KV, riak_core_lite, and systems
+  built on them) from one member, through riak_core's own API: the
+  members, their status and whether this node reaches them, the claimant,
+  partition ownership and the ownership changes awaiting handoff, this
+  node's vnodes (primaries, and fallbacks held for unreachable owners),
+  the longest vnode mailboxes on every member it reaches, of the vnodes
+  and their proxies, handoffs running, the services up on each member, and
+  riak_core's own ringready and transfers. Findings, worst first: a member
+  or the claimant unreachable, a vnode past or near its overload
+  threshold, a vnode module registered under an application that isn't
+  running (riak_core then never hands its vnodes off), handoffs off while
+  changes wait.
 - `bandit`: Phoenix and Bandit web servers, through Thousand Island
   under them. For each server: where it listens, its connection limit
   (acceptors × connections per acceptor) and how full it is, in total

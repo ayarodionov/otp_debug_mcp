@@ -610,6 +610,33 @@ defmodule OtpDebugMcp.Tools do
     end
   end
 
+  defmodule RiakCore do
+    @moduledoc """
+    A riak_core cluster (Riak KV, riak_core_lite, and systems built on
+    them) as the connected node sees it: members, their status and whether
+    this node reaches them, the claimant, partition ownership and the
+    ownership changes awaiting handoff, this node's vnodes (primaries,
+    fallbacks held for unreachable owners, and the longest mailboxes, of
+    vnodes and their proxies), handoffs running, the services up on each
+    member, and riak_core's own cluster-wide ringready and transfers.
+    Findings come first, worst first. Read-only.
+    """
+    use Anubis.Server.Component, type: :tool
+
+    alias OtpDebugMcp.Tools
+
+    schema do
+    end
+
+    @impl true
+    def execute(_params, frame) do
+      case OtpDebugMcp.RiakCore.report() do
+        {:ok, report} -> Tools.json_response(frame, report)
+        {:error, reason} -> Tools.error_response(frame, reason)
+      end
+    end
+  end
+
   defmodule CrashDump do
     @moduledoc """
     Why a node died, from its crash dump (erl_crash.dump, or where

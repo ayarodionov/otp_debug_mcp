@@ -81,6 +81,11 @@ raw introspection when a purpose-built tool exists.
      the connection limit and how full it is, acceptors waiting for room,
      what the busy connections wait in, and connections refused at the
      limit (Thousand Island logs none of this).
+   - A riak_core cluster (Riak KV, riak_core_lite) slow or losing
+     requests → `riak_core` from any member: members down or unreachable,
+     fallbacks, ownership changes stuck awaiting handoff, and the
+     busiest vnode mailboxes across the cluster (a hot partition near its
+     overload threshold).
    - Some calls fail, but you can't see which or with what arguments
      (errors caught, or lost among many calls) → `trace_calls` with
      `exceptions: true`: only the calls that raise, with their arguments

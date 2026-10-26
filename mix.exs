@@ -44,8 +44,10 @@ defmodule OtpDebugMcp.MixProject do
       # injected into the target node at connect time (see OtpDebugMcp.Target),
       # so the target app needs no recon dependency of its own.
       {:recon, "~> 2.5"},
-      # Only so tests can run a Bandit server on a target node.
-      {:bandit, "~> 1.13", only: :test}
+      # Only so tests can run a Bandit server, and a riak_core cluster, on
+      # target nodes.
+      {:bandit, "~> 1.13", only: :test},
+      {:riak_core, "~> 0.11.1", hex: :riak_core_lite, only: :test, runtime: false}
     ]
   end
 end

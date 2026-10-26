@@ -741,3 +741,100 @@ defmodule OtpDebugMcp.Fixtures.WebShop do
     end
   end
 end
+
+defmodule OtpDebugMcp.Fixtures.RiakShop do
+  @moduledoc """
+  A riak_core vnode keeping a map, served as the riak_shop service: put/2
+  and get/1 go to the key's partition (a fallback when its owner is
+  unreachable), slow/2 queues commands that each take `ms` on one key's
+  vnode, without waiting for them.
+  """
+  @behaviour :riak_core_vnode
+
+  def start do
+    parent = self()
+
+    spawn(fn ->
+      {:ok, _} = :riak_core_vnode_master.start_link(__MODULE__)
+      # Under an application that runs: riak_core waits for the one a
+      # vnode module is registered under before handing its vnodes off.
+      :ok = :riak_core.register(:riak_core, vnode_module: __MODULE__)
+      :ok = :riak_core_node_watcher.service_up(:riak_shop, self())
+      send(parent, :ready)
+      Process.sleep(:infinity)
+    end)
+
+    receive do
+      :ready -> :ok
+    end
+  end
+
+  def put(key, value), do: sync(key, {:put, key, value})
+  def get(key), do: sync(key, {:get, key})
+
+  def slow(key, n, ms) do
+    for _ <- 1..n, do: :riak_core_vnode_master.command(index_node(key), {:sleep, ms}, master())
+    :ok
+  end
+
+  # {:error, :timeout} after 2 s: a request routed to a member just gone.
+  defp sync(key, command) do
+    :riak_core_vnode_master.sync_command(index_node(key), command, master(), 2_000)
+  catch
+    :exit, {:timeout, _} -> {:error, :timeout}
+  end
+
+  defp index_node(key) do
+    index = :riak_core_util.chash_key({"shop", :erlang.term_to_binary(key)})
+    [index_node] = :riak_core_apl.get_apl(index, 1, :riak_shop)
+    index_node
+  end
+
+  defp master, do: :riak_core_vnode_master.reg_name(__MODULE__)
+
+  def start_vnode(index), do: :riak_core_vnode_master.get_vnode_pid(index, __MODULE__)
+
+  @impl true
+  def init([partition]), do: {:ok, %{partition: partition, data: %{}}}
+
+  @impl true
+  def handle_command({:put, k, v}, _sender, s), do: {:reply, :ok, put_in(s.data[k], v)}
+  def handle_command({:get, k}, _sender, s), do: {:reply, Map.fetch(s.data, k), s}
+
+  def handle_command({:sleep, ms}, _sender, s) do
+    Process.sleep(ms)
+    {:noreply, s}
+  end
+
+  @impl true
+  def handle_handoff_command(_request, _sender, s), do: {:noreply, s}
+  @impl true
+  def handoff_starting(_target, s), do: {true, s}
+  @impl true
+  def handoff_cancelled(s), do: {:ok, s}
+  @impl true
+  def handoff_finished(_target, s), do: {:ok, s}
+
+  @impl true
+  def handle_handoff_data(bin, s) do
+    {k, v} = :erlang.binary_to_term(bin)
+    {:reply, :ok, put_in(s.data[k], v)}
+  end
+
+  @impl true
+  def encode_handoff_item(k, v), do: :erlang.term_to_binary({k, v})
+  @impl true
+  def is_empty(s), do: {map_size(s.data) == 0, s}
+  @impl true
+  def delete(s), do: {:ok, %{s | data: %{}}}
+  @impl true
+  def handle_coverage(_request, _keyspaces, _sender, s), do: {:stop, :not_implemented, s}
+  @impl true
+  def handle_exit(_pid, _reason, s), do: {:noreply, s}
+  @impl true
+  def terminate(_reason, _s), do: :ok
+  @impl true
+  def handle_overload_command(_request, _sender, _index), do: :ok
+  @impl true
+  def handle_overload_info(_request, _index), do: :ok
+end

@@ -33,7 +33,8 @@ defmodule OtpDebugMcp.TestTarget do
     OtpDebugMcp.Fixtures.Fussy,
     OtpDebugMcp.Fixtures.EtsOwner,
     OtpDebugMcp.Fixtures.OldLoop,
-    OtpDebugMcp.Fixtures.WebShop
+    OtpDebugMcp.Fixtures.WebShop,
+    OtpDebugMcp.Fixtures.RiakShop
   ]
 
   defstruct [:peer, :node, :cookie, :name, :opts]
@@ -55,7 +56,7 @@ defmodule OtpDebugMcp.TestTarget do
   Start a target node. Options: `:name`, `:cookie`, `longnames: true` (as
   `name@127.0.0.1`), `:env` (environment variables, as `{name, value}`),
   `telemetry: true` (the telemetry application started), `bandit: true`
-  (Bandit and what it needs started), `recon: true`
+  (Bandit and what it needs started), `riak: true` (riak_core started, alone), `recon: true`
   (recon application loaded, as in a
   release that depends on it), `:args` (more VM flags, as charlists),
   `erlang: true` (the Elixir application isn't started, so the node looks
@@ -74,7 +75,8 @@ defmodule OtpDebugMcp.TestTarget do
         [fixtures_dir()] ++
         if(opts[:recon], do: [lib_ebin(:recon)], else: []) ++
         if(opts[:telemetry], do: [lib_ebin(:telemetry)], else: []) ++
-        if(opts[:bandit], do: Enum.map(@bandit_apps, &lib_ebin/1), else: [])
+        if(opts[:bandit], do: Enum.map(@bandit_apps, &lib_ebin/1), else: []) ++
+        if(opts[:riak], do: Enum.map([:riak_core, :poolboy], &lib_ebin/1), else: [])
 
     peer_opts = %{
       name: name,
@@ -106,6 +108,8 @@ defmodule OtpDebugMcp.TestTarget do
 
     if opts[:bandit],
       do: {:ok, _} = call(target, :application, :ensure_all_started, [:bandit])
+
+    if opts[:riak], do: start_riak(target)
 
     for mod <- @fixtures do
       {^mod, bin, _} = :code.get_object_code(mod)
@@ -143,9 +147,12 @@ defmodule OtpDebugMcp.TestTarget do
   says: `:full`, or a list of `{i, j}` index pairs. They don't connect
   transitively (`-connect_all false`), so a missing link stays missing.
   """
-  def start_cluster(n, links \\ :full) do
+  def start_cluster(n, links \\ :full, opts \\ []) do
     cookie = "cluster_#{System.unique_integer([:positive])}"
-    targets = for _ <- 1..n, do: start(cookie: cookie, args: [~c"-connect_all", ~c"false"])
+
+    targets =
+      for _ <- 1..n,
+          do: start(Keyword.merge(opts, cookie: cookie, args: [~c"-connect_all", ~c"false"]))
 
     pairs =
       if links == :full,
@@ -157,6 +164,39 @@ defmodule OtpDebugMcp.TestTarget do
     end
 
     targets
+  end
+
+  # riak_core with its ring files in a directory of its own, a free
+  # handoff port, and a small ring.
+  defp start_riak(target) do
+    # Its warnings at start (no ring file yet) would print in the tests.
+    _ = call(target, :logger, :remove_handler, [:default])
+    dir = Path.join(System.tmp_dir!(), "otpdbg_riak_#{target.name}")
+    File.rm_rf!(dir)
+    {:ok, socket} = :gen_tcp.listen(0, [])
+    {:ok, port} = :inet.port(socket)
+    :gen_tcp.close(socket)
+    :ok = call(target, :application, :load, [:riak_core])
+    # riak_core starts os_mon; its disk and memory alarms are noise here.
+    :ok = call(target, :application, :load, [:os_mon])
+
+    for key <- [:start_disksup, :start_memsup, :start_cpu_sup],
+        do: :ok = call(target, :application, :set_env, [:os_mon, key, false])
+
+    for {key, value} <- [
+          ring_state_dir: to_charlist(Path.join(dir, "ring")),
+          platform_data_dir: to_charlist(dir),
+          handoff_port: port,
+          ring_creation_size: 8,
+          # Hand a vnode off after half a second idle, not a minute.
+          vnode_inactivity_timeout: 500,
+          vnode_check_interval: 500,
+          # Look for ownership handoffs to start every second, not every 10.
+          vnode_management_timer: 1_000
+        ],
+        do: :ok = call(target, :application, :set_env, [:riak_core, key, value])
+
+    {:ok, _} = call(target, :application, :ensure_all_started, [:riak_core])
   end
 
   @doc "Stop the target and wait until our node has noticed it's gone."
