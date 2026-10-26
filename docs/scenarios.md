@@ -9,7 +9,7 @@ The prompts are only starting points. The agent picks tools itself; with the
 `diagnose`, drill into what it flags, then confirm trends with `snapshot`.
 
 [talks/three-scenarios.pptx](../talks/three-scenarios.pptx) is a 15-minute
-talk, with speaker notes, on scenarios 6 and 21, 7 and 8, with the tool
+talk, with speaker notes, on scenarios 6 and 22, 7 and 8, with the tool
 output of their walkthroughs.
 
 Contents:
@@ -30,19 +30,20 @@ Contents:
   - [13. Garbage collection eating the CPU](#13-garbage-collection-eating-the-cpu)
   - [14. Traffic between nodes](#14-traffic-between-nodes)
   - [15. A web server refusing or stalling connections](#15-a-web-server-refusing-or-stalling-connections)
+  - [16. A riak_core cluster in trouble](#16-a-riak_core-cluster-in-trouble)
 - **Understanding and verifying**
-  - [16. Finding the bug in the code, not just the node](#16-finding-the-bug-in-the-code-not-just-the-node)
-  - [17. Seeing what a function really receives](#17-seeing-what-a-function-really-receives)
-  - [18. What's in an ETS table](#18-whats-in-an-ets-table)
-  - [19. Verifying a fix or a deploy](#19-verifying-a-fix-or-a-deploy)
-  - [20. A deploy or a hot load that didn't take](#20-a-deploy-or-a-hot-load-that-didnt-take)
-  - [21. Trying a fix on the live node](#21-trying-a-fix-on-the-live-node)
-  - [22. Code that macros generated](#22-code-that-macros-generated)
-  - [23. Watching a load test](#23-watching-a-load-test)
-  - [24. Getting to know an unfamiliar system](#24-getting-to-know-an-unfamiliar-system)
+  - [17. Finding the bug in the code, not just the node](#17-finding-the-bug-in-the-code-not-just-the-node)
+  - [18. Seeing what a function really receives](#18-seeing-what-a-function-really-receives)
+  - [19. What's in an ETS table](#19-whats-in-an-ets-table)
+  - [20. Verifying a fix or a deploy](#20-verifying-a-fix-or-a-deploy)
+  - [21. A deploy or a hot load that didn't take](#21-a-deploy-or-a-hot-load-that-didnt-take)
+  - [22. Trying a fix on the live node](#22-trying-a-fix-on-the-live-node)
+  - [23. Code that macros generated](#23-code-that-macros-generated)
+  - [24. Watching a load test](#24-watching-a-load-test)
+  - [25. Getting to know an unfamiliar system](#25-getting-to-know-an-unfamiliar-system)
 - **Other kinds of targets**
-  - [25. Erlang products you didn't write](#25-erlang-products-you-didnt-write)
-  - [26. Your own node during development](#26-your-own-node-during-development)
+  - [26. Erlang products you didn't write](#26-erlang-products-you-didnt-write)
+  - [27. Your own node during development](#27-your-own-node-during-development)
 - [Before pointing it at production](#before-pointing-it-at-production)
 - [Not supported yet](#not-supported-yet)
 
@@ -574,9 +575,44 @@ accepted is before Bandit starts timing the request.
 detached afterwards; nothing else is loaded. Connections are looked at
 one by one, up to 5,000.
 
+### 16. A riak_core cluster in trouble
+
+**Situation.** A cluster built on riak_core (Riak KV, riak_core_lite, a
+system of your own) is slow or loses requests: a member went down,
+handoffs don't finish after a join, or one partition is overwhelmed.
+
+> Writes to our riak_core cluster have got slow, and some time out.
+> Find out why.
+
+**What the agent does.** `riak_core` reads the cluster through
+riak_core's own API, from the node it's connected to: the members, their
+status and whether this node reaches them, the claimant, partition
+ownership and the ownership changes awaiting handoff, this node's vnodes
+(primaries, and fallbacks held for unreachable owners), the longest vnode
+mailboxes on every member it reaches, of the vnodes and their proxies,
+the handoffs running, the services up on each member, and riak_core's
+own ringready and transfers. Its findings come worst first. Against the
+riak demo (`examples/elixir/run.sh riak`), it found from `riak_a` both a
+member down, with fallbacks holding its partitions, and a vnode on
+`riak_b` with 9,000 commands queued, all for one hot key (walkthrough 19).
+
+**Typical findings.**
+- A member down or unreachable: fallbacks hold its writes until hinted
+  handoff, and a down claimant blocks every ownership change.
+- Ownership changes that never complete: handoff concurrency 0, or a
+  vnode module registered outside a running application, which riak_core
+  waits for forever before handing off.
+- A hot partition: one key, or a few, taking a vnode past its overload
+  threshold, where its proxy starts refusing requests.
+- Members whose rings disagree, after a partition or a botched join.
+
+**Watch out.** It's read-only, and asks the other members for their
+vnodes' mailboxes over distribution: a member it can't reach is reported,
+not waited on. Connect to another member to see its own side in full.
+
 ## Understanding and verifying
 
-### 16. Finding the bug in the code, not just the node
+### 17. Finding the bug in the code, not just the node
 
 **Situation.** You want the fix, not just the diagnosis.
 
@@ -592,10 +628,10 @@ often line numbers, and the agent opens those files and reads the code. In
 testing, it went from a mailbox backlog to the `Process.sleep` in the
 offending `handle_cast/2` on its own.
 
-Functions that macros generate aren't in the source to open; scenario 22
+Functions that macros generate aren't in the source to open; scenario 23
 finds them on the node.
 
-### 17. Seeing what a function really receives
+### 18. Seeing what a function really receives
 
 **Situation.** Production behaves differently from your tests, and you
 suspect the inputs.
@@ -625,7 +661,7 @@ codes that fail, and why, in five seconds (walkthrough 13).
   refuses and says what it found. Forcing it ends their trace, so the agent
   should ask you first.
 
-### 18. What's in an ETS table
+### 19. What's in an ETS table
 
 **Situation.** An ETS table is large or growing, and you want to know
 what's in it.
@@ -651,7 +687,7 @@ map under one key, copied out on every lookup), a bag's hot key.
   shown.
 - A large row is shown by its key and size, not copied out whole.
 
-### 19. Verifying a fix or a deploy
+### 20. Verifying a fix or a deploy
 
 **Situation.** You've shipped a fix and want evidence that it worked.
 
@@ -668,7 +704,7 @@ First, though, check that the new code runs at all. `diagnose`'s
 from the code running (files deployed but never loaded), and processes
 still in a module's old code after a hot load.
 
-### 20. A deploy or a hot load that didn't take
+### 21. A deploy or a hot load that didn't take
 
 **Situation.** A fix was deployed, but the node behaves as before; or
 someone loaded a module by hand, and something still runs the old code.
@@ -695,7 +731,7 @@ so never leaves the old code, and is killed by the module's next load.
 **Watch out.** recon, which this tool injects into a node that lacks it,
 isn't on the node's code path; `stale_code` leaves it out.
 
-### 21. Trying a fix on the live node
+### 22. Trying a fix on the live node
 
 **Situation.** You have a fix and want to see it work on the node before
 going through a deploy, or you need a stopgap now.
@@ -727,7 +763,7 @@ is a recorded session of it on the Elixir payments demo.
   `diagnose`'s `stale_code` check names them, and lists the module as
   different on disk until the fix is deployed.
 
-### 22. Code that macros generated
+### 23. Code that macros generated
 
 **Situation.** A stack trace or a trace names a function you can't find in
 your source, or points into a library's file: `gen_server.ex:887`, a
@@ -775,7 +811,7 @@ generates and explained what each does with a message it doesn't handle.
   and after `load_module` the file may not be the code that runs; the tool
   says so.
 
-### 23. Watching a load test
+### 24. Watching a load test
 
 **Situation.** You're load testing and want to know what breaks first and
 why.
@@ -788,7 +824,7 @@ why.
 the point where schedulers saturate, is your capacity limit, and
 `process_info` says which code it's in.
 
-### 24. Getting to know an unfamiliar system
+### 25. Getting to know an unfamiliar system
 
 **Situation.** You've inherited a system, or are onboarding, and want to see
 how it's actually put together at runtime.
@@ -797,7 +833,7 @@ how it's actually put together at runtime.
 > applications, what each supervisor runs, and what looks unusual.
 
 **What the agent does.** `supervision_tree` for each application, plus a
-`diagnose` baseline. Combined with the source (scenario 16), it can map
+`diagnose` baseline. Combined with the source (scenario 17), it can map
 runtime processes to modules and explain restart strategies and limits,
 which the tree shows for every supervisor along with its recent restarts.
 That's often quicker than reading the code alone, because the runtime
@@ -808,7 +844,7 @@ have been restarting.
 
 ## Other kinds of targets
 
-### 25. Erlang products you didn't write
+### 26. Erlang products you didn't write
 
 **Situation.** A third-party system built on the BEAM misbehaves: a message
 broker, a database, an XMPP server, anything written in Erlang, Elixir, Gleam
@@ -830,7 +866,7 @@ is used as-is.
 too, such as RabbitMQ's `rabbitmq-diagnostics`; use both. Locate the cookie
 with care: it grants full control of the node.
 
-### 26. Your own node during development
+### 27. Your own node during development
 
 **Situation.** You're developing locally and want runtime answers while you
 code.

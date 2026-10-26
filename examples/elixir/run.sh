@@ -8,6 +8,7 @@
 #     examples/elixir/run.sh billing     # billing_ex: every charge recorded twice, by a macro
 #     examples/elixir/run.sh phoenix     # phoenix_ex: a Phoenix API whose search always 404s
 #     examples/elixir/run.sh bandit      # bandit_ex: a Bandit API refusing connections, silently
+#     examples/elixir/run.sh riak        # riak_a, riak_b, riak_c: a riak_core cluster, one member down, one vnode swamped
 #     examples/elixir/run.sh stop        # stop them all
 #
 # Each node runs in the background, named with --sname on this host. All
@@ -57,6 +58,20 @@ case "${1:-}" in
     (cd "$here/bandit_shop" && mix deps.get --quiet && mix compile --quiet &&
       start bandit_ex -S mix run --no-halt)
     ;;
+  riak)
+    # A Mix project on riak_core_lite, fetched from Hex the first time.
+    # Three nodes form a cluster; then riak_c goes down, and the traffic,
+    # a flash sale among it, starts on riak_a.
+    (cd "$here/riak_shop" && mix deps.get --quiet && mix compile --quiet && rm -rf data &&
+      for n in a b c; do
+        export SHOP_NODE=$n
+        start "riak_$n" -S mix run
+      done)
+    ERL_CRASH_DUMP_BYTES=0 erl -sname "riak_admin_$$" -noshell -eval "
+      ok = rpc:call('riak_a@$host', riak_shop, demo, ['riak_b@$host', 'riak_c@$host'], 120000),
+      halt()."
+    echo "the cluster formed, riak_c is down, and the traffic runs on riak_a"
+    ;;
   release)
     (cd "$here/demo_shop" && MIX_ENV=prod mix release --overwrite --quiet)
     "$release/bin/demo_shop" daemon
@@ -65,12 +80,12 @@ case "${1:-}" in
     ;;
   stop)
     elixir --sname "stopper_$$" -e "
-      for n <- ~w(shop_ex payments_ex billing_ex phoenix_ex bandit_ex ex_a ex_b ex_c),
+      for n <- ~w(shop_ex payments_ex billing_ex phoenix_ex bandit_ex riak_a riak_b riak_c ex_a ex_b ex_c),
           do: :rpc.call(:\"#{n}@$host\", :init, :stop, [], 2000)"
     if [ -x "$release/bin/demo_shop" ]; then "$release/bin/demo_shop" stop 2>/dev/null || true; fi
     ;;
   *)
-    echo "usage: $0 shop|payments|cluster|release|billing|phoenix|bandit|stop" >&2
+    echo "usage: $0 shop|payments|cluster|release|billing|phoenix|bandit|riak|stop" >&2
     exit 1
     ;;
 esac

@@ -1,6 +1,6 @@
 # Walkthroughs
 
-Eighteen debugging sessions against the demo nodes in `examples/`, start to
+Nineteen debugging sessions against the demo nodes in `examples/`, start to
 finish, for following along on your own machine. Each one gives the
 command that starts the demo, the prompt, every tool call the agent made
 with the part of its result that mattered, and the conclusion. The
@@ -36,7 +36,8 @@ Contents:
 16. [A fix deployed but never loaded](#16-a-fix-deployed-but-never-loaded)
 17. [A link between nodes saturated](#17-a-link-between-nodes-saturated)
 18. [A Bandit server out of connections](#18-a-bandit-server-out-of-connections)
-19. [Cleaning up](#cleaning-up)
+19. [A riak_core cluster: a member down, a vnode swamped](#19-a-riak_core-cluster-a-member-down-a-vnode-swamped)
+20. [Cleaning up](#cleaning-up)
 
 ---
 
@@ -1721,6 +1722,89 @@ telemetry event when it refuses one, and logs nothing.
   the upstream, or a cached result.
 - **Watch for it:** alert on `[:thousand_island, :acceptor, :spawn_error]`
   and on connections near the limit, since nothing logs them.
+
+---
+
+## 19. A riak_core cluster: a member down, a vnode swamped
+
+```sh
+examples/elixir/run.sh riak
+```
+
+`riak_a`, `riak_b` and `riak_c` run a shop on riak_core
+(`examples/elixir/riak_shop`, on riak_core_lite): carts in `shop_vnode`,
+one per partition of a 16-partition ring. `run.sh` forms the cluster,
+waits for its handoffs, stops `riak_c`, and starts the traffic on
+`riak_a`: 20 shoppers adding to their own carts, and a flash sale where
+everyone adds to the same cart. Adding an item takes its vnode 5 ms.
+
+> Writes to our riak_core shop cluster (`riak_a@yourhost`,
+> `riak_b@yourhost`, `riak_c@yourhost`) have got slow, and some time
+> out. Find out why.
+
+Only the otp-debug tools were allowed. The session took 37 seconds.
+
+**`connect`** to `riak_a`, then **`riak_core`**:
+
+```json
+{"status": "critical",
+ "findings": [
+   "critical: riak_c@yourhost is a valid member, owning 5 partitions, but this node isn't connected to it",
+   "critical: riak_core_status:ringready can't reach riak_c@yourhost",
+   "warning: 5 fallback vnodes run here for partitions of riak_c@yourhost: their writes wait here for hinted handoff",
+   "warning: vnode :shop_vnode 91343852333181432387730302044767688728495783936 (primary) on riak_b@yourhost has 8852 messages in its mailbox, close to the overload threshold of 10000, past which its proxy refuses requests to it",
+   "warning: :riak_shop isn't up on riak_c@yourhost"],
+ "cluster": {"claimant": "riak_a@yourhost", "num_partitions": 16, "members": [
+   {"node": "riak_a@yourhost", "status": "valid", "reachable": true, "owns": 6, "claimant": true, "this_node": true},
+   {"node": "riak_b@yourhost", "status": "valid", "reachable": true, "owns": 5},
+   {"node": "riak_c@yourhost", "status": "valid", "reachable": false, "owns": 5}]},
+ "vnodes": {"by_module": {":shop_vnode": {"total": 11, "primary": 6, "fallback": 5}}},
+ "cluster_busiest_vnodes": [
+   {"node": "riak_b@yourhost", "module": ":shop_vnode", "role": "primary",
+    "partition": "91343852333181432387730302044767688728495783936",
+    "pid": "<riak_b@yourhost.244.0>", "queue": 8852, "proxy_queue": 0}],
+ "cluster_views": {"ringready": "{:error, {:nodes_down, [:\"riak_c@yourhost\"]}}"}}
+```
+
+Two problems at once. `riak_c` is down while still a member owning 5
+partitions: `riak_a` holds 5 fallback vnodes for it. And on `riak_b`,
+one vnode has nearly 9,000 commands queued, nearing riak_core's overload
+threshold. **`cluster`** agreed: `riak_b`'s largest mailbox stood out, and
+`riak_c` was unreachable.
+
+**`connect`** to `riak_b`, **`process_info`** on the vnode: in
+`timer:sleep`, called from `shop_vnode:handle_command/3`, the schedulers
+almost idle. **`module_code`** for `handle_command/3`:
+
+```erlang
+handle_command({add, Cart, Item}, _Sender, S = #{data := D}) ->
+    timer:sleep(5),
+    ...
+```
+
+**`trace_calls`** on `shop_vnode:handle_command`: ten calls in a row, all
+`{add, flash_sale, {item,1}}`, about 6 ms apart.
+
+**The answer.** The flash sale sends every write to one cart key, and a
+key always hashes to the same partition: all of it lands on one vnode on
+`riak_b`, which handles one command at a time, 5 ms each. It falls
+further behind every second, callers wait behind 9,000 commands and time
+out, and past 10,000 its proxy will refuse writes outright. Separately,
+`riak_c` is down: its partitions are served by fallbacks, whose writes
+wait for hinted handoff, with less redundancy meanwhile. It isn't what
+makes the writes slow: the fallbacks have nothing queued.
+
+**Fixes.**
+
+- **Spread the hot key:** write the flash sale's cart as sub-keys
+  (`{flash_sale, Shard}`), so they hash to different partitions, and
+  merge them on read.
+- **Make each write cheaper:** no blocking work inside the vnode, or do
+  it in batches, or with the vnode's worker pool.
+- **Bring `riak_c` back,** so hinted handoff returns its partitions; or,
+  if it's gone for good, mark it down and replace it.
+- **Throttle at the client** meanwhile, to keep the vnode under the
+  overload threshold.
 
 ---
 
