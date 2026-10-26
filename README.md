@@ -137,6 +137,50 @@ refusal and nothing is loaded. In `claude -p` there's nobody to answer, so
 loads are always refused. [Walkthrough 4](docs/walkthroughs.md#4-trying-the-fix-on-the-live-node)
 is a whole recorded session of it.
 
+### Asking before every step
+
+To approve the investigation step by step, start the server with
+`OTP_DEBUG_MCP_CONFIRM`:
+
+| Value | The server asks before |
+|---|---|
+| `off` (the default) | nothing but `load_module`'s loads |
+| `changes` | each step that does something on the node beyond reading it: connecting (which may load recon there), `diagnose` (it forces garbage collections and briefly turns on microstate accounting and a trace session), checks that do the same, tracing, profiling, `recent_errors`, `telemetry` and `bandit` (which attach a handler while they listen), `process_info` with the process's state, `cluster`, and `remote_eval` |
+| `all` | every step, reads included |
+
+In Claude Code:
+
+```sh
+claude mcp add otp-debug --scope user -e OTP_DEBUG_MCP_CONFIRM=all -- "$server" start
+```
+
+or `"env": { "OTP_DEBUG_MCP_CONFIRM": "all" }` in a client's JSON config.
+Each step then shows a dialog first: the tool, the node, what it does
+there, and its arguments.
+
+```
+MCP server "otp-debug" requests your input
+Run diagnose on payments@prod-2?
+Runs every check: reads the node's processes, memory, ports, ETS, logs and
+code; forces a garbage collection in every process (binary_leak); ...
+  Accept    Decline
+```
+
+Accept runs it. Decline, or Esc, runs nothing, and the agent is told not
+to run it again but to ask you how to go on. The answer counts only for
+that call, with those arguments. The setting is the server's: unlike a
+client's own permission prompt, an "always allow" in the client doesn't
+skip it, and the dialog says what the step does to the node. It needs a
+client that can ask you mid-call (MCP 2026-07-28 form elicitation, as
+Claude Code does): other clients, and `claude -p`, where nobody can
+answer, get a refusal and nothing runs.
+
+Clients also have their own per-call prompts, which work alongside it.
+Claude Code asks before each MCP tool call unless you allowed the tool:
+answer "Yes" rather than "don't ask again", or put `"ask":
+["mcp__otp-debug"]` under `permissions` in its settings to keep asking.
+For other clients, see [docs/clients.md](docs/clients.md).
+
 ## Setup
 
 ### Install with Claude Code

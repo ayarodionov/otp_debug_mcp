@@ -897,6 +897,10 @@ that on a dev machine.
 - **`load_module` changes running code.** Each load needs your approval in
   a dialog, and lasts until the node restarts. Read the dialog: it says
   which code goes onto which node.
+- **To approve every step,** start the server with
+  `OTP_DEBUG_MCP_CONFIRM=all`, or `changes` for only the steps that do
+  something on the node: each then asks you first, saying what it does
+  there.
 - **Tool output goes to the AI provider.** That includes process state,
   traced arguments and ETS contents. Mind secrets and personal data.
 - **Tracing on pre-27 nodes is one at a time.** There `trace_calls` won't

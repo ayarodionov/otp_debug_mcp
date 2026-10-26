@@ -70,6 +70,7 @@ defmodule OtpDebugMcp.Tools do
   defmodule Connect do
     @moduledoc "Connect to a running OTP node as a hidden node. Call this first."
     use Anubis.Server.Component, type: :tool
+    use OtpDebugMcp.Approval
 
     alias OtpDebugMcp.{Target, Tools}
 
@@ -85,8 +86,7 @@ defmodule OtpDebugMcp.Tools do
       )
     end
 
-    @impl true
-    def execute(%{node: node} = params, frame) do
+    def perform(%{node: node} = params, frame) do
       case Target.connect(node, params[:cookie]) do
         {:ok, %{recon: recon}} ->
           Tools.json_response(
@@ -145,19 +145,20 @@ defmodule OtpDebugMcp.Tools do
     This should be the FIRST tool called after connect.
     """
     use Anubis.Server.Component, type: :tool
+    use OtpDebugMcp.Approval
 
     alias OtpDebugMcp.{Checks, Tools}
 
     schema do
     end
 
-    @impl true
-    def execute(_params, frame), do: Tools.json_response(frame, Checks.run_all())
+    def perform(_params, frame), do: Tools.json_response(frame, Checks.run_all())
   end
 
   defmodule RunCheck do
     @moduledoc "Run a single named diagnostic check (cheaper than the full battery)."
     use Anubis.Server.Component, type: :tool
+    use OtpDebugMcp.Approval
 
     alias OtpDebugMcp.{Checks, Tools}
 
@@ -179,8 +180,7 @@ defmodule OtpDebugMcp.Tools do
       )
     end
 
-    @impl true
-    def execute(%{check: check}, frame) do
+    def perform(%{check: check}, frame) do
       case Enum.find(Checks.all_checks(), &(Atom.to_string(&1) == check)) do
         nil -> Tools.error_response(frame, {:unknown_check, check, Checks.all_checks()})
         name -> Tools.json_response(frame, Checks.run(name))
@@ -195,6 +195,7 @@ defmodule OtpDebugMcp.Tools do
     processes) its state via sys:get_state with a short timeout.
     """
     use Anubis.Server.Component, type: :tool
+    use OtpDebugMcp.Approval
 
     alias OtpDebugMcp.{Checks, ProcessContext, Target, Tools}
 
@@ -212,8 +213,7 @@ defmodule OtpDebugMcp.Tools do
       )
     end
 
-    @impl true
-    def execute(%{pid: pid_str} = params, frame) do
+    def perform(%{pid: pid_str} = params, frame) do
       # Context first: its age estimate counts the processes spawned since,
       # and every rpc spawns one on the target.
       with {:ok, pid} <- Tools.resolve_process(pid_str),
@@ -311,6 +311,7 @@ defmodule OtpDebugMcp.Tools do
     window or watch ends; nothing is loaded there.
     """
     use Anubis.Server.Component, type: :tool
+    use OtpDebugMcp.Approval
 
     alias OtpDebugMcp.{Errors, Tools}
 
@@ -330,8 +331,7 @@ defmodule OtpDebugMcp.Tools do
       )
     end
 
-    @impl true
-    def execute(params, frame) do
+    def perform(params, frame) do
       with {:ok, level} <- level(params[:level]),
            {:ok, result} <- run(params, level) do
         Tools.json_response(frame, Map.merge(result, log_files(level)))
@@ -474,6 +474,7 @@ defmodule OtpDebugMcp.Tools do
     the window, detached afterwards; nothing is loaded on the node.
     """
     use Anubis.Server.Component, type: :tool
+    use OtpDebugMcp.Approval
 
     alias OtpDebugMcp.Tools
 
@@ -489,8 +490,7 @@ defmodule OtpDebugMcp.Tools do
       field(:list, :boolean, description: "Only list the events found on the node")
     end
 
-    @impl true
-    def execute(%{list: true}, frame) do
+    def perform(%{list: true}, frame) do
       case OtpDebugMcp.Telemetry.discover() do
         {:ok, events} ->
           Tools.json_response(
@@ -513,7 +513,7 @@ defmodule OtpDebugMcp.Tools do
       end
     end
 
-    def execute(params, frame) do
+    def perform(params, frame) do
       duration = (params[:duration_ms] || 10_000) |> min(60_000) |> max(100)
 
       case OtpDebugMcp.Telemetry.listen(params[:events], duration) do
@@ -551,6 +551,7 @@ defmodule OtpDebugMcp.Tools do
     only be read by its owner: then only its settings are shown.
     """
     use Anubis.Server.Component, type: :tool
+    use OtpDebugMcp.Approval
 
     alias OtpDebugMcp.{Ets, Tools}
 
@@ -567,8 +568,7 @@ defmodule OtpDebugMcp.Tools do
       )
     end
 
-    @impl true
-    def execute(%{table: table} = params, frame) do
+    def perform(%{table: table} = params, frame) do
       rows = (params[:rows] || 10) |> min(50) |> max(0)
       scan = (params[:scan] || 10_000) |> min(100_000) |> max(1)
 
@@ -592,6 +592,7 @@ defmodule OtpDebugMcp.Tools do
     Island doesn't log. Findings come first, worst first.
     """
     use Anubis.Server.Component, type: :tool
+    use OtpDebugMcp.Approval
 
     alias OtpDebugMcp.Tools
 
@@ -599,8 +600,7 @@ defmodule OtpDebugMcp.Tools do
       field(:duration_ms, :integer, description: "How long to listen (default 5000, max 30000)")
     end
 
-    @impl true
-    def execute(params, frame) do
+    def perform(params, frame) do
       duration = (params[:duration_ms] || 5_000) |> min(30_000) |> max(500)
 
       case OtpDebugMcp.Bandit.report(duration) do
@@ -622,14 +622,14 @@ defmodule OtpDebugMcp.Tools do
     Findings come first, worst first. Read-only.
     """
     use Anubis.Server.Component, type: :tool
+    use OtpDebugMcp.Approval
 
     alias OtpDebugMcp.Tools
 
     schema do
     end
 
-    @impl true
-    def execute(_params, frame) do
+    def perform(_params, frame) do
       case OtpDebugMcp.RiakCore.report() do
         {:ok, report} -> Tools.json_response(frame, report)
         {:error, reason} -> Tools.error_response(frame, reason)
@@ -648,6 +648,7 @@ defmodule OtpDebugMcp.Tools do
     there first if the node ran elsewhere. Large dumps take a while.
     """
     use Anubis.Server.Component, type: :tool
+    use OtpDebugMcp.Approval
 
     alias OtpDebugMcp.Tools
 
@@ -663,8 +664,7 @@ defmodule OtpDebugMcp.Tools do
       )
     end
 
-    @impl true
-    def execute(%{path: path} = params, frame) do
+    def perform(%{path: path} = params, frame) do
       case OtpDebugMcp.CrashDump.analyze(Path.expand(path), process: params[:process]) do
         {:ok, report} -> Tools.json_response(frame, report)
         {:error, reason} -> Tools.error_response(frame, reason)
@@ -679,6 +679,7 @@ defmodule OtpDebugMcp.Tools do
     max_seconds window, the last restart, and whether it is at its limit).
     """
     use Anubis.Server.Component, type: :tool
+    use OtpDebugMcp.Approval
 
     alias OtpDebugMcp.{Checks, Target, Tools}
 
@@ -688,8 +689,7 @@ defmodule OtpDebugMcp.Tools do
       field(:depth, :integer, description: "Max tree depth (default 5)")
     end
 
-    @impl true
-    def execute(%{app: app} = params, frame) do
+    def perform(%{app: app} = params, frame) do
       depth = params[:depth] || 5
 
       with {:ok, masters} <-
@@ -764,6 +764,7 @@ defmodule OtpDebugMcp.Tools do
     force: true.
     """
     use Anubis.Server.Component, type: :tool
+    use OtpDebugMcp.Approval
 
     alias OtpDebugMcp.{Tools, Tracer}
 
@@ -809,8 +810,7 @@ defmodule OtpDebugMcp.Tools do
                   "only. An exception raised in a private function shows as the first " <>
                   "exported function it passed through, with that call's arguments."
 
-    @impl true
-    def execute(params, frame) do
+    def perform(params, frame) do
       whole_node? = params[:module] == nil
 
       with {:ok, process} <- process(params[:process]),
@@ -890,6 +890,7 @@ defmodule OtpDebugMcp.Tools do
     force: true.
     """
     use Anubis.Server.Component, type: :tool
+    use OtpDebugMcp.Approval
 
     alias OtpDebugMcp.{Profiler, Tools}
 
@@ -926,8 +927,7 @@ defmodule OtpDebugMcp.Tools do
       )
     end
 
-    @impl true
-    def execute(params, frame) do
+    def perform(params, frame) do
       all? = params[:all_modules] == true
       max = if all?, do: 10_000, else: 30_000
 
@@ -966,6 +966,7 @@ defmodule OtpDebugMcp.Tools do
     snapshot diffs name ports worth a look.
     """
     use Anubis.Server.Component, type: :tool
+    use OtpDebugMcp.Approval
 
     alias OtpDebugMcp.{Ports, Tools}
 
@@ -975,8 +976,7 @@ defmodule OtpDebugMcp.Tools do
       )
     end
 
-    @impl true
-    def execute(%{port: spec}, frame) do
+    def perform(%{port: spec}, frame) do
       with {:ok, port} <- Ports.resolve(spec),
            {:ok, info} <- Ports.info(port) do
         Tools.json_response(frame, info)
@@ -998,6 +998,7 @@ defmodule OtpDebugMcp.Tools do
     the user before retrying with force: true. Data is truncated.
     """
     use Anubis.Server.Component, type: :tool
+    use OtpDebugMcp.Approval
 
     alias OtpDebugMcp.{Ports, Tools}
 
@@ -1025,8 +1026,7 @@ defmodule OtpDebugMcp.Tools do
       )
     end
 
-    @impl true
-    def execute(params, frame) do
+    def perform(params, frame) do
       max = (params[:max_events] || 20) |> min(100) |> max(1)
       duration = (params[:duration_ms] || 5_000) |> min(30_000) |> max(100)
 
@@ -1092,6 +1092,7 @@ defmodule OtpDebugMcp.Tools do
     node, connect to it and use the other tools.
     """
     use Anubis.Server.Component, type: :tool
+    use OtpDebugMcp.Approval
 
     alias OtpDebugMcp.Tools
 
@@ -1112,8 +1113,7 @@ defmodule OtpDebugMcp.Tools do
       "snapshot_diff" => :snapshot_diff
     }
 
-    @impl true
-    def execute(params, frame) do
+    def perform(params, frame) do
       action = params[:action] || "compare"
 
       with {:ok, fun} <- Map.fetch(@actions, action) |> or_unknown(action),
@@ -1136,6 +1136,7 @@ defmodule OtpDebugMcp.Tools do
     Diffs exclude the atoms and code this tool itself adds to the node.
     """
     use Anubis.Server.Component, type: :tool
+    use OtpDebugMcp.Approval
 
     alias OtpDebugMcp.{Snapshotter, Tools}
 
@@ -1143,22 +1144,21 @@ defmodule OtpDebugMcp.Tools do
       field(:action, {:required, :string}, description: "\"take\" or \"diff\"")
     end
 
-    @impl true
-    def execute(%{action: "take"}, frame) do
+    def perform(%{action: "take"}, frame) do
       case Snapshotter.take() do
         {:ok, summary} -> Tools.json_response(frame, summary)
         err -> Tools.error_response(frame, err)
       end
     end
 
-    def execute(%{action: "diff"}, frame) do
+    def perform(%{action: "diff"}, frame) do
       case Snapshotter.diff() do
         {:ok, diff} -> Tools.json_response(frame, diff)
         err -> Tools.error_response(frame, err)
       end
     end
 
-    def execute(%{action: other}, frame),
+    def perform(%{action: other}, frame),
       do: Tools.error_response(frame, {:unknown_action, other})
   end
 
@@ -1169,6 +1169,7 @@ defmodule OtpDebugMcp.Tools do
     Prefer the purpose-built tools; use this only when they can't answer.
     """
     use Anubis.Server.Component, type: :tool
+    use OtpDebugMcp.Approval
 
     alias OtpDebugMcp.{Checks, Tools}
 
@@ -1178,8 +1179,7 @@ defmodule OtpDebugMcp.Tools do
       )
     end
 
-    @impl true
-    def execute(%{code: code}, frame) do
+    def perform(%{code: code}, frame) do
       if System.get_env("OTP_DEBUG_MCP_ALLOW_EVAL") == "true" do
         case Checks.remote_eval(code) do
           {:ok, value} -> Tools.json_response(frame, %{value: erlang_term(value)})
@@ -1222,6 +1222,7 @@ defmodule OtpDebugMcp.Tools do
     other.
     """
     use Anubis.Server.Component, type: :tool
+    use OtpDebugMcp.Approval
 
     alias OtpDebugMcp.Tools
 
@@ -1241,8 +1242,7 @@ defmodule OtpDebugMcp.Tools do
 
     @max_code 20_000
 
-    @impl true
-    def execute(%{module: module} = params, frame) do
+    def perform(%{module: module} = params, frame) do
       with {:ok, info} <- OtpDebugMcp.ModuleCode.fetch(module),
            {:ok, result} <- run(info, params) do
         Tools.json_response(frame, Map.merge(about(info), result))

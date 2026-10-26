@@ -131,6 +131,11 @@ raw introspection when a purpose-built tool exists.
 - Do not use `remote_eval` unless the purpose-built tools can't answer AND
   the user has enabled it; never eval anything that mutates state without
   the user explicitly approving that exact expression.
+- The server may be set to ask the user before each step
+  (`OTP_DEBUG_MCP_CONFIRM`): then every tool call shows them a dialog
+  first. Say what you're about to do and why before each call, so they
+  can judge it. If they decline a step, don't run it again: ask them how
+  to go on.
 - Use `load_module` only when the user asks to try a fix on the node.
   Compile it first, with the target's OTP major version or an older one,
   and pass the `.beam`. The server shows the user an approval dialog. Tell

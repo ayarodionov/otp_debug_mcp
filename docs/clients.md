@@ -151,6 +151,13 @@ directory as a skill if your plan has skills.
   `module_code`, `crash_dump`, and `recent_errors` and `telemetry`, which
   add a handler only while they listen) saves clicks; keep `trace_calls`,
   `trace_port` and `profile` on ask for production nodes.
+- **To approve every step,** start the server with
+  `OTP_DEBUG_MCP_CONFIRM=all` (or `changes`, for only the steps that do
+  something on the node) in its `env`: each step then asks you in a
+  dialog, saying what it does there, before it runs. Like `load_module`'s,
+  it needs MCP 2026-07-28 form elicitation; a client without it gets a
+  refusal and nothing runs. See the
+  [README](../README.md#asking-before-every-step).
 - **`load_module` asks you to approve each load** in a dialog, using MCP
   2026-07-28 form elicitation. A client that can't do that gets a
   refusal, and nothing is loaded. Claude Code can; check your client's

@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- `OTP_DEBUG_MCP_CONFIRM`: to approve the investigation step by step.
+  `all` asks the user before every tool call, `changes` before each one
+  that does something on the node beyond reading it (connecting,
+  `diagnose`, tracing, profiling, attaching a handler, `remote_eval`...).
+  The dialog says what the step does, on which node, with which
+  arguments; declined, nothing runs and the agent is told to ask the user
+  how to go on. The answer counts only for that call, a client's "always
+  allow" doesn't skip it, and a client that can't ask gets a refusal.
+
 ## 0.8.0
 
 Tools for two kinds of system, a Phoenix or Bandit web server (`bandit`)
