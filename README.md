@@ -181,6 +181,21 @@ answer "Yes" rather than "don't ask again", or put `"ask":
 ["mcp__otp-debug"]` under `permissions` in its settings to keep asking.
 For other clients, see [docs/clients.md](docs/clients.md).
 
+To change the setting, re-register the server with the new value and
+reconnect it. It can't be changed while the server runs: it's read from
+the environment the client starts the server with, so the agent can't
+turn off the approvals that check it.
+
+```sh
+claude mcp remove otp-debug -s user
+claude mcp add otp-debug --scope user -e OTP_DEBUG_MCP_CONFIRM=changes -- "$server" start
+```
+
+Then in Claude Code, `/mcp`, choose `otp-debug`, and Reconnect (or restart
+Claude Code). The new server process doesn't keep the old one's
+connection, so the agent connects to the node again. In other clients,
+edit the `env` block of the server's config and restart or reconnect it.
+
 ## Setup
 
 ### Install with Claude Code

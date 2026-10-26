@@ -156,8 +156,9 @@ directory as a skill if your plan has skills.
   something on the node) in its `env`: each step then asks you in a
   dialog, saying what it does there, before it runs. Like `load_module`'s,
   it needs MCP 2026-07-28 form elicitation; a client without it gets a
-  refusal and nothing runs. See the
-  [README](../README.md#asking-before-every-step).
+  refusal and nothing runs. To change it, edit the `env` block and
+  restart or reconnect the server: it can't be changed while the server
+  runs. See the [README](../README.md#asking-before-every-step).
 - **`load_module` asks you to approve each load** in a dialog, using MCP
   2026-07-28 form elicitation. A client that can't do that gets a
   refusal, and nothing is loaded. Claude Code can; check your client's
