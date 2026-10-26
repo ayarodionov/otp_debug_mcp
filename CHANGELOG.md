@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.8.1
+
+Approving an investigation step by step.
 
 - `OTP_DEBUG_MCP_CONFIRM`: to approve the investigation step by step.
   `all` asks the user before every tool call, `changes` before each one

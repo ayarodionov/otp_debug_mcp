@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/ayarodionov/otp_debug_mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/ayarodionov/otp_debug_mcp/actions/workflows/ci.yml)
 
-> **Status: 0.8.0. [Releases](https://github.com/ayarodionov/otp_debug_mcp/releases).**
+> **Status: 0.8.1. [Releases](https://github.com/ayarodionov/otp_debug_mcp/releases).**
 > Tested from Claude Code against live nodes on Erlang/OTP 26 to 29, on the
 > same machine, over TLS distribution and across machines, with a test suite
 > and CI on every push. Still young: the TODO list below has the known gaps.
@@ -215,7 +215,7 @@ for:
 Set `target` to `macos-arm64`, `linux-x86_64` or `linux-arm64`:
 
 ```sh
-vsn=0.8.0
+vsn=0.8.1
 target=macos-arm64
 base=https://github.com/ayarodionov/otp_debug_mcp/releases/download/v$vsn
 curl -fLO "$base/otp_debug_mcp-$vsn-$target.tar.gz"
@@ -253,7 +253,7 @@ For nodes in Docker containers, the server can run in a container
 beside them, from the image published with each release:
 
 ```sh
-docker pull ghcr.io/ayarodionov/otp_debug_mcp:0.8.0
+docker pull ghcr.io/ayarodionov/otp_debug_mcp:0.8.1
 ```
 
 [Targets in Docker containers](docs/production.md#targets-in-docker-containers)
