@@ -90,6 +90,14 @@ else:
     critical = os.environ.get("SMOKE_EXPECT_CRITICAL")
     if critical and not any(r["check"] == critical and r["status"] == "critical" for r in results):
         failures.append(f"diagnose: {critical} isn't critical")
+    # SMOKE_EXPECT_WARNING names checks that must be a warning or worse.
+    for check in filter(None, os.environ.get("SMOKE_EXPECT_WARNING", "").split(",")):
+        if not any(r["check"] == check and r["status"] in ("warning", "critical") for r in results):
+            failures.append(f"diagnose: {check} isn't a warning")
+    # A check that fails is a bug in it.
+    for r in results:
+        if r["status"] == "error":
+            failures.append(f"diagnose: {r['check']} failed: {json.dumps(r.get('findings'))[:200]}")
     mq = next(r for r in results if r["check"] == "message_queues")
     if mq["findings"]:
         printed_pid = mq["findings"][0]["pid"]

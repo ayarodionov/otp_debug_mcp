@@ -1,6 +1,6 @@
 # Walkthroughs
 
-Thirteen debugging sessions against the demo nodes in `examples/`, start to
+Eighteen debugging sessions against the demo nodes in `examples/`, start to
 finish, for following along on your own machine. Each one gives the
 command that starts the demo, the prompt, every tool call the agent made
 with the part of its result that mattered, and the conclusion. The
@@ -31,7 +31,12 @@ Contents:
 11. [Two gen_servers that deadlock](#11-two-gen_servers-that-deadlock)
 12. [What a Phoenix API serves, from its telemetry](#12-what-a-phoenix-api-serves-from-its-telemetry)
 13. [Failures that nothing logs](#13-failures-that-nothing-logs)
-14. [Cleaning up](#cleaning-up)
+14. [What's in an ETS table](#14-whats-in-an-ets-table)
+15. [CPU spent collecting garbage](#15-cpu-spent-collecting-garbage)
+16. [A fix deployed but never loaded](#16-a-fix-deployed-but-never-loaded)
+17. [A link between nodes saturated](#17-a-link-between-nodes-saturated)
+18. [A Bandit server out of connections](#18-a-bandit-server-out-of-connections)
+19. [Cleaning up](#cleaning-up)
 
 ---
 
@@ -1339,6 +1344,383 @@ without a word. A code like `SAVEX` would fail the same way, with
 - **Don't swallow errors silently.** Log the code and the error before
   falling back to no discount, so the next bad code shows up in
   `recent_errors` and the logs.
+
+---
+
+## 14. What's in an ETS table
+
+```sh
+examples/erlang/run.sh sessions
+```
+
+`sessions_erl` runs `sessions`: a gen_server that records each login in
+the `sessions` ETS table, with a process logging in a random user every
+2 ms.
+
+> The memory of `sessions_erl@yourhost` keeps growing. Find out why.
+
+Only the otp-debug tools were allowed. The session took 53 seconds.
+
+**`connect`**, then **`diagnose`**. `atom_table` is critical:
+
+```json
+{"check": "atom_table", "status": "critical",
+ "findings": {"count": 24879, "limit": 1048576, "growth_per_second": 332.9,
+              "growing_throughout": true, "seconds_until_full": 3075}}
+```
+
+333 new atoms a second, steadily: the node dies in 51 minutes. The
+largest table in `ets_tables` is `sessions`, with 10,072 rows. And the
+`logs` check notes that the node writes its logs to the console only, so
+nothing from before the session is kept.
+
+**`snapshot`**, then **`ets_table`** on `sessions`:
+
+```json
+{"table": "sessions", "type": "set", "protection": "protected", "named_table": true,
+ "owner": {"pid": "<0.87.0>", "name": "sessions", "current_function": "{gen_server,loop,5}"},
+ "rows": 16573, "memory_bytes": 1196344,
+ "first_rows": ["{session_6910_90341,6910,1793027576}", "{session_1660_110626,1660,1793027595}",
+                "{session_3372_159717,3372,1793027582}", ...],
+ "scanned": {"rows": 10000, "of": 16573, "complete": false,
+             "average_row_bytes": 32, "largest_row_bytes": 32}}
+```
+
+6,500 more rows in a few seconds. Every key is an atom made from a user
+id and a unique number, and the rows are all alike, 32 bytes: no row
+stands out, so no `largest` list. The growth is the number of rows.
+
+**`module_code`** for `sessions` and its `handle_call`, `traffic` and
+`handle_cast`, and **`process_info`** on `<0.88.0>`, the traffic
+process:
+
+```erlang
+handle_call({login, UserId}, _From, Table) ->
+    Id = integer_to_list(UserId) ++ "_" ++ integer_to_list(erlang:unique_integer([positive])),
+    Session = list_to_atom("session_" ++ Id),
+    ets:insert(Table, {Session, UserId, erlang:system_time(second)}),
+    {reply, Session, Table}.
+```
+
+**`snapshot` `diff`**, 8 seconds after the first: `atom_count_delta`
++2,699 (the tool's own 325 atoms excluded), ETS +0.23 MB.
+
+**The answer.** Every login makes a new atom for its session id, and
+atoms are never collected: the atom table fills in under an hour, and
+the node crashes with `system_limit`. And no code deletes a session or
+expires one, so the table grows by a row a login.
+
+**Fixes.**
+
+- **Don't make atoms from runtime data:** a binary or a reference as
+  the session id.
+- **Bound the table:** delete a session on logout, and expire old ones
+  on a timer with `ets:select_delete/2`.
+- **Restart once the fix is deployed:** the atoms already made stay
+  until then.
+
+---
+
+## 15. CPU spent collecting garbage
+
+```sh
+examples/erlang/run.sh reports
+```
+
+`reports_erl` runs `reports`: two workers work out the day's total again
+and again. Each pass lists every sale as a tuple, 100,000 of them, sorts
+the list by price, and adds the prices up.
+
+> `reports_erl@yourhost` uses a lot of CPU for what it does: it only adds
+> up the day's sales. Find out where the CPU goes.
+
+Only the otp-debug tools were allowed. The session took 40 seconds.
+
+**`connect`**, then **`diagnose`**. `scheduler_time` is a warning: it
+says what the busy schedulers spend their time on.
+
+```json
+{"check": "scheduler_time", "status": "warning",
+ "findings": {"gc_share_of_work": 0.419, "gc_schedulers": 0.89, "window_ms": 2000,
+   "by_thread_type": {
+     "scheduler": {"threads": 10, "busy": 0.118,
+                   "work": {"emulator": 0.913, "gc": 0.0, "other": 0.084, "aux": 0.002, "check_io": 0.001, "port": 0.0}},
+     "dirty_cpu_scheduler": {"threads": 10, "busy": 0.094,
+                   "work": {"gc": 0.946, "other": 0.053, "emulator": 0.001, "aux": 0.0, "check_io": 0.0, "port": 0.0}}}}}
+```
+
+The normal schedulers run Erlang code (`emulator`), and the dirty CPU
+schedulers, where the VM collects large heaps, do almost nothing but
+collect garbage: 42% of all the schedulers' work, nearly a whole
+scheduler's time (`gc_schedulers` 0.89). `schedulers` showed two normal
+schedulers half busy, the rest idle, and `top_reductions` the two
+`report_worker_N` processes at 170 million reductions a second each,
+sampled in `lists:rkeymerge3_1`, the merge step of `lists:keysort`.
+
+**`profile`** on `reports` for 3 seconds:
+
+```json
+{"total": {"calls": 88390745, "time_us": 5948068, "memory_bytes": 5347373232},
+ "by_time": [
+   {"function": "reports:-daily_total/1-lc$^1/1-1-/4", "percent": 40.3, "calls": 44258500, "memory_bytes": 1062204000},
+   {"function": "reports:daily_total/1", "percent": 32.9, "calls": 220, "memory_bytes": 3931101232},
+   {"function": "anonymous fn/2 in reports:daily_total/1", "percent": 14.3, "calls": 22002333, "memory_bytes": 0}, ...]}
+```
+
+220 reports in 3 seconds, allocating 5.3 GB: 24 MB a report.
+`daily_total/1`'s own share, with the sort in `lists` counted under it,
+allocated 3.9 GB of that.
+
+**`module_code`** for `reports`, `daily_total/1` and `loop/1`, and
+**`process_info`** on a worker:
+
+```erlang
+loop(I) ->
+    _Total = daily_total(I),
+    loop(I).
+
+daily_total(Seed) ->
+    Sales = [{Item, Qty, Qty * 3} || Item <- lists:seq(1, 100000), Qty <- [Item rem 7 + Seed]],
+    ByPrice = lists:keysort(3, Sales),
+    lists:foldl(fun({_, _, Price}, Sum) -> Sum + Price end, 0, ByPrice).
+```
+
+**The answer.** Each report builds 100,000 tuples, sorts them into a
+second list, and adds them up: a sum doesn't depend on the order, so the
+sort and the lists are garbage made for nothing, and collecting it takes
+almost a scheduler of its own. And the workers recompute a total that
+doesn't change, dozens of times a second, throwing each result away.
+
+**Fixes.**
+
+- **Compute it when it's needed:** on request, or on a timer, keeping
+  the result, instead of in a loop.
+- **Add up in one pass:** a fold over `lists:seq/2`, or a counting loop,
+  without the tuples and without the sort: each report then allocates
+  almost nothing.
+
+---
+
+## 16. A fix deployed but never loaded
+
+```sh
+examples/erlang/run.sh deploy
+```
+
+`deploy_erl` runs `deploy_shop`: an order every second, each taking
+`discounts`' 5% off. After the node starts, `run.sh` compiles the fix, 10%
+off, into `deploy/ebin`, as a deploy that copies files would, and loads
+nothing. It also loads `heartbeat` again, as `l(heartbeat)` in a remote
+shell would, while its process loops.
+
+> We deployed a fix to `deploy_erl@yourhost`: discounts are 10% now, not
+> 5%. Orders still get 5%. Find out why.
+
+Only the otp-debug tools were allowed. The session took 41 seconds.
+
+**`connect`**, then **`diagnose`**. Everything is ok but `stale_code`:
+
+```json
+{"check": "stale_code", "status": "warning",
+ "findings": {
+   "different_on_disk": [
+     {"module": "discounts", "on_disk": "modified",
+      "file": ".../examples/erlang/deploy/ebin/discounts.beam"}],
+   "modules_with_old_code": 1,
+   "old_code": [
+     {"module": "heartbeat", "processes_in_it": 1,
+      "some": [{"pid": "<0.88.0>", "registered_name": "heartbeat",
+                "current_function": "{heartbeat,loop,1}"}]}]}}
+```
+
+The `discounts.beam` on the code path isn't the code running. And one
+process, `heartbeat`, still runs the previous version of its module.
+
+**`module_code`** for `discounts` reads the file on disk, and says so:
+
+```json
+{"module": "discounts",
+ "loaded": "differs: the version running isn't this file's (it was hot-loaded), so this may not be the code that runs",
+ "beam_file": ".../examples/erlang/deploy/ebin/discounts.beam",
+ "source": ".../examples/erlang/deploy/discounts.erl"}
+```
+
+The file's `handle_call/3` takes 10% off. To see what the running code
+does, **`trace_calls`** on `discounts:handle_call/3`:
+
+```
+discounts:handle_call({apply,128}, ...) --> {reply,122,#{}}
+discounts:handle_call({apply,129}, ...) --> {reply,123,#{}}
+discounts:handle_call({apply,130}, ...) --> {reply,124,#{}}
+```
+
+128 less 5% is 122; less 10% would be 116. **`process_info`** on
+`discounts` and `module_code` on `deploy_shop:orders/0` cleared the
+callers: `orders` calls `discounts:apply/1` by its module name, and the
+server has nothing queued and no restarts.
+
+**The answer.** The deploy copied the new `discounts.beam` to disk and
+stopped there. A node runs the code it has loaded until the module is
+loaded again or the node restarts, so it still takes 5% off. Separately,
+`heartbeat`'s loop calls itself locally, so it never picks up a newer
+version, and the next load of `heartbeat` will kill it.
+
+**Fixes.**
+
+- **Load the new code now:** `l(discounts)` in a remote shell, or
+  `code:purge(discounts), code:load_file(discounts)`. `gen_server` calls
+  `discounts:handle_call/3` by module name, so the running server takes
+  the new code on its next call, and its state needs no conversion.
+- **Make the deploy load what it copies:** a release upgrade with an
+  appup, a load step after the copy, or a restart; and check afterwards
+  that nothing differs from disk (`code:modified_modules()`, or
+  `diagnose`'s `stale_code`).
+- **Write loops that pick up new code:** `heartbeat`'s should call
+  itself as `?MODULE:loop(N + 1)`.
+
+---
+
+## 17. A link between nodes saturated
+
+```sh
+examples/erlang/run.sh dist
+```
+
+`dist_a` and `dist_b` are connected. `dist_a`'s `catalog` process sends
+the whole product catalog to `mirror` on `dist_b` ten times a second;
+`dist_a`'s `checkout` calls `dist_b`'s stock server for every order.
+
+> The network link between `dist_a@yourhost` and `dist_b@yourhost` is
+> saturated. Find out what's using it.
+
+Only the otp-debug tools were allowed. The session took 35 seconds.
+
+**`connect`** to `dist_a`, then **`run_check(distribution)`**:
+
+```json
+{"check": "distribution", "status": "ok",
+ "findings": {"node": "dist_a@yourhost", "busy_limit_bytes": 1048576, "net_ticktime_s": 60,
+   "connections": [
+     {"node": "dist_b@yourhost", "type": "normal", "state": "up", "controller": "port #Port<0.6>",
+      "sent_bytes_per_s": 17051312, "received_bytes_per_s": 1872, "pending_bytes": 0},
+     {"node": "otp_debug_mcp_74465@yourhost", "type": "hidden", "this_tool": true, ...}]}}
+```
+
+17 MB a second to `dist_b`, under 2 KB back. **`diagnose`** names who
+sends it: `long_schedules` caught one process suspended on that
+connection again and again.
+
+```json
+{"check": "long_schedules", "status": "warning",
+ "findings": {"busy_ports": [
+   {"kind": "busy_dist_port", "times": 19, "port": "#Port<0.6>",
+    "pid": "<0.93.0>", "name": "catalog", "initial_call": "{dist_shop,catalog,1}"}]}}
+```
+
+19 times in 2 seconds, `catalog` filled the connection's buffer past its
+1 MB busy limit and was suspended until it drained.
+
+**`process_info`** on `catalog`: unsupervised, 92 seconds old, 54 million
+reductions, a 20 MB heap. **`module_code`** for `dist_shop`, its
+`catalog/1`, `mirror/0` and `checkout/1`:
+
+```erlang
+Items = [{Id, <<"product ", ...>>, Id rem 100, lists:seq(1, 20)} || Id <- lists:seq(1, 40000)],
+Loop = fun L(V) -> {mirror, B} ! {catalog, V, Items}, timer:sleep(100), L(V + 1) end
+```
+
+**The answer.** `catalog` builds the catalog once and then sends all of
+it, about 1.9 MB, ten times a second: the 17 to 19 MB/s measured. The
+catalog never changes, and `mirror` on `dist_b` throws each copy away.
+All traffic between two nodes shares one connection, so `checkout`'s
+calls to `dist_b` wait in line behind these messages, and a slower link
+would delay the nodes' heartbeats too.
+
+**Fixes.**
+
+- **Send changes, not the whole thing:** the full catalog once, then a
+  version number or the items that changed, with a resync when the
+  receiver sees a gap.
+- **Or stop sending it,** if `dist_b` doesn't use it: `mirror` ignores it.
+- **Keep bulk transfers off the cluster link:** a separate socket or
+  file transfer, so calls between the nodes don't queue behind them.
+
+---
+
+## 18. A Bandit server out of connections
+
+```sh
+examples/elixir/run.sh bandit
+```
+
+`bandit_ex` runs a Plug API on Bandit (`examples/elixir/bandit_shop`),
+whose connections someone capped at 100: 4 acceptors with 25 each. Its
+traffic is built in: 30 clients asking for recommendations, which wait 3
+seconds on a slow upstream inside the request, and 120 browsing products
+on keep-alive connections.
+
+> Some clients of `bandit_ex@yourhost` get their connections reset, or
+> wait seconds before the first byte, but the request times Bandit
+> reports look fine and nothing is logged. Find out why.
+
+Only the otp-debug tools were allowed. The session took 42 seconds.
+
+**`connect`**, then **`diagnose`**: nothing wrong with the node itself,
+schedulers near idle, no queues, no crashes.
+
+**`bandit`** with `duration_ms: 10000`:
+
+```json
+{"status": "critical",
+ "findings": [
+   "critical: 8 connections refused in 10000 ms: the connection limit was reached (nothing logs this)",
+   "warning: 127.0.0.1:4050: 100 of 100 connections in use",
+   "warning: 127.0.0.1:4050: 4 of 4 acceptors are waiting for room for a new connection: meanwhile new clients wait unaccepted, and are refused if no room comes",
+   "warning: 127.0.0.1:4050: 30 connections busy in BanditShop.Recommender.upstream_call/0"],
+ "servers": [{
+   "listening": "127.0.0.1:4050", "serves": "BanditShop.Router", "acceptors": 4,
+   "connections": {"active": 100, "limit": 100, "per_acceptor_limit": 25, "fullest_acceptor": 25,
+                   "acceptors_waiting_for_room": 4},
+   "idle": 70, "reading": 0, "sending": 0, "handling": 30,
+   "waiting_in": [{"connections": 30, "current_function": "Process.sleep/1",
+                   "in_your_code": "BanditShop.Recommender.upstream_call/0"}],
+   "timeouts_ms": {"read": 60000, "handshake": 5000, "shutdown": 15000}}],
+ "window": {
+   "listened_ms": 10000, "requests": 3550, "requests_per_s": 355.0, "by_status": {"2xx": 3550},
+   "refused_connections": 8, "new_connections_per_s": 0.0,
+   "slowest_routes": [
+     {"route": "GET /recommendations -> 200", "count": 120, "p50_ms": 3000.88, "p95_ms": 3001.78},
+     {"route": "GET /products/:id -> 200", "count": 3430, "p50_ms": 0.06, "p95_ms": 0.22}]}}
+```
+
+The server is full, and every acceptor is stuck waiting for a slot: new
+clients wait unaccepted in the listen queue, and when an acceptor's
+retries run out, Thousand Island closes the socket. Eight such resets in
+10 seconds, and not one new connection served. 70 slots are idle
+keep-alives, 30 are requests waiting on the recommender's upstream. The
+requests that do get in are all 200, and fast but for
+`/recommendations`.
+
+**The answer.** The slow `/recommendations` upstream call holds a
+connection for 3 seconds a request, and idle keep-alives hold the rest,
+for up to `read_timeout`, a minute. Together they fill the 100-connection
+limit, so new clients wait to be accepted (the slow first byte) or are
+refused (the reset). Bandit's request times can't show it: a client's
+wait to be accepted comes before Bandit starts timing its request, and a
+refused connection never becomes a request. Thousand Island emits a
+telemetry event when it refuses one, and logs nothing.
+
+**Fixes.**
+
+- **Raise the limit:** `thousand_island_options: [num_connections: ...]`
+  in the Bandit (or Phoenix endpoint) config. It's per acceptor, and the
+  default is 16,384: connections are cheap processes.
+- **Free idle connections sooner:** a shorter `read_timeout`, or a cap on
+  requests per connection in Bandit's `http_1_options`.
+- **Take the slow call off the request:** a timeout with a fallback for
+  the upstream, or a cached result.
+- **Watch for it:** alert on `[:thousand_island, :acceptor, :spawn_error]`
+  and on connections near the limit, since nothing logs them.
 
 ---
 

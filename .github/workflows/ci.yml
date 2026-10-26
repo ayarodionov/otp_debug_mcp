@@ -192,6 +192,16 @@ jobs:
           SMOKE_EXPECT_CRITICAL=call_chains \
             python3 scripts/mcp_smoke.py _build/prod/rel/otp_debug_mcp/bin/otp_debug_mcp \
             "locks_erl@$(hostname -s)" locks_shop
+      - name: Smoke test against the deploy and dist demo nodes
+        run: |
+          examples/erlang/run.sh deploy
+          examples/erlang/run.sh dist
+          sleep 3
+          SMOKE_EXPECT_WARNING=stale_code \
+            python3 scripts/mcp_smoke.py _build/prod/rel/otp_debug_mcp/bin/otp_debug_mcp \
+            "deploy_erl@$(hostname -s)" discounts
+          python3 scripts/mcp_smoke.py _build/prod/rel/otp_debug_mcp/bin/otp_debug_mcp \
+            "dist_a@$(hostname -s)" dist_shop
       - name: Smoke test against the Gleam demo node
         run: |
           examples/gleam/run.sh shop

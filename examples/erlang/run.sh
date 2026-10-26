@@ -10,6 +10,9 @@
 #     examples/erlang/run.sh orders      # orders_erl: errors that only its logs show
 #     examples/erlang/run.sh locks       # locks_erl: two gen_servers that deadlock
 #     examples/erlang/run.sh crash       # crash_erl: runs out of memory within a minute, leaving a crash dump
+#     examples/erlang/run.sh reports     # reports_erl: CPU spent mostly collecting garbage
+#     examples/erlang/run.sh deploy      # deploy_erl: a fix deployed but never loaded, a process in old code
+#     examples/erlang/run.sh dist        # dist_a, dist_b: one node shipping 2 MB to the other ten times a second
 #     examples/erlang/run.sh stop        # stop them all
 #
 # Each node runs in the background, named with -sname on this host, with
@@ -78,6 +81,30 @@ case "${1:-}" in
       -eval "{ok, _} = application:ensure_all_started(native_shop)"
     echo "started native_erl@$host"
     ;;
+  reports) build; start reports_erl "ok = reports:start()" ;;
+  deploy)
+    # discounts lives apart, in deploy/, so another demo's build can't
+    # overwrite its deployed version.
+    build
+    mkdir -p "$here/deploy/ebin"
+    erlc +debug_info -o "$here/deploy/ebin" "$here/deploy/discounts.erl"
+    erl -sname deploy_erl -pa "$here/ebin" -pa "$here/deploy/ebin" -noshell -detached \
+      -eval "ok = deploy_shop:start()"
+    echo "started deploy_erl@$host"
+    sleep 2
+    # The deploy: the fixed discounts compiled into its ebin, but never loaded.
+    erlc +debug_info -DNEW_RATE -o "$here/deploy/ebin" "$here/deploy/discounts.erl"
+    # What l(heartbeat) in a remote shell does: load it again while it runs.
+    erl -sname "loader_$$" -noshell -eval "
+      {module, heartbeat} = rpc:call('deploy_erl@$host', code, load_file, [heartbeat]), halt()."
+    echo "deployed the discounts fix to deploy/ebin without loading it, and reloaded heartbeat"
+    ;;
+  dist)
+    build
+    start dist_b "ok = dist_shop:start_b()"
+    sleep 2
+    start dist_a "ok = dist_shop:start_a('dist_b@$host')"
+    ;;
   cluster)
     build
     start erl_a
@@ -89,11 +116,12 @@ case "${1:-}" in
     erl -sname "stopper_$$" -noshell -eval "
       [rpc:call(list_to_atom(N ++ \"@$host\"), init, stop, [], 2000)
        || N <- [\"shop_erl\", \"payments_erl\", \"sessions_erl\", \"native_erl\", \"ports_erl\",
-                \"orders_erl\", \"crash_erl\", \"locks_erl\", \"erl_a\", \"erl_b\", \"erl_c\"]],
+                \"orders_erl\", \"crash_erl\", \"locks_erl\", \"reports_erl\", \"deploy_erl\",
+                \"dist_a\", \"dist_b\", \"erl_a\", \"erl_b\", \"erl_c\"]],
       halt()."
     ;;
   *)
-    echo "usage: $0 shop|payments|sessions|cluster|native|ports|orders|locks|crash|stop" >&2
+    echo "usage: $0 shop|payments|sessions|cluster|native|ports|orders|locks|crash|reports|deploy|dist|stop" >&2
     exit 1
     ;;
 esac

@@ -9,7 +9,7 @@ The prompts are only starting points. The agent picks tools itself; with the
 `diagnose`, drill into what it flags, then confirm trends with `snapshot`.
 
 [talks/three-scenarios.pptx](../talks/three-scenarios.pptx) is a 15-minute
-talk, with speaker notes, on scenarios 6 and 16, 7 and 8, with the tool
+talk, with speaker notes, on scenarios 6 and 21, 7 and 8, with the tool
 output of their walkthroughs.
 
 Contents:
@@ -27,17 +27,22 @@ Contents:
   - [10. Incident triage](#10-incident-triage)
   - [11. Native code: a NIF that blocks or leaks](#11-native-code-a-nif-that-blocks-or-leaks)
   - [12. Sockets, ports and external programs](#12-sockets-ports-and-external-programs)
+  - [13. Garbage collection eating the CPU](#13-garbage-collection-eating-the-cpu)
+  - [14. Traffic between nodes](#14-traffic-between-nodes)
+  - [15. A web server refusing or stalling connections](#15-a-web-server-refusing-or-stalling-connections)
 - **Understanding and verifying**
-  - [13. Finding the bug in the code, not just the node](#13-finding-the-bug-in-the-code-not-just-the-node)
-  - [14. Seeing what a function really receives](#14-seeing-what-a-function-really-receives)
-  - [15. Verifying a fix or a deploy](#15-verifying-a-fix-or-a-deploy)
-  - [16. Trying a fix on the live node](#16-trying-a-fix-on-the-live-node)
-  - [17. Code that macros generated](#17-code-that-macros-generated)
-  - [18. Watching a load test](#18-watching-a-load-test)
-  - [19. Getting to know an unfamiliar system](#19-getting-to-know-an-unfamiliar-system)
+  - [16. Finding the bug in the code, not just the node](#16-finding-the-bug-in-the-code-not-just-the-node)
+  - [17. Seeing what a function really receives](#17-seeing-what-a-function-really-receives)
+  - [18. What's in an ETS table](#18-whats-in-an-ets-table)
+  - [19. Verifying a fix or a deploy](#19-verifying-a-fix-or-a-deploy)
+  - [20. A deploy or a hot load that didn't take](#20-a-deploy-or-a-hot-load-that-didnt-take)
+  - [21. Trying a fix on the live node](#21-trying-a-fix-on-the-live-node)
+  - [22. Code that macros generated](#22-code-that-macros-generated)
+  - [23. Watching a load test](#23-watching-a-load-test)
+  - [24. Getting to know an unfamiliar system](#24-getting-to-know-an-unfamiliar-system)
 - **Other kinds of targets**
-  - [20. Erlang products you didn't write](#20-erlang-products-you-didnt-write)
-  - [21. Your own node during development](#21-your-own-node-during-development)
+  - [25. Erlang products you didn't write](#25-erlang-products-you-didnt-write)
+  - [26. Your own node during development](#26-your-own-node-during-development)
 - [Before pointing it at production](#before-pointing-it-at-production)
 - [Not supported yet](#not-supported-yet)
 
@@ -61,7 +66,7 @@ category that's large:
 | `processes`, with one huge mailbox | a process that can't keep up | `message_queues`, `process_info` |
 | `processes`, with process count rising | spawned processes that never exit | `process_count`, `supervision_tree` child counts |
 | `binary` | refc binaries held by long-lived processes | `binary_leak` |
-| `ets` | a table without eviction | `ets_tables` |
+| `ets` | a table without eviction | `ets_tables`, then `ets_table` for what's in it |
 | `atom` | atoms created from input | `atom_table` |
 | nothing: the OS sees far more than `erlang:memory()` reports | allocator fragmentation: carriers kept alive by a few live blocks | `allocator_fragmentation` |
 
@@ -99,6 +104,10 @@ showed in its first call that every request to `/api/products/search`
 was dispatched to the route `/api/products/:id`, action `show`, and
 answered 404 (walkthrough 12).
 
+On a Phoenix or Bandit node whose clients get connection resets or wait
+before the first byte, `bandit` shows whether the server is at its
+connection limit and what holds the connections (scenario 15).
+
 **Typical findings.** One process serializing work for everyone (a registry,
 a single DB connection, the owner of an ETS table doing all writes), or
 fire-and-forget casts with no backpressure. From `telemetry`: one route or
@@ -114,7 +123,10 @@ request running many fast queries.
 
 **What the agent does.** `run_check(schedulers)` first. OS CPU% overstates a
 BEAM node because schedulers busy-wait; scheduler utilization is the real
-number. If schedulers are saturated, `top_reductions` names the processes
+number. `scheduler_time`, in `diagnose`, says what the busy schedulers
+spend the time on: Erlang code, garbage collection, ports, I/O polling, or
+spinning while they wait for work. If schedulers are saturated running
+code, `top_reductions` names the processes
 burning CPU, and `profile` on their hot module ranks its functions by the
 time they use, with call counts and memory allocated. `trace_calls` on the
 top one then shows the arguments it's called with.
@@ -124,7 +136,10 @@ top one then shows the arguments it's called with.
 
 **Typical findings.** Real saturation (all schedulers near 1.0) versus one
 pegged scheduler with the rest idle, which points to a long-running NIF
-(scenario 11: `long_schedules` names it).
+(scenario 11: `long_schedules` names it). A large `gc_share_of_work` in
+`scheduler_time`: much of the work is garbage collection, from big heaps
+or many short-lived terms; large heaps are collected on the dirty CPU
+schedulers, so it counts those too.
 A profile usually puts most of the time in a few functions: a loop over a
 large list, repeated encoding or decoding, a regex compiled on every call.
 
@@ -235,7 +250,9 @@ logged once at boot gets a group of its own, instead of being lost among
 a loop's thousands. For errors that happen rarely, `watch_minutes` keeps
 listening in the background, and later calls return what it caught. From
 a stack frame, `module_code` with `at:` finds the code and `trace_calls`
-the arguments.
+the arguments. `diagnose`'s `logs` check says where the node's logs go;
+when no file keeps them, errors from before anyone listened are gone,
+and a watch started early is the way to catch the next ones.
 
 In testing against the orders demo (`examples/erlang/run.sh orders`), a
 session with only these tools found all three of its problems in a
@@ -332,7 +349,10 @@ testing, pointed at a healthy node of a three-node cluster, the agent ran
 
 **Typical findings.** One node with a backed-up process or a leak the
 others don't have (uneven load, a stuck singleton), a node that never
-joined or lost its links, or a node whose atom count has crept up.
+joined or lost its links, or a node whose atom count has crept up. On one
+node, `diagnose`'s `distribution` check shows its connections: bytes per
+second each way, and bytes waiting to be sent against the busy limit,
+past which every process sending to that node is suspended.
 
 **Watch out.** Nodes are attached with the current target's cookie, as a
 cluster shares one; a node with another cookie shows as unreachable.
@@ -458,9 +478,105 @@ owner with `{active, true}` flooding its own mailbox.
 - Before OTP 27, `trace_port` uses the node's legacy trace session, and
   refuses while anyone else traces.
 
+### 13. Garbage collection eating the CPU
+
+**Situation.** The node uses far more CPU than its work seems to need, and
+profiling points at ordinary code: list building, a sort, a map update.
+
+> `reports@batch-1` uses a lot of CPU for what it does: it only adds up
+> the day's sales. Find out where the CPU goes.
+
+**What the agent does.** `diagnose`'s `scheduler_time` check splits the
+schedulers' time over 2 seconds by what they did, from the VM's
+microstate accounting: running Erlang code, collecting garbage, running
+ports, polling for I/O, or spinning while they wait for work.
+`gc_share_of_work` is garbage collection's share of the work of the
+normal and the dirty CPU schedulers, where large heaps are collected,
+and `gc_schedulers` the schedulers' worth of time it took.
+`top_reductions` names the busy processes, and `profile` on their module
+shows which functions run and how much memory each allocates. Against
+the reports demo (`examples/erlang/run.sh reports`), 42% of the work was
+garbage collection, almost a scheduler's worth of time, and the profile
+showed each report allocating 24 MB to build and sort a list it only
+adds up (walkthrough 15).
+
+**Typical findings.** Big intermediate lists built and dropped (a
+comprehension, then a sort, then a fold), large heaps copied by message
+passing, a process whose heap grows and shrinks with every request. The
+fix is to allocate less: one pass instead of several, no sort a sum
+doesn't need.
+
+**Watch out.** Microstate accounting is turned on for the check's 2
+seconds only, and left alone if it was already on; its cost is small.
+
+### 14. Traffic between nodes
+
+**Situation.** The network between nodes is saturated, calls to another
+node are slow, or nodes disconnect under load.
+
+> The network link between `api@node-1` and `api@node-2` is saturated.
+> Find out what's using it.
+
+**What the agent does.** `diagnose`'s `distribution` check lists the
+node's connections to other nodes, with bytes per second each way over a
+second, and the bytes waiting to be sent against the VM's busy limit
+(`+zdbbl`, 1 MB by default). Past that limit the connection is busy, and
+every process sending to that node is suspended until it drains;
+`long_schedules` names the processes suspended that way
+(`busy_dist_port`). `process_info` and `module_code` on such a process
+show what it sends. Against the dist demo (`examples/erlang/run.sh dist`),
+the agent ran `distribution` first: 17 MB/s from `dist_a` to `dist_b`.
+`long_schedules` named the `catalog` process, suspended 19 times in 2
+seconds, and its code sent the whole catalog ten times a second
+(walkthrough 17).
+
+**Typical findings.** Large terms sent where a change would do, a cache
+or state replicated whole on every update, chatty calls in a loop, a
+`:global` or `:pg` storm after a netsplit heals. All traffic between two
+nodes shares one connection, so small calls wait behind big messages.
+
+**Watch out.** A TLS connection's controller is a process, not a port:
+for it, `pending_bytes` is that process's message queue length, and the
+byte rates aren't available.
+
+### 15. A web server refusing or stalling connections
+
+**Situation.** Some clients of a Phoenix or Bandit service get their
+connections reset, or wait seconds before the first byte, while the
+request times the server reports look fine and nothing is logged.
+
+> Some clients of `shop@web-2` get their connections reset, or wait
+> seconds before the first byte, but the request times Bandit reports
+> look fine and nothing is logged. Find out why.
+
+**What the agent does.** `bandit` looks at every Bandit server on the
+node, through Thousand Island, the socket server under it. Now: where it
+listens, its connection limit (acceptors × connections per acceptor) and
+how full it is, acceptors waiting for room for a new connection, and its
+connections, idle keep-alives or busy, the busy ones grouped by the
+function they wait in and the first frame of the application's code.
+Then, over a window, from its telemetry: requests per second by status,
+the slowest routes, requests that raised, socket errors by reason, and
+connections refused because the limit was reached, which Thousand Island
+doesn't log. Against the Bandit demo (`examples/elixir/run.sh bandit`),
+it found the server at 100 of 100 connections, all four acceptors
+waiting, 30 connections held in a 3-second upstream call, 70 in idle
+keep-alives, and connections refused (walkthrough 18).
+
+**Typical findings.** A connection limit set far below the default
+(16,384 per acceptor), slow requests holding connections (an upstream
+call, a pool checkout), idle keep-alives holding the rest for up to
+`read_timeout`, and a slow route that the request times show but don't
+connect to the refused clients: the time a client spends waiting to be
+accepted is before Bandit starts timing the request.
+
+**Watch out.** Listening attaches a telemetry handler for the window,
+detached afterwards; nothing else is loaded. Connections are looked at
+one by one, up to 5,000.
+
 ## Understanding and verifying
 
-### 13. Finding the bug in the code, not just the node
+### 16. Finding the bug in the code, not just the node
 
 **Situation.** You want the fix, not just the diagnosis.
 
@@ -476,10 +592,10 @@ often line numbers, and the agent opens those files and reads the code. In
 testing, it went from a mailbox backlog to the `Process.sleep` in the
 offending `handle_cast/2` on its own.
 
-Functions that macros generate aren't in the source to open; scenario 17
+Functions that macros generate aren't in the source to open; scenario 22
 finds them on the node.
 
-### 14. Seeing what a function really receives
+### 17. Seeing what a function really receives
 
 **Situation.** Production behaves differently from your tests, and you
 suspect the inputs.
@@ -509,7 +625,33 @@ codes that fail, and why, in five seconds (walkthrough 13).
   refuses and says what it found. Forcing it ends their trace, so the agent
   should ask you first.
 
-### 15. Verifying a fix or a deploy
+### 18. What's in an ETS table
+
+**Situation.** An ETS table is large or growing, and you want to know
+what's in it.
+
+> The `sessions` table on `auth@prod-2` keeps growing. What's in it?
+
+**What the agent does.** `diagnose`'s `ets_tables` check lists the
+largest tables. `ets_table` on one shows its type, protection, owner and
+heir, row count and memory, its first rows, and a scan of up to 10,000
+rows read in chunks: the average row size, the rows at least twice that
+size, and for a bag, the keys with the most rows. Against the sessions
+demo (`examples/erlang/run.sh sessions`), its rows showed a new atom as
+every key and nothing ever deleted, which with `atom_table`'s growth
+made the cause plain (walkthrough 14).
+
+**Typical findings.** Keys from input that are never deleted (sessions,
+request ids), a cache without eviction, a few huge rows (a whole list or
+map under one key, copied out on every lookup), a bag's hot key.
+
+**Watch out.**
+- Rows go to the AI provider like any tool output: mind personal data.
+- A private table can only be read by its owner: only its settings are
+  shown.
+- A large row is shown by its key and size, not copied out whole.
+
+### 19. Verifying a fix or a deploy
 
 **Situation.** You've shipped a fix and want evidence that it worked.
 
@@ -521,7 +663,39 @@ or so apart. A fixed leak shows near-zero deltas under the same load that
 used to produce growth. The same before-and-after comparison works for
 config changes, such as a new pool size.
 
-### 16. Trying a fix on the live node
+First, though, check that the new code runs at all. `diagnose`'s
+`stale_code` check lists modules whose `.beam` on the code path differs
+from the code running (files deployed but never loaded), and processes
+still in a module's old code after a hot load.
+
+### 20. A deploy or a hot load that didn't take
+
+**Situation.** A fix was deployed, but the node behaves as before; or
+someone loaded a module by hand, and something still runs the old code.
+
+> We deployed a fix to `shop@prod-1`: discounts are 10% now, not 5%.
+> Orders still get 5%. Find out why.
+
+**What the agent does.** `diagnose`'s `stale_code` check lists loaded
+modules whose `.beam` on the code path differs from the code running
+(files copied but never loaded), or that have no `.beam` there at all,
+and modules whose old version is still in memory after a hot load, with
+the processes still running it. `module_code` on a module says whether
+the running version is the file's, and `trace_calls` shows what the
+running code returns. Against the deploy demo
+(`examples/erlang/run.sh deploy`), `stale_code` named `discounts` as
+different on disk, and a trace showed the running code still taking 5%
+off (walkthrough 16).
+
+**Typical findings.** A deploy that copied files and didn't load them
+(no release upgrade, no restart), a module loaded on one node of a
+cluster and not the others, a receive loop that calls itself locally and
+so never leaves the old code, and is killed by the module's next load.
+
+**Watch out.** recon, which this tool injects into a node that lacks it,
+isn't on the node's code path; `stale_code` leaves it out.
+
+### 21. Trying a fix on the live node
 
 **Situation.** You have a fix and want to see it work on the node before
 going through a deploy, or you need a stopgap now.
@@ -550,8 +724,10 @@ is a recorded session of it on the Elixir payments demo.
 - Processes in a function of an older version (a plain `receive` loop
   calling itself without its module name) keep running it. While they do,
   the tool refuses to load that module again, rather than kill them.
+  `diagnose`'s `stale_code` check names them, and lists the module as
+  different on disk until the fix is deployed.
 
-### 17. Code that macros generated
+### 22. Code that macros generated
 
 **Situation.** A stack trace or a trace names a function you can't find in
 your source, or points into a library's file: `gen_server.ex:887`, a
@@ -599,7 +775,7 @@ generates and explained what each does with a message it doesn't handle.
   and after `load_module` the file may not be the code that runs; the tool
   says so.
 
-### 18. Watching a load test
+### 23. Watching a load test
 
 **Situation.** You're load testing and want to know what breaks first and
 why.
@@ -612,7 +788,7 @@ why.
 the point where schedulers saturate, is your capacity limit, and
 `process_info` says which code it's in.
 
-### 19. Getting to know an unfamiliar system
+### 24. Getting to know an unfamiliar system
 
 **Situation.** You've inherited a system, or are onboarding, and want to see
 how it's actually put together at runtime.
@@ -621,7 +797,7 @@ how it's actually put together at runtime.
 > applications, what each supervisor runs, and what looks unusual.
 
 **What the agent does.** `supervision_tree` for each application, plus a
-`diagnose` baseline. Combined with the source (scenario 13), it can map
+`diagnose` baseline. Combined with the source (scenario 16), it can map
 runtime processes to modules and explain restart strategies and limits,
 which the tree shows for every supervisor along with its recent restarts.
 That's often quicker than reading the code alone, because the runtime
@@ -632,7 +808,7 @@ have been restarting.
 
 ## Other kinds of targets
 
-### 20. Erlang products you didn't write
+### 25. Erlang products you didn't write
 
 **Situation.** A third-party system built on the BEAM misbehaves: a message
 broker, a database, an XMPP server, anything written in Erlang, Elixir, Gleam
@@ -654,7 +830,7 @@ is used as-is.
 too, such as RabbitMQ's `rabbitmq-diagnostics`; use both. Locate the cookie
 with care: it grants full control of the node.
 
-### 21. Your own node during development
+### 26. Your own node during development
 
 **Situation.** You're developing locally and want runtime answers while you
 code.
