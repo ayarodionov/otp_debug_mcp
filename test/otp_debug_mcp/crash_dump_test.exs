@@ -17,6 +17,7 @@ defmodule OtpDebugMcp.CrashDumpTest do
     oom = Path.join(dir, "oom.dump")
 
     die(
+      oom,
       TestTarget.start(
         erlang: true,
         args: [~c"+MMscs", ~c"128", ~c"+MMsco", ~c"true", ~c"+Musac", ~c"false"],
@@ -36,7 +37,7 @@ defmodule OtpDebugMcp.CrashDumpTest do
     app = Path.join(dir, "app.dump")
 
     mbox =
-      die(TestTarget.start(env: dump_env(app)), fn target ->
+      die(app, TestTarget.start(env: dump_env(app)), fn target ->
         pid = TestTarget.call(target, Mailbox, :start, [:mbox, 3])
         big = Map.new(1..40, &{:"key#{&1}", &1})
         TestTarget.call(target, :erlang, :send, [:mbox, {:big, "text", 1.5, -7, 2 ** 70, big}])
@@ -56,15 +57,34 @@ defmodule OtpDebugMcp.CrashDumpTest do
   defp dump_env(path), do: [ERL_CRASH_DUMP: path, ERL_FLAGS: "", ERL_CRASH_DUMP_SECONDS: 60]
 
   # Start the node's death with `fun`, and wait until it's dead and its
-  # dump written. Returns what `fun` returns.
-  defp die(target, fun) do
+  # dump written. Returns what `fun` returns. The peer is down as soon as
+  # its connection closes, which a VM out of memory does before it has
+  # written its dump: a complete dump ends with =end.
+  defp die(dump, target, fun) do
     ref = Process.monitor(target.peer)
     result = fun.(target)
 
     receive do
-      {:DOWN, ^ref, _, _, _} -> result
+      {:DOWN, ^ref, _, _, _} -> :ok
     after
       120_000 -> flunk("the node didn't die")
+    end
+
+    wait_for_end(dump, 600)
+    result
+  end
+
+  defp wait_for_end(dump, tries) do
+    done? =
+      case File.read(dump) do
+        {:ok, data} -> data |> String.trim_trailing() |> String.ends_with?("=end")
+        _ -> false
+      end
+
+    cond do
+      done? -> :ok
+      tries == 0 -> flunk("#{dump} wasn't finished")
+      true -> Process.sleep(100) && wait_for_end(dump, tries - 1)
     end
   end
 
