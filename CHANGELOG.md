@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.9.0
+
+A tool for Cowboy web servers (`cowboy`), and a look at the riak_dt
+CRDTs a riak_core node keeps (`riak_core` with `crdts: true`), each with
+a demo, a scenario and a walkthrough.
 
 - `cowboy`: the node's Cowboy web servers, through Ranch: each
   listener's connection limit (Ranch caps each connection supervisor, so
