@@ -80,6 +80,9 @@ defmodule OtpDebugMcp.Telemetry do
         (_, #{'__struct__' := 'Elixir.Plug.Conn'} = C) -> {ok, maps:with([method, request_path, status, host], C)};
         (_, #{'__struct__' := 'Elixir.Oban.Job'} = J) -> {ok, maps:with([worker, queue, attempt, state], J)};
         (_, #{'__struct__' := 'Elixir.Finch.Request'} = Rq) -> {ok, maps:with([method, host, path], Rq)};
+        %% Cowboy's request.
+        (K, #{method := _, path := _} = Rq) when K =:= req; K =:= partial_req ->
+          {ok, maps:with([method, host, path], Rq)};
         (_, #{'__exception__' := true, '__struct__' := Mod} = E) ->
           {ok, #{exception => Mod, message => case maps:get(message, E, undefined) of
                                                   Msg when is_binary(Msg) -> Short(Msg);
@@ -133,13 +136,19 @@ defmodule OtpDebugMcp.Telemetry do
           _ -> <<>>
         end
       end,
-      %% Bandit's requests by path and status, failed ones by their error,
-      %% Thousand Island's errors by reason.
+      %% Bandit's and Cowboy's requests by path and status, failed ones by
+      %% their error, Thousand Island's errors by reason; Cowboy's early
+      %% errors (a request it answered before any handler) by status.
       Key = fun([bandit, request | _], #{conn := #{request_path := P} = C}) ->
                   <<(Str(maps:get(method, C, <<>>)))/binary, " ", (Path(P))/binary, " -> ",
                     (Str(maps:get(status, C, <<"no status">>)))/binary>>;
                ([bandit | _], #{error := E}) -> <<"error: ", (Str(E))/binary>>;
                ([thousand_island | _], #{error := E}) -> Str(E);
+               ([cowboy, request, early_error], Md) ->
+                  <<"early error -> ", (Str(maps:get(resp_status, Md, <<"no status">>)))/binary>>;
+               ([cowboy, request | _], #{req := #{method := M, path := P}} = Md) ->
+                  <<(Str(M))/binary, " ", (Path(P))/binary, " -> ",
+                    (Str(maps:get(resp_status, Md, <<"no status">>)))/binary>>;
                (_, Md) -> Key0(Md)
             end,
       Times = [duration, total_time, query_time, queue_time, decode_time, idle_time],

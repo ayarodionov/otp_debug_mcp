@@ -1888,6 +1888,90 @@ the whole bloated set.
 
 ---
 
+## 21. A Cowboy server whose acceptors wait for room
+
+```sh
+examples/elixir/run.sh cowboy
+```
+
+`cowboy_ex` serves an Erlang API on Cowboy (`examples/elixir/cowboy_shop`,
+port 8090), with Ranch's limits at 4 acceptors and `max_connections` 10.
+Its own clients: 60 accountants asking for sales reports, which one
+gen_server renders one at a time, 300 ms each, and 10 shoppers browsing
+products, every request on a new connection. A `curl` of `/products`
+took 6 seconds.
+
+> Browsing products on `cowboy_ex@yourhost` (GET
+> http://localhost:8090/products) takes several seconds, though the
+> products handler just returns a constant. Find out why.
+
+Only the otp-debug tools were allowed. The session took 39 seconds.
+
+**`connect`**, then **`diagnose`**. One finding isn't `ok`, `call_chains`:
+40 processes waiting in a call, all on `report_server`, which has 39
+messages queued and is in `timer:sleep/1`. The waiters are Cowboy request
+processes (`cowboy_stream_h:request_process/3`), each in
+`gen_server:call(report_server, {render, Id}, infinity)`.
+
+**`cowboy`**, for 5 seconds:
+
+```json
+{"status": "critical",
+ "findings": [
+   "critical: :shop_http (0.0.0.0:8090): 4 of 4 acceptors waited the whole 5001 ms for room under max_connections (10 per connection supervisor, 4 supervisors, 40 connections active): new clients wait in the listen backlog, unaccepted, until a connection closes; Ranch refuses none and logs nothing",
+   "warning: :shop_http (0.0.0.0:8090): 23 requests ran through the whole 5001 ms, most in report_handler:init/2"],
+ "listeners": [{
+   "listener": ":shop_http", "listening": "0.0.0.0:8090", "acceptors": 4,
+   "connections": {"active": 40, "limit": 40, "max_connections": 10,
+                   "connection_supervisors": 4, "fullest_supervisor": 10,
+                   "acceptors_waiting_for_room": 4,
+                   "acceptors_waiting_through_window": 4},
+   "idle": 0, "requests_in_flight": 40,
+   "waiting_in": [{"requests": 40, "current_function": "gen:do_call/4",
+                   "in_your_code": "report_handler:init/2"}],
+   "running_through_window": {"requests": 23, "in": [...]},
+   "accepted_per_s": 5.4, "closed_per_s": 5.4,
+   "routes": ["*/products -> products_handler", "*/reports/:id -> report_handler"],
+   "telemetry": "off: no stream_handlers set, so no per-request telemetry"}],
+ "window": {"not_listened": "telemetry isn't loaded on this node, ..."}}
+```
+
+The listener is full: 40 of 40 connections, every one with a report
+request in flight, waiting in `report_handler:init/2`, and all four
+acceptors blocked for the whole window. Connections close and open at
+5.4 a second, about one per report rendered.
+
+**`module_code`** for `report_server:handle_call/3`:
+
+```erlang
+handle_call({render, Id}, _From, S = #{rendered := N}) ->
+    timer:sleep(300),
+    {reply, {ok, <<"%PDF report ", Id/binary>>}, S#{rendered := N + 1}}.
+```
+
+**The answer.** The products handler is fine; a request for it can't get
+a connection. The listener allows 40 connections, `max_connections` 10
+for each of 4 connection supervisors, and report requests hold them all:
+each waits in `gen_server:call(..., infinity)` for `report_server`,
+which renders one report at a time, 300 ms each, with 39 queued, about
+12 seconds a report. A new client, `/products` included, waits in the
+listen backlog until a report finishes and frees a slot, and the
+accountants' next connections are ahead of it. Ranch neither refuses nor
+logs it, so it looks like a slow request.
+
+**Fixes.**
+
+- **Render concurrently:** in the request process or a pool of
+  workers, not one gen_server; keep the counter in `counters` or ETS.
+- **Don't hold connections without limit:** a timeout on the call and a
+  503, or reject when the queue is long, or accept report jobs
+  asynchronously (202 and poll).
+- **Keep slow routes from starving fast ones:** a listener of its own
+  for `/reports`, or more room: `ranch:set_max_connections(shop_http, N)`
+  works on the live node, though it only postpones the problem.
+
+---
+
 ## Cleaning up
 
 ```sh

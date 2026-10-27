@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- `cowboy`: the node's Cowboy web servers, through Ranch: each
+  listener's connection limit (Ranch caps each connection supervisor, so
+  the real limit is `max_connections` × `num_conns_sups`), acceptors
+  blocked waiting for room, which leaves new clients unaccepted with
+  nothing logged, idle and WebSocket connections, the requests in flight
+  grouped by where they wait and those still running at the end of the
+  window, timeouts and routes. Over the window, Ranch's accept and close
+  rates and, with cowboy_telemetry, requests by status, the slowest
+  routes, handler crashes and early errors. A Cowboy demo
+  (`examples/elixir/run.sh cowboy`), scenario 15 and walkthrough 21.
 - `riak_core` with `crdts: true`: the riak_dt sets (ORSWOTs) and maps the
   connected node's vnodes hold, in their state or the ETS tables they
   own, as terms or riak_dt binaries: the largest, by key, with their

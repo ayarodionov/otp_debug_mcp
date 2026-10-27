@@ -76,11 +76,13 @@ raw introspection when a purpose-built tool exists.
      and the slowest example, from events the libraries already emit,
      much cheaper than tracing. `queue_time_ms` high on Ecto queries means
      the pool is exhausted.
-   - A Phoenix or Bandit service whose clients get connection resets, or
-     wait before the first byte, while request times look fine → `bandit`:
-     the connection limit and how full it is, acceptors waiting for room,
-     what the busy connections wait in, and connections refused at the
-     limit (Thousand Island logs none of this).
+   - A web service whose clients get connection resets, or wait before
+     the first byte, while request times look fine → `bandit` (Phoenix,
+     Bandit) or `cowboy` (Cowboy, including Phoenix on plug_cowboy): the
+     connection limit and how full it is, acceptors waiting for room,
+     what the busy connections or requests wait in, and connections
+     refused at the limit (neither Thousand Island nor Ranch logs any of
+     this). Ranch caps each connection supervisor, not the listener.
    - A riak_core cluster (Riak KV, riak_core_lite) slow or losing
      requests → `riak_core` from any member: members down or unreachable,
      fallbacks, ownership changes stuck awaiting handoff, and the

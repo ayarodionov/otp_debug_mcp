@@ -838,3 +838,64 @@ defmodule OtpDebugMcp.Fixtures.RiakShop do
   @impl true
   def handle_overload_info(_request, _index), do: :ok
 end
+
+defmodule OtpDebugMcp.Fixtures.CowboyShop do
+  @moduledoc """
+  A Cowboy server with cowboy_telemetry: `/` answers at once, `/slow`
+  after `slow_ms`, `/boom` raises. `start/2` takes Ranch's transport
+  options and returns the port; `clients/3` keeps clients requesting a
+  path, each on a keep-alive connection.
+  """
+  @behaviour :cowboy_handler
+
+  def start(transport_options, slow_ms) do
+    dispatch = :cowboy_router.compile([{:_, [{"/[...]", __MODULE__, %{slow_ms: slow_ms}}]}])
+
+    {:ok, _} =
+      :cowboy.start_clear(
+        :cowboy_shop,
+        Map.merge(%{socket_opts: [ip: {127, 0, 0, 1}, port: 0]}, Map.new(transport_options)),
+        %{
+          env: %{dispatch: dispatch},
+          stream_handlers: [:cowboy_telemetry_h, :cowboy_stream_h]
+        }
+      )
+
+    :ranch.get_port(:cowboy_shop)
+  end
+
+  @impl true
+  def init(req, %{slow_ms: ms} = state) do
+    case :cowboy_req.path(req) do
+      "/slow" -> Process.sleep(ms)
+      "/boom" -> raise "boom"
+      _ -> :ok
+    end
+
+    {:ok, :cowboy_req.reply(200, %{}, "ok", req), state}
+  end
+
+  def clients(port, n, path) do
+    for _ <- 1..n, do: spawn(fn -> client(port, path) end)
+    :ok
+  end
+
+  defp client(port, path) do
+    case :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, active: false], 1_000) do
+      {:ok, socket} -> requests(socket, path)
+      _ -> :ok
+    end
+
+    Process.sleep(50)
+    client(port, path)
+  end
+
+  defp requests(socket, path) do
+    with :ok <- :gen_tcp.send(socket, "GET #{path} HTTP/1.1\r\nhost: shop\r\n\r\n"),
+         {:ok, _} <- :gen_tcp.recv(socket, 0, 10_000) do
+      requests(socket, path)
+    else
+      _ -> :gen_tcp.close(socket)
+    end
+  end
+end

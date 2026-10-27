@@ -610,6 +610,38 @@ defmodule OtpDebugMcp.Tools do
     end
   end
 
+  defmodule Cowboy do
+    @moduledoc """
+    The node's Cowboy web servers (Ranch listeners underneath): for each,
+    where it listens, its connection limit and how full it is (Ranch caps
+    each connection supervisor, not the listener), acceptors blocked
+    waiting for room, which leaves new clients unaccepted and logs
+    nothing, idle and WebSocket connections, the requests in flight
+    grouped by where they wait (each runs in a process of its own), those
+    still running at the end of the window, its timeouts and routes. Then,
+    over the window, Ranch's accept and close rates and, with
+    cowboy_telemetry, requests per second by status, the slowest routes,
+    handler crashes and early errors. Findings come first, worst first.
+    """
+    use Anubis.Server.Component, type: :tool
+    use OtpDebugMcp.Approval
+
+    alias OtpDebugMcp.Tools
+
+    schema do
+      field(:duration_ms, :integer, description: "How long to listen (default 5000, max 30000)")
+    end
+
+    def perform(params, frame) do
+      duration = (params[:duration_ms] || 5_000) |> min(30_000) |> max(500)
+
+      case OtpDebugMcp.Cowboy.report(duration) do
+        {:ok, report} -> Tools.json_response(frame, report)
+        {:error, reason} -> Tools.error_response(frame, reason)
+      end
+    end
+  end
+
   defmodule RiakCore do
     @moduledoc """
     A riak_core cluster (Riak KV, riak_core_lite, and systems built on

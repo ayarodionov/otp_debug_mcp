@@ -34,10 +34,14 @@ defmodule OtpDebugMcp.TestTarget do
     OtpDebugMcp.Fixtures.EtsOwner,
     OtpDebugMcp.Fixtures.OldLoop,
     OtpDebugMcp.Fixtures.WebShop,
+    OtpDebugMcp.Fixtures.CowboyShop,
     OtpDebugMcp.Fixtures.RiakShop
   ]
 
   defstruct [:peer, :node, :cookie, :name, :opts]
+
+  # Cowboy, with cowboy_telemetry, for `cowboy: true`.
+  @cowboy_apps [:cowboy, :cowlib, :ranch, :cowboy_telemetry, :telemetry]
 
   # Bandit and what it runs on, for `bandit: true`.
   @bandit_apps [
@@ -56,7 +60,7 @@ defmodule OtpDebugMcp.TestTarget do
   Start a target node. Options: `:name`, `:cookie`, `longnames: true` (as
   `name@127.0.0.1`), `:env` (environment variables, as `{name, value}`),
   `telemetry: true` (the telemetry application started), `bandit: true`
-  (Bandit and what it needs started), `riak: true` (riak_core started, alone), `recon: true`
+  (Bandit and what it needs started), `cowboy: true` (Cowboy and cowboy_telemetry started), `riak: true` (riak_core started, alone), `recon: true`
   (recon application loaded, as in a
   release that depends on it), `:args` (more VM flags, as charlists),
   `erlang: true` (the Elixir application isn't started, so the node looks
@@ -76,6 +80,7 @@ defmodule OtpDebugMcp.TestTarget do
         if(opts[:recon], do: [lib_ebin(:recon)], else: []) ++
         if(opts[:telemetry], do: [lib_ebin(:telemetry)], else: []) ++
         if(opts[:bandit], do: Enum.map(@bandit_apps, &lib_ebin/1), else: []) ++
+        if(opts[:cowboy], do: Enum.map(@cowboy_apps, &lib_ebin/1), else: []) ++
         if(opts[:riak], do: Enum.map([:riak_core, :poolboy, :riak_dt], &lib_ebin/1), else: [])
 
     peer_opts = %{
@@ -108,6 +113,10 @@ defmodule OtpDebugMcp.TestTarget do
 
     if opts[:bandit],
       do: {:ok, _} = call(target, :application, :ensure_all_started, [:bandit])
+
+    if opts[:cowboy],
+      do:
+        {:ok, _} = call(target, :application, :ensure_all_started, [[:cowboy, :cowboy_telemetry]])
 
     if opts[:riak], do: start_riak(target)
 

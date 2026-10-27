@@ -1,0 +1,5 @@
+%{
+  "cowboy": {:hex, :cowboy, "2.20.0", "63f6e3afa7e14201498142a10d00379f5e11761f69e69782807c713627f6bc73", [:make, :rebar3], [{:cowlib, ">= 2.21.0 and < 3.0.0", [hex: :cowlib, repo: "hexpm", optional: false]}, {:ranch, ">= 1.8.0 and < 3.0.0", [hex: :ranch, repo: "hexpm", optional: false]}], "hexpm", "a0be47464a2887f71c061ce90723dc17441c9b81ba9569cd9b596eb0367d1edd"},
+  "cowlib": {:hex, :cowlib, "2.21.0", "3ea757c79784bdbdebac7857ce3adf2290af6b8680d4248c75e40ced2e98c89e", [:make, :rebar3], [], "hexpm", "0960248773762a5319b3c17285028bc76f54f58ef0f9451367401bdf67b46274"},
+  "ranch": {:hex, :ranch, "2.3.0", "7de7b041a9a6a5091a3aa5898d66c0564be671d87db4f9d63b1b5ee775b097df", [:make, :rebar3], [], "hexpm", "6168ec49409d982f7cfbd83dd083144f6cbe67caa4036551d2f0a3ad67c9d023"},
+}

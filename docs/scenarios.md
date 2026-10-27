@@ -705,9 +705,9 @@ Walkthrough 17.
 
 ### 15. A web server refusing or stalling connections
 
-**Situation.** Some clients of a Phoenix or Bandit service get their
-connections reset, or wait seconds before the first byte, while the
-request times the server reports look fine and nothing is logged.
+**Situation.** Some clients of a Phoenix, Bandit or Cowboy service get
+their connections reset, or wait seconds before the first byte, while
+the request times the server reports look fine and nothing is logged.
 
 > Some clients of `shop@web-2` get their connections reset, or wait
 > seconds before the first byte, but the request times Bandit reports
@@ -727,16 +727,37 @@ it found the server at 100 of 100 connections, all four acceptors
 waiting, 30 connections held in a 3-second upstream call, 70 in idle
 keep-alives, and connections refused (walkthrough 18).
 
+`cowboy` does the same for Cowboy, through Ranch, the acceptor pool
+under it: each listener's limit, acceptors blocked waiting for room,
+idle and WebSocket connections, the requests in flight (each runs in a
+process of its own) grouped by where they wait, those still running at
+the end of the window, its timeouts and routes; and over the window,
+Ranch's accept and close rates and, when `cowboy_telemetry_h` is in the
+listener's stream handlers, requests by status, the slowest routes,
+handler crashes and early errors. Against the Cowboy demo
+(`examples/elixir/run.sh cowboy`), it found every connection held by a
+report request waiting on one gen_server, and the acceptors blocked
+(walkthrough 21).
+
 **Typical findings.** A connection limit set far below the default
 (16,384 per acceptor), slow requests holding connections (an upstream
 call, a pool checkout), idle keep-alives holding the rest for up to
 `read_timeout`, and a slow route that the request times show but don't
 connect to the refused clients: the time a client spends waiting to be
-accepted is before Bandit starts timing the request.
+accepted is before Bandit starts timing the request. With Cowboy, Ranch's
+`max_connections` (1,024 by default) caps each connection supervisor,
+one per acceptor unless `num_conns_sups` says otherwise, so the real
+limit is their product and one supervisor can fill before the listener
+does. At the cap Ranch refuses nothing: the acceptor waits, and new
+clients wait unaccepted in the listen backlog, with nothing logged. And
+Cowboy's `request_timeout` is the time to receive a request's headers,
+not a limit on the handler.
 
 **Watch out.** Listening attaches a telemetry handler for the window,
 detached afterwards; nothing else is loaded. Connections are looked at
-one by one, up to 5,000.
+one by one, up to 5,000 (and with Cowboy, up to 500 requests). Without
+cowboy_telemetry, `cowboy` still sees the listeners, connections and
+requests in flight, but not requests by status.
 
 **Try it.**
 
@@ -749,6 +770,17 @@ examples/elixir/run.sh bandit
 > reports look fine and nothing is logged. Find out why.
 
 It fetches Bandit from Hex the first time. Walkthrough 18.
+
+```sh
+examples/elixir/run.sh cowboy
+```
+
+> Browsing products on `cowboy_ex@yourhost` (GET
+> http://localhost:8090/products) takes several seconds, though the
+> products handler just returns a constant. Find out why.
+
+It fetches Cowboy from Hex the first time, and serves port 8090.
+Walkthrough 21.
 
 ### 16. A riak_core cluster in trouble
 

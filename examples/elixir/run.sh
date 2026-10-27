@@ -8,6 +8,7 @@
 #     examples/elixir/run.sh billing     # billing_ex: every charge recorded twice, by a macro
 #     examples/elixir/run.sh phoenix     # phoenix_ex: a Phoenix API whose search always 404s
 #     examples/elixir/run.sh bandit      # bandit_ex: a Bandit API refusing connections, silently
+#     examples/elixir/run.sh cowboy      # cowboy_ex: a Cowboy API where even trivial requests hang
 #     examples/elixir/run.sh riak        # riak_a, riak_b, riak_c: a riak_core cluster, one member down, one vnode swamped
 #     examples/elixir/run.sh wishlist    # riak_a, riak_b: riak_core wishlists, riak_dt sets that keep growing
 #     examples/elixir/run.sh stop        # stop them all
@@ -59,6 +60,12 @@ case "${1:-}" in
     (cd "$here/bandit_shop" && mix deps.get --quiet && mix compile --quiet &&
       start bandit_ex -S mix run --no-halt)
     ;;
+  cowboy)
+    # A Mix project with Erlang sources: fetches Cowboy from Hex the first
+    # time. It serves port 8090, and runs its own clients.
+    (cd "$here/cowboy_shop" && mix deps.get --quiet && mix compile --quiet &&
+      start cowboy_ex -S mix run --no-halt -e ":cowboy_shop.traffic()")
+    ;;
   riak)
     # A Mix project on riak_core_lite, fetched from Hex the first time.
     # Three nodes form a cluster; then riak_c goes down, and the traffic,
@@ -94,12 +101,12 @@ case "${1:-}" in
     ;;
   stop)
     elixir --sname "stopper_$$" -e "
-      for n <- ~w(shop_ex payments_ex billing_ex phoenix_ex bandit_ex riak_a riak_b riak_c ex_a ex_b ex_c),
+      for n <- ~w(shop_ex payments_ex billing_ex phoenix_ex bandit_ex cowboy_ex riak_a riak_b riak_c ex_a ex_b ex_c),
           do: :rpc.call(:\"#{n}@$host\", :init, :stop, [], 2000)"
     if [ -x "$release/bin/demo_shop" ]; then "$release/bin/demo_shop" stop 2>/dev/null || true; fi
     ;;
   *)
-    echo "usage: $0 shop|payments|cluster|release|billing|phoenix|bandit|riak|wishlist|stop" >&2
+    echo "usage: $0 shop|payments|cluster|release|billing|phoenix|bandit|cowboy|riak|wishlist|stop" >&2
     exit 1
     ;;
 esac
