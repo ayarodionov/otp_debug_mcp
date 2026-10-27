@@ -196,6 +196,10 @@ Claude Code). The new server process doesn't keep the old one's
 connection, so the agent connects to the node again. In other clients,
 edit the `env` block of the server's config and restart or reconnect it.
 
+[talks/step-by-step.pptx](talks/step-by-step.pptx) is a talk, with speaker
+notes, that goes through one investigation (the crash loop of scenario 6)
+dialog by dialog with `OTP_DEBUG_MCP_CONFIRM=all`, declining one step.
+
 ## Setup
 
 ### Install with Claude Code
