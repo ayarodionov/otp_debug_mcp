@@ -47,7 +47,7 @@ defmodule OtpDebugMcp.CowboyTest do
     assert l["timeouts_ms"] == %{"idle" => 60_000, "request" => 5_000, "handshake" => 5_000}
 
     w = r["window"]
-    assert w["requests"] > 10
+    assert w["requests"] > 5
     assert %{"2xx" => ok} = w["by_status"]
     assert ok == w["requests"]
     assert [%{"route" => "GET / -> 200"}] = w["slowest_routes"]

@@ -890,9 +890,14 @@ defmodule OtpDebugMcp.Fixtures.CowboyShop do
     client(port, path)
   end
 
+  # Paced, and on a new connection when Cowboy closes this one: after
+  # max_keepalive requests it answers with connection: close, and reads
+  # no more.
   defp requests(socket, path) do
     with :ok <- :gen_tcp.send(socket, "GET #{path} HTTP/1.1\r\nhost: shop\r\n\r\n"),
-         {:ok, _} <- :gen_tcp.recv(socket, 0, 10_000) do
+         {:ok, answer} <- :gen_tcp.recv(socket, 0, 10_000),
+         false <- String.contains?(answer, "connection: close") do
+      Process.sleep(10)
       requests(socket, path)
     else
       _ -> :gen_tcp.close(socket)
