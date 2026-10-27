@@ -9,6 +9,7 @@
 #     examples/elixir/run.sh phoenix     # phoenix_ex: a Phoenix API whose search always 404s
 #     examples/elixir/run.sh bandit      # bandit_ex: a Bandit API refusing connections, silently
 #     examples/elixir/run.sh riak        # riak_a, riak_b, riak_c: a riak_core cluster, one member down, one vnode swamped
+#     examples/elixir/run.sh wishlist    # riak_a, riak_b: riak_core wishlists, riak_dt sets that keep growing
 #     examples/elixir/run.sh stop        # stop them all
 #
 # Each node runs in the background, named with --sname on this host. All
@@ -72,6 +73,19 @@ case "${1:-}" in
       halt()."
     echo "the cluster formed, riak_c is down, and the traffic runs on riak_a"
     ;;
+  wishlist)
+    # The same Mix project, two nodes: riak_b joins riak_a, then shoppers
+    # add to wishlists, kept as riak_dt sets, from riak_a.
+    (cd "$here/riak_shop" && mix deps.get --quiet && mix compile --quiet && rm -rf data &&
+      for n in a b; do
+        export SHOP_NODE=$n
+        start "riak_$n" -S mix run
+      done)
+    ERL_CRASH_DUMP_BYTES=0 erl -sname "riak_admin_$$" -noshell -eval "
+      ok = rpc:call('riak_a@$host', riak_shop, wishlist_demo, ['riak_b@$host'], 120000),
+      halt()."
+    echo "the cluster formed, and the wishlist traffic runs on riak_a"
+    ;;
   release)
     (cd "$here/demo_shop" && MIX_ENV=prod mix release --overwrite --quiet)
     "$release/bin/demo_shop" daemon
@@ -85,7 +99,7 @@ case "${1:-}" in
     if [ -x "$release/bin/demo_shop" ]; then "$release/bin/demo_shop" stop 2>/dev/null || true; fi
     ;;
   *)
-    echo "usage: $0 shop|payments|cluster|release|billing|phoenix|bandit|riak|stop" >&2
+    echo "usage: $0 shop|payments|cluster|release|billing|phoenix|bandit|riak|wishlist|stop" >&2
     exit 1
     ;;
 esac

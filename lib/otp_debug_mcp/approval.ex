@@ -192,6 +192,11 @@ defmodule OtpDebugMcp.Approval do
       {:changes,
        "Reads the node's Bandit servers and connections, and attaches a telemetry handler for the window."}
 
+  def step("riak_core", %{crdts: true}),
+    do:
+      {:changes,
+       "Reads the riak_core ring, vnodes and handoffs, and asks each of this node's vnodes for its state (sys:get_state) to measure the CRDTs it holds."}
+
   def step("riak_core", _),
     do:
       {:read,

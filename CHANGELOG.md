@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- `riak_core` with `crdts: true`: the riak_dt sets (ORSWOTs) and maps the
+  connected node's vnodes hold, in their state or the ETS tables they
+  own, as terms or riak_dt binaries: the largest, by key, with their
+  actors, elements or fields and deferred removes. Findings: more actors
+  than the ring has partitions (the actor is a client, a request or a
+  process rather than the vnode, so the clock grows with every update),
+  a value over 1 MB, deferred removes. Each vnode is asked for its state
+  (`sys:get_state`), so with `OTP_DEBUG_MCP_CONFIRM=changes` it asks
+  first; a busy vnode is skipped after 2 s. Without it, `riak_core` says
+  when riak_dt is loaded.
+- A wishlist demo (`examples/elixir/run.sh wishlist`): riak_dt sets whose
+  actor is each request's process. Scenario 16 and walkthrough 20.
+
 ## 0.8.1
 
 Approving an investigation step by step.

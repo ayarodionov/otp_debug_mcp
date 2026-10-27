@@ -619,7 +619,10 @@ defmodule OtpDebugMcp.Tools do
     fallbacks held for unreachable owners, and the longest mailboxes, of
     vnodes and their proxies), handoffs running, the services up on each
     member, and riak_core's own cluster-wide ringready and transfers.
-    Findings come first, worst first. Read-only.
+    With crdts: true, also the riak_dt sets and maps this node's vnodes
+    hold: the largest, those with more actors than the ring has
+    partitions, and deferred removes. Findings come first, worst first.
+    Changes nothing; crdts: true asks each vnode for its state.
     """
     use Anubis.Server.Component, type: :tool
     use OtpDebugMcp.Approval
@@ -627,10 +630,14 @@ defmodule OtpDebugMcp.Tools do
     alias OtpDebugMcp.Tools
 
     schema do
+      field(:crdts, :boolean,
+        description:
+          "Also measure the riak_dt CRDTs (sets, maps) this node's vnodes hold: size, actors, deferred removes. Asks each vnode for its state (sys:get_state); a busy vnode is skipped after 2 s"
+      )
     end
 
-    def perform(_params, frame) do
-      case OtpDebugMcp.RiakCore.report() do
+    def perform(params, frame) do
+      case OtpDebugMcp.RiakCore.report(crdts: params[:crdts] == true) do
         {:ok, report} -> Tools.json_response(frame, report)
         {:error, reason} -> Tools.error_response(frame, reason)
       end

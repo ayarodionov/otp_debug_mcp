@@ -141,6 +141,77 @@ defmodule OtpDebugMcp.RiakCoreTest do
     assert first =~ "registered under the application :undefined, which isn't running"
   end
 
+  # A set updated once by each of `actors` actors, cycling through 5 items.
+  defp set(actors) do
+    Enum.reduce(1..actors, :riak_dt_orswot.new(), fn n, set ->
+      {:ok, set} = :riak_dt_orswot.update({:add, rem(n, 5)}, "client-#{n}", set)
+      set
+    end)
+  end
+
+  test "crdts: sizes, too many actors, deferred removes, riak_dt binaries" do
+    target = TestTarget.start(riak: true)
+    on_exit(fn -> TestTarget.stop(target) end)
+    :ok = TestTarget.call(target, RiakShop, :start, [])
+    for k <- 1..10, do: :ok = TestTarget.call(target, RiakShop, :put, [{:cart, k}, set(2)])
+    :ok = TestTarget.call(target, RiakShop, :put, [:favorites, set(300)])
+    :ok = TestTarget.call(target, RiakShop, :put, [:encoded, :riak_dt_orswot.to_binary(set(40))])
+
+    {:ok, map} =
+      :riak_dt_map.update(
+        {:update, [{:update, {"items", :riak_dt_orswot}, {:add, :y}}]},
+        :a,
+        :riak_dt_map.new()
+      )
+
+    :ok = TestTarget.call(target, RiakShop, :put, [:profile, map])
+
+    # A remove whose add this replica never saw waits, deferred.
+    {:ok, seen} = :riak_dt_orswot.update({:add, :x}, :a, :riak_dt_orswot.new())
+    ctx = :riak_dt_orswot.precondition_context(seen)
+    {:ok, waiting} = :riak_dt_orswot.update({:remove, :x}, :b, :riak_dt_orswot.new(), ctx)
+    :ok = TestTarget.call(target, RiakShop, :put, [:returns, waiting])
+    # As in a node whose code uses riak_dt.
+    {:module, _} = TestTarget.call(target, :code, :ensure_loaded, [:riak_dt_orswot])
+    {:ok, _} = TestTarget.connect(target)
+
+    # Without crdts, only a hint that they can be measured.
+    assert {:ok, r} = riak_core()
+    refute Map.has_key?(r, "crdts")
+    assert Enum.any?(r["findings"], &(&1 =~ "info: riak_dt is loaded here"))
+
+    assert {:ok, r} = call_tool_json(Tools.RiakCore, %{crdts: true})
+    assert r["status"] == "warning"
+    c = r["crdts"]
+
+    assert c["vnodes_scanned"] ==
+             r["vnodes"]["by_module"]["OtpDebugMcp.Fixtures.RiakShop"]["total"]
+
+    assert c["count"] == 14
+
+    assert [
+             %{"key" => "favorites", "type" => "orswot", "actors" => 300, "elements" => 5} = fav
+             | _
+           ] =
+             c["largest"]
+
+    assert fav["bytes"] > 1_000
+
+    assert [%{"key" => "favorites"}, %{"key" => "encoded", "encoded" => true, "actors" => 40}] =
+             c["most_actors"]
+
+    assert Enum.any?(
+             c["largest"],
+             &match?(%{"key" => "profile", "type" => "map", "fields" => 1}, &1)
+           )
+
+    assert [%{"key" => "returns", "deferred_removes" => 1}] = c["deferred_removes"]
+    assert [first | _] = r["findings"]
+    assert first =~ "warning: 2 CRDTs have more actors than the ring has partitions (8)"
+    assert first =~ "the orswot favorites"
+    assert Enum.any?(r["findings"], &(&1 =~ "info: 1 CRDTs hold deferred removes"))
+  end
+
   test "explains a node without riak_core" do
     target = TestTarget.start()
     on_exit(fn -> TestTarget.stop(target) end)

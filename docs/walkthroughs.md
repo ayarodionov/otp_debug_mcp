@@ -1808,6 +1808,86 @@ makes the writes slow: the fallbacks have nothing queued.
 
 ---
 
+## 20. riak_dt sets whose actors pile up
+
+```sh
+examples/elixir/run.sh wishlist
+```
+
+`riak_a` and `riak_b` run the riak_core shop with wishlists
+(`examples/elixir/riak_shop`, with riak_dt): each wishlist is a riak_dt
+set (an ORSWOT) in `wishlist_vnode`, on a 16-partition ring. `run.sh`
+forms the cluster, then 10 shoppers add to 20 wishlists from `riak_a`,
+each request in a process of its own.
+
+> In our riak_core shop (`riak_a@yourhost`, `riak_b@yourhost`), adding
+> to a wishlist gets slower the longer the shop runs, and `riak_a`'s
+> memory keeps growing. Find out why.
+
+Only the otp-debug tools were allowed. The session took 89 seconds.
+
+**`connect`** to `riak_a`; **`cluster`** and **`diagnose`**: nothing
+stood out, no mailbox backlog, no crash loop, no binary or ETS leak.
+**`riak_core`** with `crdts: true`:
+
+```json
+{"status": "warning",
+ "findings": [
+   "warning: 9 CRDTs have more actors than the ring has partitions (16); the most, the orswot {wishlist,6} in :wishlist_vnode 639406966332270026714112114313373821099470487552, has 7443 actors for 30 elements, in 351916 bytes. Each update by a new actor adds it to the value's clock for good, so the actor is something other than the vnode (a client, a request, a process): the value grows with every update, and every merge, read repair and handoff carries it"],
+ "vnodes": {"by_module": {":shop_vnode": {"total": 8, "primary": 8},
+                          ":wishlist_vnode": {"total": 8, "primary": 8}}},
+ "crdts": {"vnodes_scanned": 16, "count": 9, "bytes": 3115685,
+   "largest": [
+     {"type": "orswot", "key": "{wishlist,6}", "vnode": ":wishlist_vnode",
+      "actors": 7443, "elements": 30, "deferred_removes": 0, "bytes": 351916},
+     {"type": "orswot", "key": "{wishlist,11}", "vnode": ":wishlist_vnode",
+      "actors": 7415, "elements": 30, "deferred_removes": 0, "bytes": 350600},
+     ...]}}
+```
+
+Sets of 30 items, each with over 7,000 actors, on a ring where a value
+should have about one actor per replica. **`module_code`** for
+`wishlist_vnode:handle_command/3`: the actor comes with the command.
+
+```erlang
+handle_command({add, List, Item, Actor}, _Sender, S = #{lists := L}) ->
+    {ok, Set} = riak_dt_orswot:update({add, Item}, Actor,
+                                      maps:get(List, L, riak_dt_orswot:new())),
+    ...
+```
+
+**`module_code`** for `riak_shop:wish/2` and `wisher/0`: the actor is
+`self()`, and every add runs in a new process.
+
+```erlang
+wish(List, Item) ->
+    riak_core_vnode_master:sync_command(index_node(<<"wishlists">>, List),
+                                        {add, List, Item, self()}, wishlist_vnode_master, 5000).
+```
+
+**`riak_core`** with `crdts: true` again, a minute later: `{wishlist,6}`
+had 10,006 actors and 472 KB, and the nine sets together 4.2 MB, up from
+3.1 MB.
+
+**The answer.** Every add uses a fresh pid as the set's actor, and an
+ORSWOT keeps every actor in its version vector for good: the sets hold
+30 items but grow by an actor, about 47 bytes, with every request. Each
+update works through that ever longer clock, so adds get slower, and
+memory grows; every merge, read repair and handoff to `riak_b` carries
+the whole bloated set.
+
+**Fixes.**
+
+- **Make the vnode the actor:** `{Partition, node()}` from the vnode's
+  state, not the caller's pid, so a set has about one actor per replica.
+  Drop the actor from the command.
+- **Mind the shape:** riak_dt takes a `{Term, Integer}` actor for a dot,
+  so don't use, say, `{client, N}` as an actor.
+- **The sets already bloated** keep their actors: rebuild them, reading
+  each value and writing it into a new set under the right actor.
+
+---
+
 ## Cleaning up
 
 ```sh

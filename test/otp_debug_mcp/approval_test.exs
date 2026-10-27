@@ -77,6 +77,15 @@ defmodule OtpDebugMcp.ApprovalTest do
 
     assert {:input_required, _} =
              call_tool(Tools.TraceCalls, %{module: "lists", function: "seq"}, form_client_frame())
+
+    # riak_core only reads, unless it's to ask the vnodes for their state.
+    assert {:error, text} = call_tool(Tools.RiakCore, %{}, form_client_frame())
+    assert text =~ "riak_core isn't running"
+
+    assert {:input_required, input} =
+             call_tool(Tools.RiakCore, %{crdts: true}, form_client_frame())
+
+    assert input.input_requests["step"]["params"]["message"] =~ "sys:get_state"
   end
 
   test "load_module keeps its own dialog, asked once" do

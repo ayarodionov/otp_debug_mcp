@@ -85,7 +85,11 @@ raw introspection when a purpose-built tool exists.
      requests → `riak_core` from any member: members down or unreachable,
      fallbacks, ownership changes stuck awaiting handoff, and the
      busiest vnode mailboxes across the cluster (a hot partition near its
-     overload threshold).
+     overload threshold). Vnodes growing in memory, or updates slowing
+     as the system runs, with riak_dt in use → `riak_core` with
+     `crdts: true`: sets and maps with more actors than partitions (the
+     actor is a client, request or process, not the vnode), the largest
+     values, deferred removes.
    - Some calls fail, but you can't see which or with what arguments
      (errors caught, or lost among many calls) → `trace_calls` with
      `exceptions: true`: only the calls that raise, with their arguments

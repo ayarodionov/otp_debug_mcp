@@ -754,7 +754,8 @@ It fetches Bandit from Hex the first time. Walkthrough 18.
 
 **Situation.** A cluster built on riak_core (Riak KV, riak_core_lite, a
 system of your own) is slow or loses requests: a member went down,
-handoffs don't finish after a join, or one partition is overwhelmed.
+handoffs don't finish after a join, one partition is overwhelmed, or the
+CRDTs its vnodes keep grow without end.
 
 > Writes to our riak_core cluster have got slow, and some time out.
 > Find out why.
@@ -770,6 +771,12 @@ own ringready and transfers. Its findings come worst first. Against the
 riak demo (`examples/elixir/run.sh riak`), it found from `riak_a` both a
 member down, with fallbacks holding its partitions, and a vnode on
 `riak_b` with 9,000 commands queued, all for one hot key (walkthrough 19).
+With `crdts: true` it also measures the riak_dt sets and maps this
+node's vnodes hold, in their state or their ETS tables: the largest,
+their actors, elements and deferred removes, each with the key it's
+under. Against the wishlist demo (`examples/elixir/run.sh wishlist`) it
+found sets of 30 items with thousands of actors, one per request
+(walkthrough 20).
 
 **Typical findings.**
 - A member down or unreachable: fallbacks hold its writes until hinted
@@ -780,10 +787,19 @@ member down, with fallbacks holding its partitions, and a vnode on
 - A hot partition: one key, or a few, taking a vnode past its overload
   threshold, where its proxy starts refusing requests.
 - Members whose rings disagree, after a partition or a botched join.
+- CRDTs that only grow: a riak_dt set or map with more actors than the
+  ring has partitions, because its actor is a client, a request or a
+  process rather than the vnode, so every update adds one to its clock
+  for good; or removes deferred, waiting for adds that never arrive.
 
 **Watch out.** It's read-only, and asks the other members for their
 vnodes' mailboxes over distribution: a member it can't reach is reported,
 not waited on. Connect to another member to see its own side in full.
+`crdts: true` asks each of this node's vnodes for its state
+(`sys:get_state`), so it waits behind a vnode's queue: a busy one is
+skipped after 2 s. It sees values held in memory, as riak_dt terms or
+binaries, not those in a disk backend (bitcask, leveldb) or inside Riak
+KV's objects.
 
 **Try it.**
 
@@ -797,6 +813,17 @@ examples/elixir/run.sh riak
 
 It fetches riak_core_lite from Hex the first time, forms the cluster,
 then takes `riak_c` down. Walkthrough 19.
+
+```sh
+examples/elixir/run.sh wishlist
+```
+
+> In our riak_core shop (`riak_a@yourhost`, `riak_b@yourhost`), adding
+> to a wishlist gets slower the longer the shop runs, and `riak_a`'s
+> memory keeps growing. Find out why.
+
+The same project with riak_dt: two nodes, and wishlists kept as riak_dt
+sets. Walkthrough 20.
 
 ## Understanding and verifying
 

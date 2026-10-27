@@ -6,7 +6,7 @@ defmodule RiakShop.MixProject do
       app: :riak_shop,
       version: "0.1.0",
       elixir: "~> 1.15",
-      deps: [{:riak_core, "~> 0.11.1", hex: :riak_core_lite}]
+      deps: [{:riak_core, "~> 0.11.1", hex: :riak_core_lite}, {:riak_dt, "~> 2.1"}]
     ]
   end
 

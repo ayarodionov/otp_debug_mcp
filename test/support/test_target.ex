@@ -76,7 +76,7 @@ defmodule OtpDebugMcp.TestTarget do
         if(opts[:recon], do: [lib_ebin(:recon)], else: []) ++
         if(opts[:telemetry], do: [lib_ebin(:telemetry)], else: []) ++
         if(opts[:bandit], do: Enum.map(@bandit_apps, &lib_ebin/1), else: []) ++
-        if(opts[:riak], do: Enum.map([:riak_core, :poolboy], &lib_ebin/1), else: [])
+        if(opts[:riak], do: Enum.map([:riak_core, :poolboy, :riak_dt], &lib_ebin/1), else: [])
 
     peer_opts = %{
       name: name,
