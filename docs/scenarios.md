@@ -4,6 +4,11 @@ Ways to use otp_debug_mcp with Claude Code (or any MCP client). Each
 scenario gives the situation, a prompt to start with, the tools the agent
 typically reaches for, and what to watch out for.
 
+Each scenario ends with **Try it**: the command that starts a demo node
+showing it, from the repository's root, and a prompt to give the agent.
+`yourhost` is the output of `hostname -s`, and `run.sh stop`, in the same
+directory, stops the demo's nodes.
+
 The prompts are only starting points. The agent picks tools itself; with the
 `otp-debug` skill installed it follows the same playbook: connect, run
 `diagnose`, drill into what it flags, then confirm trends with `snapshot`.
@@ -78,6 +83,18 @@ evidence.
 **Watch out.** `binary_leak` forces a garbage collection in every process.
 That's cheap, but say so if the node is under pressure.
 
+**Try it.**
+
+```sh
+examples/elixir/run.sh shop        # a mailbox that never drains
+examples/erlang/run.sh sessions    # atoms and ETS rows piling up
+examples/books/run.sh slice        # small slices pinning large binaries
+```
+
+> `shop_ex@yourhost` is getting slower and using more memory; find out why.
+
+Walkthroughs 1 and 14.
+
 ### 2. Requests are getting slow
 
 **Situation.** Latency creeps up, or `GenServer.call` timeouts start to
@@ -116,6 +133,20 @@ query far slower than the rest, a p95 far above the p50 (some calls wait
 on something), queries waiting on the pool (`queue_time_ms`), or one
 request running many fast queries.
 
+**Try it.**
+
+```sh
+examples/elixir/run.sh shop
+examples/elixir/run.sh phoenix
+```
+
+> `shop_ex@yourhost` is getting slower and using more memory; find out why.
+
+> `phoenix_ex@yourhost` is a Phoenix API. Tell me what requests it's
+> serving right now, how fast, and whether anything looks wrong.
+
+Walkthroughs 1 and 12.
+
 ### 3. High CPU
 
 **Situation.** Monitoring shows the node near 100% CPU.
@@ -152,6 +183,18 @@ large list, repeated encoding or decoding, a regex compiled on every call.
   for a reply, a lock or a sleep shows little time in a profile; that's
   scenario 2, and `trace_calls` timestamps.
 
+**Try it.**
+
+```sh
+examples/erlang/run.sh reports     # CPU spent collecting garbage
+examples/erlang/run.sh native      # a NIF holding a scheduler
+```
+
+> `reports_erl@yourhost` uses a lot of CPU for what it does: it only adds
+> up the day's sales. Find out where the CPU goes.
+
+Walkthroughs 15 and 7.
+
 ### 4. A process is stuck, or calls time out
 
 **Situation.** A feature hangs, or calls to one GenServer time out.
@@ -187,6 +230,18 @@ one calling back into the other from a callback, a call to a slow
 external service made inside a GenServer, or a process blocked behind its
 own backlog.
 
+**Try it.**
+
+```sh
+examples/erlang/run.sh locks
+```
+
+> Shoppers on `locks_erl@yourhost` say their reservations all time out
+> now, though it worked when it started. Find out why.
+
+Walkthrough 11. `examples/books/run.sh lock` has a deadlock that a
+timeout ends every few seconds ([plausible-but-wrong.md](plausible-but-wrong.md)).
+
 ### 5. Approaching a system limit
 
 **Situation.** You want to know whether a node is on its way to dying with
@@ -202,6 +257,15 @@ many children to list).
 
 **Typical findings.** Sockets or files opened and never closed (port count),
 atoms created from user input, or dynamic children that never terminate.
+
+**Try it.**
+
+```sh
+examples/erlang/run.sh sessions    # the atom table filling up
+examples/erlang/run.sh ports       # ports opened and never closed
+```
+
+> Check `sessions_erl@yourhost` for anything heading toward a system limit.
 
 ### 6. Crash loops and intermittent failures
 
@@ -225,6 +289,16 @@ after every start. The worst case is a loop that stays below the
 supervisor's restart limit: nothing ever fails over, so it runs forever and
 shows up only as intermittent errors. A supervisor `at_limit` is one crash
 away from giving up and taking its siblings down with it.
+
+**Try it.**
+
+```sh
+examples/elixir/run.sh payments    # or examples/erlang/run.sh payments
+```
+
+> `payments_ex@yourhost` fails payments now and then. Find out why.
+
+Walkthrough 2.
 
 ### 7. Errors only the logs show
 
@@ -278,6 +352,17 @@ the node logged once at boot, which only its log file still had.
   tool says when that hides warnings.
 - Log lines go to the AI provider, like any tool output.
 
+**Try it.**
+
+```sh
+examples/erlang/run.sh orders
+```
+
+> `orders_erl@yourhost` loses some of the orders it imports, and payments
+> fail now and then, but its numbers look healthy. Find out why.
+
+Walkthrough 9.
+
 ### 8. A node that died
 
 **Situation.** A node crashed and was restarted (by systemd, Kubernetes,
@@ -328,6 +413,18 @@ from the oldest event that the writer had kept up with about 1%.
   dump goes with it.
 - A large dump takes a few seconds per hundred MB.
 
+**Try it.**
+
+```sh
+examples/erlang/run.sh crash
+```
+
+> `crash_erl` died a minute after it started. It left a crash dump at
+> `examples/erlang/dumps/crash_erl.dump`. Find out why it died.
+
+It dies within a minute; ask once it's gone (`pgrep -f crash_erl` finds
+nothing). Walkthrough 10.
+
 ### 9. One node in a cluster misbehaves
 
 **Situation.** A cluster of nodes running the same code gets slow or
@@ -358,6 +455,16 @@ past which every process sending to that node is suspended.
 **Watch out.** Nodes are attached with the current target's cookie, as a
 cluster shares one; a node with another cookie shows as unreachable.
 
+**Try it.**
+
+```sh
+examples/elixir/run.sh cluster     # or examples/erlang/run.sh cluster
+```
+
+> `ex_a@yourhost` is part of a cluster that's getting slower. Find out why.
+
+Only `ex_b` has the bug. Walkthrough 3.
+
 ### 10. Incident triage
 
 **Situation.** Something is wrong right now, and you need a first picture
@@ -374,6 +481,17 @@ in and restarting.
 **Watch out.** Before restarting, take one `snapshot` and keep the
 `diagnose` output. Most of the evidence lives in the running node and is
 gone after a restart.
+
+**Try it.**
+
+```sh
+examples/erlang/run.sh payments
+```
+
+> `payments_erl@yourhost` is misbehaving. Give me a quick health summary
+> before we decide whether to restart it.
+
+Any demo will do.
 
 ---
 
@@ -432,6 +550,18 @@ OTP.
   that takes the library's source, or its tests under AddressSanitizer
   or Valgrind.
 
+**Try it.**
+
+```sh
+examples/erlang/run.sh native
+```
+
+> `native_erl@yourhost` stalls for tens of milliseconds now and then, and
+> the OS says it uses more memory every minute, though erlang:memory()
+> doesn't change. Find out why.
+
+It needs a C compiler, to build the NIF library. Walkthrough 7.
+
 ### 12. Sockets, ports and external programs
 
 **Situation.** The port count climbs toward the limit, sends block or time
@@ -479,6 +609,17 @@ owner with `{active, true}` flooding its own mailbox.
 - Before OTP 27, `trace_port` uses the node's legacy trace session, and
   refuses while anyone else traces.
 
+**Try it.**
+
+```sh
+examples/erlang/run.sh ports
+```
+
+> `ports_erl@yourhost`'s port count keeps climbing, and one of its
+> connections stops sending now and then. Find out why.
+
+Walkthrough 8.
+
 ### 13. Garbage collection eating the CPU
 
 **Situation.** The node uses far more CPU than its work seems to need, and
@@ -510,6 +651,17 @@ doesn't need.
 **Watch out.** Microstate accounting is turned on for the check's 2
 seconds only, and left alone if it was already on; its cost is small.
 
+**Try it.**
+
+```sh
+examples/erlang/run.sh reports
+```
+
+> `reports_erl@yourhost` uses a lot of CPU for what it does: it only adds
+> up the day's sales. Find out where the CPU goes.
+
+Walkthrough 15.
+
 ### 14. Traffic between nodes
 
 **Situation.** The network between nodes is saturated, calls to another
@@ -539,6 +691,17 @@ nodes shares one connection, so small calls wait behind big messages.
 **Watch out.** A TLS connection's controller is a process, not a port:
 for it, `pending_bytes` is that process's message queue length, and the
 byte rates aren't available.
+
+**Try it.**
+
+```sh
+examples/erlang/run.sh dist
+```
+
+> The network link between `dist_a@yourhost` and `dist_b@yourhost` is
+> saturated. Find out what's using it.
+
+Walkthrough 17.
 
 ### 15. A web server refusing or stalling connections
 
@@ -575,6 +738,18 @@ accepted is before Bandit starts timing the request.
 detached afterwards; nothing else is loaded. Connections are looked at
 one by one, up to 5,000.
 
+**Try it.**
+
+```sh
+examples/elixir/run.sh bandit
+```
+
+> Some clients of `bandit_ex@yourhost` get their connections reset, or
+> wait seconds before the first byte, but the request times Bandit
+> reports look fine and nothing is logged. Find out why.
+
+It fetches Bandit from Hex the first time. Walkthrough 18.
+
 ### 16. A riak_core cluster in trouble
 
 **Situation.** A cluster built on riak_core (Riak KV, riak_core_lite, a
@@ -610,6 +785,19 @@ member down, with fallbacks holding its partitions, and a vnode on
 vnodes' mailboxes over distribution: a member it can't reach is reported,
 not waited on. Connect to another member to see its own side in full.
 
+**Try it.**
+
+```sh
+examples/elixir/run.sh riak
+```
+
+> Writes to our riak_core shop cluster (`riak_a@yourhost`,
+> `riak_b@yourhost`, `riak_c@yourhost`) have got slow, and some time
+> out. Find out why.
+
+It fetches riak_core_lite from Hex the first time, forms the cluster,
+then takes `riak_c` down. Walkthrough 19.
+
 ## Understanding and verifying
 
 ### 17. Finding the bug in the code, not just the node
@@ -630,6 +818,18 @@ offending `handle_cast/2` on its own.
 
 Functions that macros generate aren't in the source to open; scenario 23
 finds them on the node.
+
+**Try it.**
+
+```sh
+examples/elixir/run.sh shop
+```
+
+> `shop_ex@yourhost` is getting slower. Find the cause on the node, then
+> find the responsible code in this repo and propose a fix.
+
+Run Claude Code in this repository, so it can open the demo's source
+(`examples/elixir/src/shop.exs`).
 
 ### 18. Seeing what a function really receives
 
@@ -661,6 +861,21 @@ codes that fail, and why, in five seconds (walkthrough 13).
   refuses and says what it found. Forcing it ends their trace, so the agent
   should ask you first.
 
+**Try it.**
+
+```sh
+examples/erlang/run.sh orders
+```
+
+> On `orders_erl@yourhost`, trace a few calls to `orders_coupons:discount/1`
+> and show me the arguments and return values.
+
+> Customers of `orders_erl@yourhost` say some coupon codes give them no
+> discount, but nothing about coupons is in the logs. Find which codes,
+> and why.
+
+Walkthrough 13.
+
 ### 19. What's in an ETS table
 
 **Situation.** An ETS table is large or growing, and you want to know
@@ -687,6 +902,16 @@ map under one key, copied out on every lookup), a bag's hot key.
   shown.
 - A large row is shown by its key and size, not copied out whole.
 
+**Try it.**
+
+```sh
+examples/erlang/run.sh sessions
+```
+
+> The `sessions` table on `sessions_erl@yourhost` keeps growing. What's in it?
+
+Walkthrough 14.
+
 ### 20. Verifying a fix or a deploy
 
 **Situation.** You've shipped a fix and want evidence that it worked.
@@ -703,6 +928,18 @@ First, though, check that the new code runs at all. `diagnose`'s
 `stale_code` check lists modules whose `.beam` on the code path differs
 from the code running (files deployed but never loaded), and processes
 still in a module's old code after a hot load.
+
+**Try it.**
+
+```sh
+examples/elixir/run.sh payments
+elixirc -o _build/payments_fix examples/elixir/fixes/payments_gateway.ex
+```
+
+> Load `_build/payments_fix/Elixir.Payments.Gateway.beam` onto
+> `payments_ex@yourhost`, then check that the crash loop is over.
+
+`load_module` asks you to approve the load. Walkthrough 4.
 
 ### 21. A deploy or a hot load that didn't take
 
@@ -730,6 +967,17 @@ so never leaves the old code, and is killed by the module's next load.
 
 **Watch out.** recon, which this tool injects into a node that lacks it,
 isn't on the node's code path; `stale_code` leaves it out.
+
+**Try it.**
+
+```sh
+examples/erlang/run.sh deploy
+```
+
+> We deployed a fix to `deploy_erl@yourhost`: discounts are 10% now, not
+> 5%. Orders still get 5%. Find out why.
+
+Walkthrough 16.
 
 ### 22. Trying a fix on the live node
 
@@ -762,6 +1010,20 @@ is a recorded session of it on the Elixir payments demo.
   the tool refuses to load that module again, rather than kill them.
   `diagnose`'s `stale_code` check names them, and lists the module as
   different on disk until the fix is deployed.
+
+**Try it.**
+
+```sh
+examples/elixir/run.sh payments
+elixirc -o _build/payments_fix examples/elixir/fixes/payments_gateway.ex
+```
+
+> `payments_ex@yourhost` crash-loops in Payments.Gateway: the port in its
+> URL is malformed. I've compiled a fix to
+> `_build/payments_fix/Elixir.Payments.Gateway.beam`. Try it on the node
+> and check that the crashes stop.
+
+Walkthrough 4.
 
 ### 23. Code that macros generated
 
@@ -811,6 +1073,18 @@ generates and explained what each does with a message it doesn't handle.
   and after `load_module` the file may not be the code that runs; the tool
   says so.
 
+**Try it.**
+
+```sh
+examples/elixir/run.sh billing     # a macro DSL that records charges twice
+examples/elixir/run.sh phoenix     # a route shadowed by one `resources` generates
+```
+
+> `billing_ex@yourhost` records every charge twice: acme's balance is
+> double what was charged. Find out why.
+
+Walkthroughs 5 and 6.
+
 ### 24. Watching a load test
 
 **Situation.** You're load testing and want to know what breaks first and
@@ -823,6 +1097,17 @@ why.
 `schedulers` checks while the load ramps up. The first mailbox to grow, or
 the point where schedulers saturate, is your capacity limit, and
 `process_info` says which code it's in.
+
+**Try it.**
+
+```sh
+examples/elixir/run.sh bandit
+```
+
+> Snapshot `bandit_ex@yourhost` now and again in a minute, and tell me
+> what becomes the bottleneck first.
+
+No load-test demo of its own: the Bandit demo has its traffic built in.
 
 ### 25. Getting to know an unfamiliar system
 
@@ -839,6 +1124,18 @@ which the tree shows for every supervisor along with its recent restarts.
 That's often quicker than reading the code alone, because the runtime
 shows what's actually started, including dynamic children, and which parts
 have been restarting.
+
+**Try it.**
+
+```sh
+examples/elixir/run.sh phoenix
+```
+
+> Connect to `phoenix_ex@yourhost` and explain how it's structured: which
+> applications, what each supervisor runs, and what looks unusual.
+
+`examples/elixir/run.sh riak`, a three-node riak_core cluster, is a
+bigger one to explore.
 
 ---
 
@@ -866,6 +1163,18 @@ is used as-is.
 too, such as RabbitMQ's `rabbitmq-diagnostics`; use both. Locate the cookie
 with care: it grants full control of the node.
 
+**Try it.**
+
+```sh
+examples/gleam/run.sh shop        # needs Gleam
+examples/lfe/run.sh shop          # needs LFE
+```
+
+> `shop_gleam@yourhost` is getting slower and using more memory; find out why.
+
+No third-party product here: the Gleam and LFE demos are BEAM code from
+other languages, debugged the same way.
+
 ### 27. Your own node during development
 
 **Situation.** You're developing locally and want runtime answers while you
@@ -886,6 +1195,18 @@ iex --sname dev -S mix
 `OTP_DEBUG_MCP_ALLOW_EVAL=true` set for the server, `remote_eval` can poke
 the running system, such as calling a function or reading ETS. Only enable
 that on a dev machine.
+
+**Try it.**
+
+```sh
+cd examples/elixir/bandit_shop && mix deps.get && iex --sname dev -S mix
+```
+
+> Connect to `dev@yourhost`. Did `BanditShop.Supervisor` start all its
+> children? Then trace `BanditShop.Router.call/2` for a few requests.
+
+Any Mix project of yours works the same way; this demo has its traffic
+built in.
 
 ---
 
