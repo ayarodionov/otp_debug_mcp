@@ -1972,6 +1972,71 @@ logs it, so it looks like a slow request.
 
 ---
 
+## 22. A Yaws API whose cookie sessions pile up
+
+```sh
+examples/elixir/run.sh yaws
+```
+
+`yaws_ex` serves an Erlang API on Yaws, embedded
+(`examples/elixir/yaws_shop`, port 8095), with its own clients: 10
+shoppers looking at their carts through a mobile app that keeps no
+cookies, about 50 requests a second.
+
+> The memory of `yaws_ex@yourhost`, a Yaws API, keeps growing, though
+> its traffic is steady. Find out why.
+
+Only the otp-debug tools were allowed. The session took 45 seconds.
+
+**`connect`**, then **`diagnose`**: one table stands out in `ets_tables`,
+`yaws_session_server`, 15.6 MB in 3,680 rows; nothing else is out of the
+ordinary. **`yaws`**, for 5 seconds:
+
+```json
+{"status": "warning",
+ "findings": [
+   "warning: 4490 cookie sessions (19.1 MB), 50.2 new a second, and 100% of a sample were never used again after the request that started them: a new session for each request (clients that don't send the cookie back, or code that starts a session without looking for one first). Each is kept for its ttl (1800 s), and until the hourly sweep (session_long_timeout 3600000 ms) once expired"],
+ "sessions": {"count": 4490, "memory_bytes": 19074760, "new_per_s": 50.2,
+              "sampled": 2000, "used_once": 2000, "expired_still_kept": 0,
+              "ttl_seconds": [1800]},
+ "config": {"max_connections": "nolimit", "keepalive_timeout": 30000,
+            "session_idle_timeout": 120000, "session_long_timeout": 3600000, ...}}
+```
+
+**`ets_table`** on `yaws_session_server` agreed: 4,500 rows, owned by
+the session server. A **`snapshot`**, a minute's wait, a diff: ETS up
+about 0.24 MB a second, everything else flat. **`module_code`** for the
+appmod, `shop_api:out/1`:
+
+```erlang
+"cart" ->
+    Cookie = yaws_api:new_cookie_session(#{cart => [],
+                                           recommendations => recommendations()}),
+    [{content, "application/json", <<"{\"cart\":[]}">>},
+     yaws_api:set_cookie("shop_session", Cookie, [{path, "/"}])];
+```
+
+**The answer.** Every `GET /api/cart` starts a new session, without
+looking for the one the request may carry, and the app's clients never
+send the cookie back anyway. Each session holds a copy of the
+recommendations, about 4 KB, and lives for 30 minutes; expired ones go
+only at the hourly sweep. At 50 a second, the table can't level off for
+30 to 90 minutes: some 90,000 to 270,000 sessions, 0.4 to 1.1 GB.
+
+**Fixes.**
+
+- **Reuse the request's session:** `yaws_api:find_cookie_val/2` on the
+  request's cookies and `yaws_api:cookieval_to_opaque/1`, and start one
+  only when there's none; for clients that keep no cookies, don't start
+  one at all.
+- **Keep shared data out of sessions:** the recommendations are the same
+  for everyone; compute them per request, or keep one copy in ETS or
+  `persistent_term`.
+- **Shorter lives:** a shorter ttl in `new_cookie_session/2`, and a
+  shorter `ysession_long_timeout`, so expired sessions go sooner.
+
+---
+
 ## Cleaning up
 
 ```sh

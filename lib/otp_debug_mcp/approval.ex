@@ -197,6 +197,9 @@ defmodule OtpDebugMcp.Approval do
       {:changes,
        "Reads the node's Cowboy (Ranch) listeners, connections and requests, and attaches a telemetry handler for the window."}
 
+  def step("yaws", _),
+    do: {:read, "Reads the node's Yaws servers, their acceptors and its cookie sessions."}
+
   def step("riak_core", %{crdts: true}),
     do:
       {:changes,

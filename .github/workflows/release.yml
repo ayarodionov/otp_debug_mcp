@@ -32,7 +32,7 @@ jobs:
         with:
           otp-version: "28"
           elixir-version: "1.19"
-      - run: mix deps.get
+      - run: mix deps.get --only prod
       - run: mix release
 
       - name: Smoke test the release

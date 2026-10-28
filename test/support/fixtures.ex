@@ -875,7 +875,18 @@ defmodule OtpDebugMcp.Fixtures.CowboyShop do
     {:ok, :cowboy_req.reply(200, %{}, "ok", req), state}
   end
 
-  def clients(port, n, path) do
+  def clients(port, n, path), do: OtpDebugMcp.Fixtures.HttpClients.start(port, n, path)
+end
+
+defmodule OtpDebugMcp.Fixtures.HttpClients do
+  @moduledoc """
+  `start/3` keeps `n` clients requesting a path, each on a keep-alive
+  connection, paced, and on a new connection when the server closes
+  theirs (Cowboy, after max_keepalive requests, answers connection: close
+  and reads no more). They send no cookies.
+  """
+
+  def start(port, n, path) do
     for _ <- 1..n, do: spawn(fn -> client(port, path) end)
     :ok
   end
@@ -890,17 +901,60 @@ defmodule OtpDebugMcp.Fixtures.CowboyShop do
     client(port, path)
   end
 
-  # Paced, and on a new connection when Cowboy closes this one: after
-  # max_keepalive requests it answers with connection: close, and reads
-  # no more.
   defp requests(socket, path) do
     with :ok <- :gen_tcp.send(socket, "GET #{path} HTTP/1.1\r\nhost: shop\r\n\r\n"),
          {:ok, answer} <- :gen_tcp.recv(socket, 0, 10_000),
-         false <- String.contains?(answer, "connection: close") do
+         false <- answer |> String.downcase() |> String.contains?("connection: close") do
       Process.sleep(10)
       requests(socket, path)
     else
       _ -> :gen_tcp.close(socket)
     end
   end
+end
+
+defmodule OtpDebugMcp.Fixtures.YawsShop do
+  @moduledoc """
+  Yaws, embedded, serving this appmod: `/` answers at once, `/slow` after
+  `slow_ms`, `/boom` raises, `/session` starts a new cookie session on
+  every request. `start/2` takes global options (max_connections...) and
+  returns the port; `clients/3` keeps clients requesting a path.
+  """
+
+  def start(gconf, slow_ms) do
+    :persistent_term.put({__MODULE__, :slow_ms}, slow_ms)
+    dir = Path.join(System.tmp_dir!(), "otpdbg_yaws_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+
+    :ok =
+      :yaws.start_embedded(
+        String.to_charlist(dir),
+        [port: 0, listen: {127, 0, 0, 1}, servername: ~c"shop", appmods: [{~c"/", __MODULE__}]],
+        [logdir: String.to_charlist(dir), id: ~c"shop"] ++ gconf,
+        ~c"shop"
+      )
+
+    {:ok, _gc, [[sc | _] | _]} = :yaws_api.getconf()
+    :yaws_server.listen_port(sc)
+  end
+
+  def out(arg) do
+    case :yaws_api.arg_server_path(arg) do
+      ~c"/slow" ->
+        Process.sleep(:persistent_term.get({__MODULE__, :slow_ms}))
+        {:html, "ok"}
+
+      ~c"/boom" ->
+        raise "boom"
+
+      ~c"/session" ->
+        cookie = :yaws_api.new_cookie_session(%{cart: []})
+        [{:html, "ok"}, :yaws_api.set_cookie(~c"shop", cookie, [])]
+
+      _ ->
+        {:html, "ok"}
+    end
+  end
+
+  def clients(port, n, path), do: OtpDebugMcp.Fixtures.HttpClients.start(port, n, path)
 end

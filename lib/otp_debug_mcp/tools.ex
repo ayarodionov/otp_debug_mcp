@@ -642,6 +642,40 @@ defmodule OtpDebugMcp.Tools do
     end
   end
 
+  defmodule Yaws do
+    @moduledoc """
+    The node's Yaws web servers: for each address and port, its virtual
+    servers and appmods, its connections against max_connections (past
+    which Yaws closes new connections at once), what its acceptor
+    processes are doing (accepting, pooled, waiting for a keep-alive
+    request, handling one, which runs out/1), the requests in flight
+    grouped by where they wait and those still running at the end of the
+    window; and the cookie sessions in its ETS table: how many, how fast
+    they grow, how many were never used again (a session per request),
+    and expired ones still kept until the hourly sweep. Findings come
+    first, worst first. Read-only.
+    """
+    use Anubis.Server.Component, type: :tool
+    use OtpDebugMcp.Approval
+
+    alias OtpDebugMcp.Tools
+
+    schema do
+      field(:duration_ms, :integer,
+        description: "How long between the two samples (default 3000, max 30000)"
+      )
+    end
+
+    def perform(params, frame) do
+      duration = (params[:duration_ms] || 3_000) |> min(30_000) |> max(500)
+
+      case OtpDebugMcp.Yaws.report(duration) do
+        {:ok, report} -> Tools.json_response(frame, report)
+        {:error, reason} -> Tools.error_response(frame, reason)
+      end
+    end
+  end
+
   defmodule RiakCore do
     @moduledoc """
     A riak_core cluster (Riak KV, riak_core_lite, and systems built on

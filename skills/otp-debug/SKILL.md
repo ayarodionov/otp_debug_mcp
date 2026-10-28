@@ -78,11 +78,13 @@ raw introspection when a purpose-built tool exists.
      the pool is exhausted.
    - A web service whose clients get connection resets, or wait before
      the first byte, while request times look fine → `bandit` (Phoenix,
-     Bandit) or `cowboy` (Cowboy, including Phoenix on plug_cowboy): the
+     Bandit), `cowboy` (Cowboy, including Phoenix on plug_cowboy) or `yaws`: the
      connection limit and how full it is, acceptors waiting for room,
      what the busy connections or requests wait in, and connections
      refused at the limit (neither Thousand Island nor Ranch logs any of
-     this). Ranch caps each connection supervisor, not the listener.
+     this). Ranch caps each connection supervisor, not the listener. On
+     Yaws, memory growing under steady traffic → `yaws`: cookie sessions
+     started on every request pile up for an hour or more.
    - A riak_core cluster (Riak KV, riak_core_lite) slow or losing
      requests → `riak_core` from any member: members down or unreachable,
      fallbacks, ownership changes stuck awaiting handoff, and the

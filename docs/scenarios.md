@@ -72,7 +72,7 @@ category that's large:
 | `processes`, with one huge mailbox | a process that can't keep up | `message_queues`, `process_info` |
 | `processes`, with process count rising | spawned processes that never exit | `process_count`, `supervision_tree` child counts |
 | `binary` | refc binaries held by long-lived processes | `binary_leak` |
-| `ets` | a table without eviction | `ets_tables`, then `ets_table` for what's in it |
+| `ets` | a table without eviction | `ets_tables`, then `ets_table` for what's in it; `yaws` when it's Yaws's cookie sessions |
 | `atom` | atoms created from input | `atom_table` |
 | nothing: the OS sees far more than `erlang:memory()` reports | allocator fragmentation: carriers kept alive by a few live blocks | `allocator_fragmentation` |
 
@@ -89,6 +89,7 @@ That's cheap, but say so if the node is under pressure.
 examples/elixir/run.sh shop        # a mailbox that never drains
 examples/erlang/run.sh sessions    # atoms and ETS rows piling up
 examples/books/run.sh slice        # small slices pinning large binaries
+examples/elixir/run.sh yaws        # a Yaws API starting a session on every request
 ```
 
 > `shop_ex@yourhost` is getting slower and using more memory; find out why.
@@ -705,9 +706,10 @@ Walkthrough 17.
 
 ### 15. A web server refusing or stalling connections
 
-**Situation.** Some clients of a Phoenix, Bandit or Cowboy service get
-their connections reset, or wait seconds before the first byte, while
-the request times the server reports look fine and nothing is logged.
+**Situation.** Some clients of a Phoenix, Bandit, Cowboy or Yaws
+service get their connections reset, or wait seconds before the first
+byte, while the request times the server reports look fine and nothing
+is logged; or the server's memory keeps growing under steady traffic.
 
 > Some clients of `shop@web-2` get their connections reset, or wait
 > seconds before the first byte, but the request times Bandit reports
@@ -739,6 +741,17 @@ handler crashes and early errors. Against the Cowboy demo
 report request waiting on one gen_server, and the acceptors blocked
 (walkthrough 21).
 
+`yaws` does it for Yaws: each listening server's virtual servers and
+appmods, its connections against `max_connections`, what its acceptor
+processes are doing (Yaws handles each connection, and runs `out/1`, in
+one: accepting, pooled, waiting for a keep-alive request, or handling
+one), the requests in flight grouped by where they wait and those still
+running at the end of the window, and its cookie sessions: how many,
+how fast they grow, how many were never used again after the request
+that started them, and expired ones still kept. Against the Yaws demo
+(`examples/elixir/run.sh yaws`), it found a new session on every
+request (walkthrough 22).
+
 **Typical findings.** A connection limit set far below the default
 (16,384 per acceptor), slow requests holding connections (an upstream
 call, a pool checkout), idle keep-alives holding the rest for up to
@@ -751,7 +764,12 @@ limit is their product and one supervisor can fill before the listener
 does. At the cap Ranch refuses nothing: the acceptor waits, and new
 clients wait unaccepted in the listen backlog, with nothing logged. And
 Cowboy's `request_timeout` is the time to receive a request's headers,
-not a limit on the handler.
+not a limit on the handler. Yaws, past `max_connections` (no limit by
+default), closes each new connection as soon as it accepts it, and logs
+"Max connections reached". Its cookie sessions are kept for 30 minutes
+after their last use, and expired ones are removed only by an hourly
+sweep, so code that starts a session per request (or clients that don't
+send the cookie back) piles up an hour and a half of sessions.
 
 **Watch out.** Listening attaches a telemetry handler for the window,
 detached afterwards; nothing else is loaded. Connections are looked at
@@ -781,6 +799,17 @@ examples/elixir/run.sh cowboy
 
 It fetches Cowboy from Hex the first time, and serves port 8090.
 Walkthrough 21.
+
+```sh
+examples/elixir/run.sh yaws
+```
+
+> The memory of `yaws_ex@yourhost`, a Yaws API, keeps growing, though
+> its traffic is steady. Find out why.
+
+It fetches Yaws from GitHub the first time (it builds a PAM driver:
+`libpam0g-dev` on Debian and Ubuntu), and serves port 8095.
+Walkthrough 22.
 
 ### 16. A riak_core cluster in trouble
 

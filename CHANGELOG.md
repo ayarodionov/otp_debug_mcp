@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- `yaws`: the node's Yaws web servers: each listening server's virtual
+  servers and appmods, its connections against `max_connections` (past
+  which Yaws closes new connections at once), what its acceptor processes
+  are doing (accepting, pooled, waiting for a keep-alive request, or
+  handling one, which runs `out/1`), the requests in flight grouped by
+  where they wait and those still running at the end of the window; and
+  its cookie sessions: how many, how fast they grow, how many were never
+  used again after the request that started them, and expired ones kept
+  until the hourly sweep. A Yaws demo (`examples/elixir/run.sh yaws`),
+  scenarios 1 and 15, and walkthrough 22. Yaws is a test-only dependency,
+  fetched from GitHub; its build needs PAM headers.
+
 ## 0.9.0
 
 A tool for Cowboy web servers (`cowboy`), and a look at the riak_dt

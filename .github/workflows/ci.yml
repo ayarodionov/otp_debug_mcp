@@ -28,6 +28,8 @@ jobs:
             deps
             _build
           key: mix-test-${{ matrix.otp }}-${{ hashFiles('mix.lock') }}
+      # Yaws, a test dependency, compiles a PAM driver.
+      - run: sudo apt-get update && sudo apt-get install -y libpam0g-dev
       - run: mix deps.get
       - run: mix format --check-formatted
       - run: mix compile --warnings-as-errors
@@ -50,6 +52,8 @@ jobs:
             deps
             _build
           key: mix-test-28-${{ hashFiles('mix.lock') }}
+      # Yaws, a test dependency, compiles a PAM driver.
+      - run: sudo apt-get update && sudo apt-get install -y libpam0g-dev
       - run: mix deps.get
       - run: mix compile
       # Every node, the tests' and the peers' (through ERL_FLAGS), uses TLS.
@@ -74,6 +78,8 @@ jobs:
             deps
             _build
           key: mix-test-28-${{ hashFiles('mix.lock') }}
+      # Yaws, a test dependency, compiles a PAM driver.
+      - run: sudo apt-get update && sudo apt-get install -y libpam0g-dev
       - run: mix deps.get
       - run: mix compile
       # The target listens on a fixed distribution port, published from the
@@ -110,6 +116,8 @@ jobs:
             deps
             _build
           key: mix-test-28-${{ hashFiles('mix.lock') }}
+      # Yaws, a test dependency, compiles a PAM driver.
+      - run: sudo apt-get update && sudo apt-get install -y libpam0g-dev
       - run: mix deps.get
       - run: mix compile
       # A newer OTP than the tool's: its .beam files need its own disassembler.
@@ -146,7 +154,7 @@ jobs:
             deps
             _build
           key: mix-prod-28-${{ hashFiles('mix.lock') }}
-      - run: mix deps.get
+      - run: mix deps.get --only prod
       - run: mix release --overwrite
       - name: Smoke test against the Elixir demo node
         run: |
