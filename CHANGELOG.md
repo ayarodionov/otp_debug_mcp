@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.10.0
+
+A tool for Yaws web servers (`yaws`), with a demo, a scenario and a
+walkthrough.
 
 - `yaws`: the node's Yaws web servers: each listening server's virtual
   servers and appmods, its connections against `max_connections` (past
