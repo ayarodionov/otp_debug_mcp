@@ -1,6 +1,6 @@
 # Walkthroughs
 
-Twenty-eight debugging sessions against the demo nodes in `examples/`, start to
+Twenty-nine debugging sessions against the demo nodes in `examples/`, start to
 finish, for following along on your own machine. Each one gives the
 command that starts the demo, the prompt, every tool call the agent made
 with the part of its result that mattered, and the conclusion. The
@@ -46,7 +46,8 @@ Contents:
 26. [A Postgrex pool held through a payment call](#26-a-postgrex-pool-held-through-a-payment-call)
 27. [Profiling a slow function, and tuning it](#27-profiling-a-slow-function-and-tuning-it)
 28. [EMQX: a client that never acknowledges, and a client id shared](#28-emqx-a-client-that-never-acknowledges-and-a-client-id-shared)
-29. [Cleaning up](#cleaning-up)
+29. [ejabberd: a bot that reads slowly, an archive on Mnesia, a full offline queue](#29-ejabberd-a-bot-that-reads-slowly-an-archive-on-mnesia-a-full-offline-queue)
+30. [Cleaning up](#cleaning-up)
 
 ---
 
@@ -2511,6 +2512,90 @@ reconnect at once, about five times a second.
 
 ---
 
+## 29. ejabberd: a bot that reads slowly, an archive on Mnesia, a full offline queue
+
+```sh
+examples/ejabberd/run.sh start
+```
+
+ejabberd 26.09 runs in Docker as `ejabberd@localhost` (cookie
+`ejabberddemo`), with its default configuration and
+`examples/ejabberd/clients.py`. Five order services each send ten
+notifications a second to the logger bot `slowbot@localhost`, which
+reads its socket at 1 KB a second. They also send one a second to
+`support@localhost`, which nobody logs in as. The server was started
+with `ERL_FLAGS="-erl_epmd_port 5210"`, because the image listens for
+distribution on 5210 (its `ERL_DIST_PORT`) without epmd. The session ran
+ten minutes after the start.
+
+> Order notifications to our logger bot, slowbot@localhost, arrive late
+> or not at all, and ejabberd's memory keeps growing. Messages to
+> support@localhost go missing too. ejabberd is `ejabberd@localhost`.
+> Find out why.
+
+Only the otp-debug tools were allowed. The session took 47 seconds.
+
+**`connect`**, then **`diagnose`**: no mailbox over 1000, but
+`scheduler_time` warns that garbage collection takes half the
+schedulers' work. A dets process, `<0.606.0>`, is the busiest, and
+several c2s processes wait in `dets:req`. **`ejabberd`**, for 5 seconds:
+
+```json
+{"status": "critical",
+ "findings": [
+   "critical: 4 client connections are backed up; slowbot@localhost/app's c2s process has 16289 stanzas waiting, 28.5 more a second, in 22 MB: 16286 in the queue ejabberd's p1_server keeps on the heap (where it moves the mailbox, so the mailbox, 3, stays short). Its socket is closed (the client stopped reading, and ejabberd's send_timeout gave up on it), but the session is still open: the process is still working through what was queued for it, archiving each message (mod_mam) on the way. Everything sent to that session waits there, and the user gets it late or not at all",
+   "warning: support@localhost (100) has as many offline messages as max_user_offline_messages allows: every new message to that user is bounced back to its sender with an error and lost, until they log in and read the queue",
+   "warning: the message archive (mod_mam) is on Mnesia, in a disc_only_copies table (a dets file): archive_msg holds 45183 messages, 32 MB, 46.6 more a second, and one look at it took 106.1 ms. Every message delivered is archived by the recipient's c2s process before it goes on; 4 backed-up connections are waiting on it. Mnesia doesn't suit MAM beyond small servers (dets files are limited to 2 GB too); ejabberd's documentation recommends an SQL backend for it"],
+ "archive": {"backend": ":mnesia",
+             "table": {"name": "archive_msg", "storage": "disc_only_copies", "messages": 45183,
+                       "bytes": 32251110, "one_look_ms": 106.1},
+             "messages_archived_per_s": 46.6},
+ "backed_up_clients": [{"jid": "slowbot@localhost/app", "pid": "<0.895.0>", "queued": 16286, "mailbox": 3,
+                        "memory_bytes": 22450640, "socket_open": false, "waiting_growth_per_s": 28.5,
+                        "memory_growth_bytes_per_s": 1655929,
+                        "stack": ["dets:req/2", "dets:info/2", "mnesia:raw_table_info/2",
+                                  "mod_mam_mnesia:store/10", "mod_mam:store_mam_message/8", "..."]}],
+ "offline": {"messages": 100, "most": [{"user": "support@localhost", "messages": 100, "limit": 100, "full": true}]},
+ "sessions": {"users_online": 6}}
+```
+
+**`process_info`** on the dets process `<0.606.0>`: 9.2 billion
+reductions in ten minutes, in `dets:write_cache → read_buckets →
+dets_utils:msort`, a 19 MB heap. All six sessions' c2s processes are
+monitoring it.
+
+**The answer.** The message archive runs on Mnesia in a
+`disc_only_copies` table: one dets file, served by one process. Every
+c2s process archives each message before it delivers it, so every
+delivery waits on that process. One lookup on it took 106 ms, and it
+gets slower as the table grows. slowbot receives fifty messages a
+second, more than its process can archive and pass on. When the bot
+stopped keeping up with its reading, `send_timeout` closed its socket.
+The session stayed open, though, so ejabberd still routes everything for
+slowbot to that process, which queues it. The queue holds 16,000
+stanzas and 22 MB, and it grows by 28 a second and 1.6 MB a second.
+Each queued message is archived and then sent to a socket that's gone.
+Separately, support's offline queue is at its limit of 100, so every new
+message to that account bounces.
+
+**Fixes.**
+
+- **The archive:** use `mod_mam` with `db_type: sql`, as ejabberd's
+  documentation recommends for anything beyond a small server. Until
+  then, stop archiving the bot's messages, or prune the archive with
+  `ejabberdctl delete_old_mam_messages`. dets files also stop at 2 GB.
+- **slowbot:** kick the dead session (`ejabberdctl kick_session slowbot
+  localhost app stale`), which frees its queue. Then the bot needs to
+  keep reading its socket, and stream management (XEP-0198) lets it
+  resume cleanly.
+- **support:** someone has to log in and read the queue. Otherwise
+  raise its `max_user_offline_messages`, or let the support client fetch
+  its history from MAM.
+
+The agent changed nothing on the node, and offered to kick the session.
+
+---
+
 ## Cleaning up
 
 ```sh
@@ -2518,7 +2603,8 @@ examples/elixir/run.sh stop
 examples/erlang/run.sh stop
 ```
 
-stops every Elixir and Erlang demo node. The other languages' demos
+stops every Elixir and Erlang demo node, and `examples/emqx/run.sh stop`
+and `examples/ejabberd/run.sh stop` remove the Docker ones. The other languages' demos
 (`examples/erlang`, `examples/gleam`, `examples/lfe`) have the same
 bugs and more, each with its own `run.sh`; see the
 [demo targets](../README.md#demo-targets) table.

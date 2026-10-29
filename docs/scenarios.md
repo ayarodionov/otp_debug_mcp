@@ -1399,9 +1399,23 @@ in [production.md](production.md)). Against the EMQX demo
 acknowledges, its messages dropped, and two devices sharing one client id
 (walkthrough 28).
 
+For ejabberd, the XMPP server, `ejabberd` reads its sessions, the c2s
+process behind each client connection, mod_offline's queues and the
+message archive. A connection backs up in memory rather than in its
+mailbox, since ejabberd's p1_server moves the mailbox onto the heap; the
+tool shows each one's growth, whether its socket is still open, and what
+it's doing. It compares each offline queue with the user's
+`max_user_offline_messages` (past it, messages bounce), and, with the
+archive (mod_mam) on Mnesia, times a look at its dets table, which every
+delivery waits on. The ejabberd image listens for distribution on its
+`ERL_DIST_PORT`, without epmd, as EMQX does. Against the ejabberd demo
+(`examples/ejabberd/run.sh start`), it found a logger bot whose
+connection held a growing queue, the archive slowing every delivery, and
+a support account whose queue was full (walkthrough 29).
+
 **Watch out.** You won't have the source in the session, so findings stop at
-"this process, in this function." (For EMQX, the findings are about
-clients and configuration, where the fixes usually are.) Products often have their own diagnostics
+"this process, in this function." (For EMQX and ejabberd, the findings are
+about clients and configuration, where the fixes usually are.) Products often have their own diagnostics
 too, such as RabbitMQ's `rabbitmq-diagnostics`; use both. Locate the cookie
 with care: it grants full control of the node.
 
@@ -1411,6 +1425,7 @@ with care: it grants full control of the node.
 examples/gleam/run.sh shop        # needs Gleam
 examples/lfe/run.sh shop          # needs LFE
 examples/emqx/run.sh start        # EMQX in Docker, and misbehaving MQTT clients
+examples/ejabberd/run.sh start    # ejabberd in Docker, and XMPP clients
 ```
 
 > `shop_gleam@yourhost` is getting slower and using more memory; find out why.
@@ -1419,10 +1434,16 @@ examples/emqx/run.sh start        # EMQX in Docker, and misbehaving MQTT clients
 > device `sensor-7` keeps going offline. EMQX is `emqx@127.0.0.1`.
 > Find out why.
 
+> Order notifications to our logger bot, slowbot@localhost, arrive late
+> or not at all, and ejabberd's memory keeps growing. Messages to
+> support@localhost go missing too. ejabberd is `ejabberd@localhost`.
+> Find out why.
+
 The Gleam and LFE demos are BEAM code from other languages, debugged the
-same way; the EMQX demo is a third-party product, in Docker (see
-[examples/emqx](../examples/emqx) for registering a server for it).
-Walkthrough 28.
+same way; the EMQX and ejabberd demos are third-party products, in
+Docker (see [examples/emqx](../examples/emqx) and
+[examples/ejabberd](../examples/ejabberd) for registering a server for
+each). Walkthroughs 28 and 29.
 
 ### 27. Your own node during development
 

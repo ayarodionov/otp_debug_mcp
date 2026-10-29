@@ -1080,6 +1080,41 @@ defmodule OtpDebugMcp.Tools do
     end
   end
 
+  defmodule Ejabberd do
+    @moduledoc """
+    ejabberd, the XMPP server, from a node of its cluster, sampled at the
+    start and the end of a window: version, hosts, database, cluster
+    nodes running and down; users online by host; client connections
+    (c2s) backed up, with their JID, the stanzas waiting (in p1_server's
+    queue on the heap, as the mailbox stays short) and their growth,
+    memory, whether the socket's still open, and what the process is
+    doing; the users with the most offline messages against their limit
+    (past it, new ones bounce); the message archive (mod_mam), on Mnesia
+    with how slow its table is; MUC rooms and ejabberd's own processes
+    with long mailboxes; server-to-server connections. Findings come
+    first, worst first. Read-only.
+    """
+    use Anubis.Server.Component, type: :tool
+    use OtpDebugMcp.Approval
+
+    alias OtpDebugMcp.Tools
+
+    schema do
+      field(:duration_ms, :integer,
+        description: "How long between the two samples (default 5000, max 30000)"
+      )
+    end
+
+    def perform(params, frame) do
+      duration = (params[:duration_ms] || 5_000) |> min(30_000) |> max(500)
+
+      case OtpDebugMcp.Ejabberd.report(duration) do
+        {:ok, report} -> Tools.json_response(frame, report)
+        {:error, reason} -> Tools.error_response(frame, reason)
+      end
+    end
+  end
+
   defmodule Emqx do
     @moduledoc """
     EMQX, the MQTT broker, from a node of its cluster, sampled at the

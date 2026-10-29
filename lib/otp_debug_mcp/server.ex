@@ -31,6 +31,7 @@ defmodule OtpDebugMcp.Server do
   component(Tools.HotSpots)
   component(Tools.Benchmark)
   component(Tools.Emqx)
+  component(Tools.Ejabberd)
   component(Tools.RiakCore)
   component(Tools.ProcessInfo)
   component(Tools.PortInfo)

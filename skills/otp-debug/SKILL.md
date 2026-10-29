@@ -94,6 +94,13 @@ raw introspection when a purpose-built tool exists.
      unacknowledged, queues full, drops), client ids kicking each other
      off, its alarms, auth failures, rules and actions failing. EMQX 5
      needs the server started with ERL_FLAGS="-erl_epmd_port 4370".
+   - ejabberd (XMPP server) problems: messages late or lost, memory
+     growing, users not getting messages → `ejabberd`: client
+     connections backed up (by memory: ejabberd queues on the heap, not
+     in the mailbox), whether their socket is still open, offline queues
+     full and bouncing, the message archive on Mnesia (dets) slowing
+     every delivery. The Docker image needs the server started with
+     ERL_FLAGS="-erl_epmd_port 5210" (its ERL_DIST_PORT).
    - Making code faster, or a busy node's CPU → `hot_spots` first (a
      sampling profiler: own time, the first frame of your code, GC share),
      then `profile` on that module, then `benchmark` the function: with a

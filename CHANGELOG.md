@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- `ejabberd`: ejabberd, the XMPP server, through its own APIs and tables,
+  sampled a window apart: version, hosts, database, cluster nodes running
+  and down; users online by host; client connections (c2s processes)
+  backed up, by memory as well as mailbox (ejabberd's p1_server moves the
+  mailbox onto the heap), with their growth, whether their socket is
+  still open and what they're doing; users with the most offline
+  messages against their `max_user_offline_messages` (past it, messages
+  bounce); the message archive (mod_mam), on Mnesia its dets table's
+  size and how long one look at it takes; MUC rooms and ejabberd's own
+  processes with long mailboxes; s2s connections. An ejabberd demo
+  (`examples/ejabberd`, ejabberd in Docker and XMPP clients), scenario
+  26, and walkthrough 29. Tests against an ejabberd node in Docker, in
+  CI's new ejabberd target job.
 - `emqx`: EMQX, the MQTT broker, through its own APIs and tables: version,
   cluster, overload protection, its active alarms, listeners and how full
   they are, clients and sessions; its counters over a window (messages
