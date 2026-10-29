@@ -1232,3 +1232,73 @@ defmodule OtpDebugMcp.Fixtures.MnesiaShop do
   def overload,
     do: :mnesia_lib.report_system_event({:mnesia_overload, {:dump_log, :write_threshold}})
 end
+
+defmodule OtpDebugMcp.Fixtures.PgShop do
+  @moduledoc """
+  A Postgrex pool, :shop_db, and a stock table with one row. `writers/2`
+  keep processes in transactions that update the row and hold their
+  connection `hold_ms` before committing; `readers/1` keep processes
+  reading it.
+  """
+
+  def start(opts, pool_size) do
+    parent = self()
+
+    spawn(fn ->
+      {:ok, _} = Postgrex.start_link(opts ++ [name: :shop_db, pool_size: pool_size])
+      send(parent, :started)
+      Process.sleep(:infinity)
+    end)
+
+    receive do
+      :started -> :ok
+    end
+
+    Postgrex.query!(
+      :shop_db,
+      "CREATE TABLE IF NOT EXISTS stock (item int PRIMARY KEY, n int)",
+      []
+    )
+
+    Postgrex.query!(:shop_db, "INSERT INTO stock VALUES (1, 1000000) ON CONFLICT DO NOTHING", [])
+    :ok
+  end
+
+  def writers(n, hold_ms) do
+    for _ <- 1..n, do: spawn(fn -> write(hold_ms) end)
+    :ok
+  end
+
+  defp write(hold_ms) do
+    try do
+      Postgrex.transaction(:shop_db, fn conn -> sell(conn, hold_ms) end)
+    rescue
+      _ -> :error
+    end
+
+    write(hold_ms)
+  end
+
+  def sell(conn, hold_ms) do
+    Postgrex.query!(conn, "UPDATE stock SET n = n - 1 WHERE item = 1", [])
+    # Slow work, holding the connection and the row's lock.
+    Process.sleep(hold_ms)
+    :ok
+  end
+
+  def readers(n) do
+    for _ <- 1..n, do: spawn(fn -> read() end)
+    :ok
+  end
+
+  defp read do
+    try do
+      Postgrex.query(:shop_db, "SELECT n FROM stock WHERE item = 1", [])
+    rescue
+      _ -> :error
+    end
+
+    Process.sleep(10)
+    read()
+  end
+end

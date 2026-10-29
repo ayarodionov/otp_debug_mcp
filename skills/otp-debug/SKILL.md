@@ -89,6 +89,11 @@ raw introspection when a purpose-built tool exists.
      CPU creeping up in an app that attaches handlers at run time →
      `telemetry_handlers`: handlers too slow for the processes that emit
      their events, handlers detached after raising, handlers piling up.
+   - Queries slow, or failing with "connection not available and request
+     was dropped from queue", on PostgreSQL (Postgrex, Ecto) → `postgrex`:
+     the pool exhausted, who holds its connections and where (slow work
+     inside a transaction), callers waiting; `server: true` for backends
+     idle in a transaction and lock waits on the server.
    - Mnesia transactions slow, aborting or restarting, a table that
      can't be read, or a cluster that split → `mnesia`: the records
      waited for and where their lock holders are, restarts against

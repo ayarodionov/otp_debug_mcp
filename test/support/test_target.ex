@@ -40,10 +40,14 @@ defmodule OtpDebugMcp.TestTarget do
     OtpDebugMcp.Fixtures.ShackleShop,
     OtpDebugMcp.Fixtures.TelemetryShop,
     OtpDebugMcp.Fixtures.MnesiaShop,
+    OtpDebugMcp.Fixtures.PgShop,
     OtpDebugMcp.Fixtures.RiakShop
   ]
 
   defstruct [:peer, :node, :cookie, :name, :opts]
+
+  # Postgrex and what it runs on, for `postgrex: true`.
+  @postgrex_apps [:postgrex, :db_connection, :decimal, :telemetry]
 
   # shackle and what it runs on, for `shackle: true`.
   @shackle_apps [:shackle, :knot, :metal, :foil, :telemetry]
@@ -68,7 +72,7 @@ defmodule OtpDebugMcp.TestTarget do
   Start a target node. Options: `:name`, `:cookie`, `longnames: true` (as
   `name@127.0.0.1`), `:env` (environment variables, as `{name, value}`),
   `telemetry: true` (the telemetry application started), `bandit: true`
-  (Bandit and what it needs started), `cowboy: true` (Cowboy and cowboy_telemetry started), `yaws: true` (Yaws on the code path, to start embedded), `shackle: true` (shackle started), `riak: true` (riak_core started, alone), `recon: true`
+  (Bandit and what it needs started), `cowboy: true` (Cowboy and cowboy_telemetry started), `yaws: true` (Yaws on the code path, to start embedded), `shackle: true` (shackle started), `postgrex: true` (Postgrex started), `riak: true` (riak_core started, alone), `recon: true`
   (recon application loaded, as in a
   release that depends on it), `:args` (more VM flags, as charlists),
   `erlang: true` (the Elixir application isn't started, so the node looks
@@ -91,6 +95,7 @@ defmodule OtpDebugMcp.TestTarget do
         if(opts[:cowboy], do: Enum.map(@cowboy_apps, &lib_ebin/1), else: []) ++
         if(opts[:yaws], do: [lib_ebin(:yaws)], else: []) ++
         if(opts[:shackle], do: Enum.map(@shackle_apps, &lib_ebin/1), else: []) ++
+        if(opts[:postgrex], do: Enum.map(@postgrex_apps, &lib_ebin/1), else: []) ++
         if(opts[:riak], do: Enum.map([:riak_core, :poolboy, :riak_dt], &lib_ebin/1), else: [])
 
     peer_opts = %{
@@ -123,6 +128,9 @@ defmodule OtpDebugMcp.TestTarget do
 
     if opts[:bandit],
       do: {:ok, _} = call(target, :application, :ensure_all_started, [:bandit])
+
+    if opts[:postgrex],
+      do: {:ok, _} = call(target, :application, :ensure_all_started, [:postgrex])
 
     if opts[:shackle],
       do: {:ok, _} = call(target, :application, :ensure_all_started, [:shackle])

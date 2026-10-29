@@ -27,6 +27,7 @@ defmodule OtpDebugMcp.Server do
   component(Tools.Shackle)
   component(Tools.TelemetryHandlers)
   component(Tools.Mnesia)
+  component(Tools.Postgrex)
   component(Tools.RiakCore)
   component(Tools.ProcessInfo)
   component(Tools.PortInfo)

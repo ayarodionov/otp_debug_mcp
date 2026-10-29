@@ -127,6 +127,20 @@ On a Phoenix or Bandit node whose clients get connection resets or wait
 before the first byte, `bandit` shows whether the server is at its
 connection limit and what holds the connections (scenario 15).
 
+When requests wait on the database, `postgrex` shows why from the
+pool's side: each Postgrex pool (an Ecto repo's too), its connections up
+or reconnecting, idle or checked out, who holds each checked-out one,
+where in their code, and whether in a transaction while doing something
+else, and the callers waiting for a connection, how long and from where.
+All of it is read from DBConnection's own tables, without asking the
+pool anything. With `server: true` it also reads `pg_stat_activity`
+through a short-lived connection of the pool's own options: backends idle
+in a transaction, and queries waiting for a lock another backend holds,
+each matched to the pool's connection and the caller holding it. Against
+the Postgrex demo (`examples/elixir/run.sh postgrex`), it found product
+pages waiting for connections that checkouts held through a payment call
+(walkthrough 26).
+
 Telemetry itself can be the cause. A handler runs in the process that
 emits the event, inside `telemetry:execute`, so every request waits for
 every handler attached to its events. `telemetry_handlers` lists the
@@ -147,7 +161,10 @@ a single DB connection, the owner of an ETS table doing all writes), or
 fire-and-forget casts with no backpressure. From `telemetry`: one route or
 query far slower than the rest, a p95 far above the p50 (some calls wait
 on something), queries waiting on the pool (`queue_time_ms`), or one
-request running many fast queries. From `telemetry_handlers`: a handler
+request running many fast queries. From `postgrex`: a pool exhausted by
+connections held through slow work in a transaction (a call out, inside
+`Repo.transaction`), and the rows those transactions wrote, locked for
+everyone meanwhile. From `telemetry_handlers`: a handler
 that calls a busy process (a metrics reporter behind a `GenServer.call`),
 handlers piling up, or metrics that stopped because their handler raised
 once and was detached.
@@ -158,6 +175,7 @@ once and was detached.
 examples/elixir/run.sh shop
 examples/elixir/run.sh phoenix
 examples/elixir/run.sh telemetry
+examples/elixir/run.sh postgrex
 ```
 
 > `shop_ex@yourhost` is getting slower and using more memory; find out why.
@@ -169,7 +187,14 @@ examples/elixir/run.sh telemetry
 > slower the longer the shop runs, and its CPU use creeps up. Find out
 > why.
 
-Walkthroughs 1, 12 and 24.
+> Product pages on `postgrex_ex@yourhost` (`Shop.Catalog.show/1`) are
+> slow now and then, and some fail with "connection not available and
+> request was dropped from queue", though their query takes a
+> millisecond. Find out why.
+
+The Postgrex demo runs its own PostgreSQL (`initdb` and `pg_ctl` on the
+PATH), created in `examples/elixir/postgrex_shop/pgdata` and listening on
+127.0.0.1:5544; `run.sh stop` stops it. Walkthroughs 1, 12, 24 and 26.
 
 ### 3. High CPU
 

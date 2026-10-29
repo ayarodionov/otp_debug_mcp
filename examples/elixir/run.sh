@@ -12,6 +12,7 @@
 #     examples/elixir/run.sh yaws        # yaws_ex: a Yaws API whose memory keeps growing
 #     examples/elixir/run.sh shackle     # shackle_ex: price lookups through a shackle pool fail now and then
 #     examples/elixir/run.sh telemetry   # telemetry_ex: checkout slower the longer it runs, from its telemetry handlers
+#     examples/elixir/run.sh postgrex    # postgrex_ex: product pages slow or failing, on PostgreSQL through Postgrex
 #     examples/elixir/run.sh riak        # riak_a, riak_b, riak_c: a riak_core cluster, one member down, one vnode swamped
 #     examples/elixir/run.sh wishlist    # riak_a, riak_b: riak_core wishlists, riak_dt sets that keep growing
 #     examples/elixir/run.sh stop        # stop them all
@@ -24,6 +25,16 @@ set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 host=$(hostname -s)
 release="$here/demo_shop/_build/prod/rel/demo_shop"
+pgdata="$here/postgrex_shop/pgdata"
+
+# pg_ctl ARGS...: PostgreSQL's, from the PATH or where Debian and Ubuntu put it.
+pg() {
+  tool=$1
+  shift
+  bin=$(command -v "$tool" || ls /usr/lib/postgresql/*/bin/"$tool" 2>/dev/null | tail -1)
+  [ -n "$bin" ] || { echo "PostgreSQL's $tool not found: install PostgreSQL" >&2; exit 1; }
+  "$bin" "$@"
+}
 
 # start NAME ARGS...: a background elixir node, once it's registered.
 start() {
@@ -87,6 +98,17 @@ case "${1:-}" in
     (cd "$here/telemetry_shop" && mix deps.get --quiet && mix compile --quiet &&
       start telemetry_ex -S mix run --no-halt -e "Shop.Application.traffic()")
     ;;
+  postgrex)
+    # A Mix project: fetches Postgrex from Hex the first time. Its own
+    # PostgreSQL, created the first time in postgrex_shop/pgdata, listens
+    # on 127.0.0.1:5544.
+    [ -d "$pgdata" ] || pg initdb -D "$pgdata" -U postgres -A trust --no-sync >/dev/null
+    pg pg_ctl -D "$pgdata" status >/dev/null 2>&1 ||
+      pg pg_ctl -D "$pgdata" -w -l "$pgdata/log" \
+        -o "-p 5544 -k $pgdata -c listen_addresses=127.0.0.1" start >/dev/null
+    (cd "$here/postgrex_shop" && mix deps.get --quiet && mix compile --quiet &&
+      start postgrex_ex -S mix run --no-halt -e "Shop.Application.traffic()")
+    ;;
   riak)
     # A Mix project on riak_core_lite, fetched from Hex the first time.
     # Three nodes form a cluster; then riak_c goes down, and the traffic,
@@ -122,12 +144,13 @@ case "${1:-}" in
     ;;
   stop)
     elixir --sname "stopper_$$" -e "
-      for n <- ~w(shop_ex payments_ex billing_ex phoenix_ex bandit_ex cowboy_ex yaws_ex shackle_ex telemetry_ex riak_a riak_b riak_c ex_a ex_b ex_c),
+      for n <- ~w(shop_ex payments_ex billing_ex phoenix_ex bandit_ex cowboy_ex yaws_ex shackle_ex telemetry_ex postgrex_ex riak_a riak_b riak_c ex_a ex_b ex_c),
           do: :rpc.call(:\"#{n}@$host\", :init, :stop, [], 2000)"
     if [ -x "$release/bin/demo_shop" ]; then "$release/bin/demo_shop" stop 2>/dev/null || true; fi
+    if [ -d "$pgdata" ]; then pg pg_ctl -D "$pgdata" -m fast stop >/dev/null 2>&1 || true; fi
     ;;
   *)
-    echo "usage: $0 shop|payments|cluster|release|billing|phoenix|bandit|cowboy|yaws|shackle|telemetry|riak|wishlist|stop" >&2
+    echo "usage: $0 shop|payments|cluster|release|billing|phoenix|bandit|cowboy|yaws|shackle|telemetry|postgrex|riak|wishlist|stop" >&2
     exit 1
     ;;
 esac

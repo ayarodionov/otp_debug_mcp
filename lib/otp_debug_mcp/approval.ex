@@ -197,6 +197,14 @@ defmodule OtpDebugMcp.Approval do
       {:changes,
        "Reads the node's Cowboy (Ranch) listeners, connections and requests, and attaches a telemetry handler for the window."}
 
+  def step("postgrex", %{server: true}),
+    do:
+      {:changes,
+       "Reads the node's Postgrex pools, and opens a connection of its own to the database (with the pool's options) to read pg_stat_activity and lock waits, then closes it."}
+
+  def step("postgrex", _),
+    do: {:read, "Reads the node's Postgrex pools: their connections and the callers waiting."}
+
   def step("mnesia", _),
     do:
       {:changes,

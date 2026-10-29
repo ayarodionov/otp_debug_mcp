@@ -1,6 +1,6 @@
 # Walkthroughs
 
-Twenty-five debugging sessions against the demo nodes in `examples/`, start to
+Twenty-six debugging sessions against the demo nodes in `examples/`, start to
 finish, for following along on your own machine. Each one gives the
 command that starts the demo, the prompt, every tool call the agent made
 with the part of its result that mattered, and the conclusion. The
@@ -43,7 +43,8 @@ Contents:
 23. [A shackle pool with one connection held up](#23-a-shackle-pool-with-one-connection-held-up)
 24. [Telemetry handlers attached per checkout](#24-telemetry-handlers-attached-per-checkout)
 25. [Mnesia transactions waiting on one record](#25-mnesia-transactions-waiting-on-one-record)
-26. [Cleaning up](#cleaning-up)
+26. [A Postgrex pool held through a payment call](#26-a-postgrex-pool-held-through-a-payment-call)
+27. [Cleaning up](#cleaning-up)
 
 ---
 
@@ -2271,6 +2272,93 @@ others, often more than once, up to a second.
 - **No global counter in every order:** `mnesia:dirty_update_counter/3`
   on the stats after the transaction, or the stats read and written last
   in it, so its lock is held for microseconds.
+
+---
+
+## 26. A Postgrex pool held through a payment call
+
+```sh
+examples/elixir/run.sh postgrex
+```
+
+`postgrex_ex` runs a shop on PostgreSQL through a Postgrex pool of 5,
+`:shop_db` (`examples/elixir/postgrex_shop`; `run.sh` starts its own
+PostgreSQL on 127.0.0.1:5544). 8 buyers check out and 20 shoppers view
+products.
+
+> Product pages on `postgrex_ex@yourhost` (`Shop.Catalog.show/1`) are
+> slow now and then, and some fail with "connection not available and
+> request was dropped from queue", though their query takes a
+> millisecond. Find out why.
+
+Only the otp-debug tools were allowed. The session took 35 seconds.
+
+**`connect`**, then **`diagnose`**: every check `ok`, though 23
+processes wait in `DBConnection.Holder.checkout_call`. **`postgrex`**,
+for 3 seconds, with `server: true`:
+
+```json
+{"status": "critical",
+ "findings": [
+   "critical: pool :shop_db (postgres on 127.0.0.1:5544): 23 callers waiting for a connection, the longest 492 ms, with all 5 up checked out; they wait in Shop.Catalog.show/1, now in DBConnection.Holder.checkout_call/5 (20). Past queue_target (50 ms) for a whole queue_interval (1000 ms), DBConnection drops queued checkouts: \"connection not available and request was dropped from queue\"",
+   "warning: pool :shop_db (postgres on 127.0.0.1:5544): connections were held by the same caller through the whole 3010 ms, most in Shop.Checkout.place/1, now in prim_inet:recv0/3 (2): a connection is held for a whole transaction, and nobody else can use it meanwhile",
+   "warning: pool :shop_db (postgres on 127.0.0.1:5544): 1 checked-out connections are in a transaction while their callers do something else (Shop.Payments.charge/1, now in Process.sleep/1): the rows they wrote stay locked on the server meanwhile",
+   "warning: on the server, backend 25500 (held by <0.212.0> in Shop.Checkout.place/1, now in prim_inet:recv0/3) waits (Lock/transactionid) for a lock held by backend 25498 (held by <0.213.0> in Shop.Checkout.place/1, now in prim_inet:recv0/3): UPDATE products SET stock = stock - $1 WHERE id = $2",
+   ...],
+ "pools": [{"pool": ":shop_db", "pool_size": 5,
+            "connections": {"up": 5, "idle": 0, "checked_out": 5, "down": 0},
+            "callers_waiting": 23, "longest_wait_ms": 492,
+            "waiting_in": ["Shop.Catalog.show/1, now in DBConnection.Holder.checkout_call/5 (20)",
+                           "Shop.Checkout.place/1, now in DBConnection.Holder.checkout_call/5 (3)"],
+            "checked_out": [
+              {"backend_pid": 25498, "in_your_code": "Shop.Checkout.place/1, now in prim_inet:recv0/3",
+               "server": "idle in transaction, transaction open 0.5 s"},
+              {"backend_pid": 25501, "in_your_code": "Shop.Checkout.place/1, now in prim_inet:recv0/3",
+               "server": "active, transaction open 2.0 s, blocked by backend 25498"},
+              {"backend_pid": 25502, "in_your_code": "Shop.Payments.charge/1, now in Process.sleep/1",
+               "in_transaction": true, "server": "active, transaction open 0.0 s, blocked by backend 25501"},
+              ...]}],
+ "server": {"backends": 5, "idle_in_transaction": 1, "blocked": [...]}}
+```
+
+Every connection is checked out by a checkout, the product pages queue
+behind them, and on the server the checkouts' updates wait for each
+other's lock on the product row. **`module_code`** for
+`Shop.Checkout.place/1` and `Shop.Payments.charge/1`:
+
+```elixir
+def place(%{product: product, quantity: quantity} = order) do
+  Postgrex.transaction(:shop_db, fn conn ->
+    Postgrex.query!(conn, "UPDATE products SET stock = stock - $1 WHERE id = $2", [quantity, product])
+    :ok = Shop.Payments.charge(order)
+    Postgrex.query!(conn, "INSERT INTO orders (product, quantity) VALUES ($1, $2)", [product, quantity])
+  end)
+end
+
+def charge(_order) do
+  Process.sleep(300)
+  :ok
+end
+```
+
+**The answer.** A checkout's transaction locks the product's row, then
+calls the payment provider, 300 ms, before it commits: its connection,
+and the row, are held all that time. Checkouts of the same product queue
+for the row on the server, each holding a connection while it waits, so a
+few of them take all five. The product pages' one-millisecond query
+waits for a connection, and once the queue has been over `queue_target`
+for a whole `queue_interval`, DBConnection drops waiting checkouts: the
+error the pages see.
+
+**Fixes.**
+
+- **The payment call out of the transaction:** charge first, then a
+  short transaction for the stock and the order (`stock >= quantity` in
+  the update, so it can't oversell).
+- **The pages' reads on their own pool,** or the checkouts limited to
+  part of the pool, so slow checkouts can't starve them.
+- A larger `pool_size` only postpones it: the transactions still queue
+  on the row.
 
 ---
 

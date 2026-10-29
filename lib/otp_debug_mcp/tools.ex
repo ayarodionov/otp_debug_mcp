@@ -676,6 +676,45 @@ defmodule OtpDebugMcp.Tools do
     end
   end
 
+  defmodule Postgrex do
+    @moduledoc """
+    The node's Postgrex connection pools (Ecto's Postgres repos among
+    them), sampled at the start and the end of a window: each pool's
+    connections up or reconnecting, idle or checked out; who holds each
+    checked-out one, where in their code, and whether in a transaction
+    while doing something else; the callers waiting for a connection,
+    how long and from where. With server: true, also the server's side,
+    through a short-lived connection of the pool's own options:
+    pg_stat_activity for the database, backends idle in a transaction,
+    and queries waiting for a lock another backend holds, matched to the
+    pool's connections and callers. Findings come first, worst first.
+    """
+    use Anubis.Server.Component, type: :tool
+    use OtpDebugMcp.Approval
+
+    alias OtpDebugMcp.Tools
+
+    schema do
+      field(:duration_ms, :integer,
+        description: "How long between the two samples (default 3000, max 30000)"
+      )
+
+      field(:server, :boolean,
+        description:
+          "Also read pg_stat_activity and lock waits on the server, through a connection of its own opened with the pool's options (closed after)"
+      )
+    end
+
+    def perform(params, frame) do
+      duration = (params[:duration_ms] || 3_000) |> min(30_000) |> max(500)
+
+      case OtpDebugMcp.Postgrex.report(duration, server: params[:server] == true) do
+        {:ok, report} -> Tools.json_response(frame, report)
+        {:error, reason} -> Tools.error_response(frame, reason)
+      end
+    end
+  end
+
   defmodule Mnesia do
     @moduledoc """
     Mnesia on the node, sampled at the start and the end of a window: its

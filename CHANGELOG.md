@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- `postgrex`: the node's Postgrex connection pools (Ecto's Postgres repos
+  too), from DBConnection's own tables: each pool's connections up or
+  reconnecting, idle or checked out, who holds each checked-out one,
+  where in their code and whether in a transaction while doing something
+  else, and the callers waiting for a connection, how long and from
+  where. With `server: true`, `pg_stat_activity` and lock waits, through
+  a short-lived connection of the pool's own options, matched to the
+  pool's connections and callers. A Postgrex demo
+  (`examples/elixir/run.sh postgrex`, with its own PostgreSQL), scenario
+  2, and walkthrough 26. Tests run a throwaway PostgreSQL when its
+  binaries are there.
 - `mnesia`: Mnesia on the node, through its own `system_info` and
   `table_info`: its db nodes and which run, its tables (storage, size,
   memory, copies, where to read them, growth), the transactions running

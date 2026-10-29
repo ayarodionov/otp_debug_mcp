@@ -74,6 +74,7 @@ introspection primitives, but an encoded diagnostic playbook in the spirit of
 | `trace_port` | A port's traffic, or the ports opened and closed in a window with who opened them; rate-limited, in its own trace session on OTP 27+ |
 | `cowboy` | A Cowboy web server, through Ranch under it: its listeners and connection limits (per connection supervisor), acceptors blocked waiting for room, idle and WebSocket connections, the requests in flight grouped by where they wait and those running through the whole window, timeouts and routes, and over the window Ranch's accept rate and, with cowboy_telemetry, requests by status, the slowest routes and handler crashes |
 | `yaws` | A Yaws web server: each listening server's virtual servers and appmods, its connections against `max_connections`, what its acceptor processes are doing (each connection is one, and runs `out/1`), the requests in flight grouped by where they wait and those running through the window, and its cookie sessions: how many, how fast they grow, how many were used only once |
+| `postgrex` | Postgrex connection pools (Ecto's Postgres repos too): connections up or reconnecting, idle or checked out, who holds each and where in their code (and whether in a transaction while doing something else), and the callers waiting; with `server: true`, `pg_stat_activity` and lock waits matched to those connections |
 | `mnesia` | Mnesia: its nodes and tables (storage, size, memory, copies, whether any is reachable), commits, aborts and restarts a second, the records transactions wait for a lock on (sampled through the window) with where their holders are in the code, Mnesia's own mailboxes, and its system events in the window (overload, partitions, nodes down) |
 | `telemetry_handlers` | The telemetry handlers attached: their events and functions, and what they cost: how many processes are inside each at a time and about how long it takes per event (handlers run in the emitting process), from sampling stacks; handlers that raised and were detached in the window; functions that don't exist; one function attached twice; handlers piling up |
 | `shackle` | shackle client pools (and marina, anchor, buoy built on them): each pool's backend, size, backlog and retries, each connection up or reconnecting with its requests in flight, the callers waiting for a reply by where they called from, and over a window replies and their times, timeouts and calls refused, from shackle's telemetry |
@@ -150,7 +151,7 @@ To approve the investigation step by step, start the server with
 | Value | The server asks before |
 |---|---|
 | `off` (the default) | nothing but `load_module`'s loads |
-| `changes` | each step that does something on the node beyond reading it: connecting (which may load recon there), `diagnose` (it forces garbage collections and briefly turns on microstate accounting and a trace session), checks that do the same, tracing, profiling, `recent_errors`, `telemetry`, `telemetry_handlers`, `bandit`, `cowboy` and `shackle` (which attach a handler while they listen), `mnesia` (which subscribes to its events), `process_info` with the process's state, `riak_core` with `crdts` (it asks the vnodes for their state), `cluster`, and `remote_eval` |
+| `changes` | each step that does something on the node beyond reading it: connecting (which may load recon there), `diagnose` (it forces garbage collections and briefly turns on microstate accounting and a trace session), checks that do the same, tracing, profiling, `recent_errors`, `telemetry`, `telemetry_handlers`, `bandit`, `cowboy` and `shackle` (which attach a handler while they listen), `mnesia` (which subscribes to its events), `postgrex` with `server` (which opens a connection to the database), `process_info` with the process's state, `riak_core` with `crdts` (it asks the vnodes for their state), `cluster`, and `remote_eval` |
 | `all` | every step, reads included |
 
 In Claude Code:
@@ -514,7 +515,8 @@ ETS table, CPU spent collecting garbage, a fix deployed but never loaded,
 a link between nodes saturated, a Bandit server out of connections, a
 Cowboy server whose acceptors wait for room, a Yaws server starting a
 session on every request, a shackle pool with one connection held up,
-telemetry handlers piling up, Mnesia transactions waiting on one record, a
+telemetry handlers piling up, Mnesia transactions waiting on one record, a Postgrex pool held up by
+a payment call, a
 riak_core cluster with a member down and a vnode swamped, and riak_dt
 sets whose actors pile up.
 
@@ -531,7 +533,7 @@ background, on this host with `-sname`, and `run.sh stop` stops them:
 
 | Language | Directory | Demos |
 |---|---|---|
-| Elixir | [examples/elixir](examples/elixir) | a mailbox that never drains, a crash loop, a cluster with one bad node, a billing service whose macro DSL records every charge twice, a Phoenix API whose search route is shadowed by one `resources` generates, a Bandit API out of connections, a Cowboy API whose slow route leaves no room for the fast ones, a Yaws API whose cookie sessions pile up, a shackle pool where one slow request holds up a connection, a checkout slowed by telemetry handlers it never detaches, a riak_core cluster with a member down and a hot partition, riak_dt wishlists whose actors pile up, and a Mix release with its own cookie |
+| Elixir | [examples/elixir](examples/elixir) | a mailbox that never drains, a crash loop, a cluster with one bad node, a billing service whose macro DSL records every charge twice, a Phoenix API whose search route is shadowed by one `resources` generates, a Bandit API out of connections, a Cowboy API whose slow route leaves no room for the fast ones, a Yaws API whose cookie sessions pile up, a shackle pool where one slow request holds up a connection, a checkout slowed by telemetry handlers it never detaches, product pages waiting for Postgrex connections held through a payment call, a riak_core cluster with a member down and a hot partition, riak_dt wishlists whose actors pile up, and a Mix release with its own cookie |
 | Erlang | [examples/erlang](examples/erlang) | a mailbox that never drains, an OTP application in a crash loop, a session store leaking atoms and ETS rows, a cluster with one bad node, a C NIF library that blocks a scheduler and leaks native memory, a shop that leaks sockets and external programs and fills a slow peer's socket, an orders service whose errors only its logs show, a node that runs out of memory and leaves a crash dump, two gen_servers that deadlock, report workers whose CPU goes to garbage collection, a fix deployed but never loaded, and a node flooding the link to another |
 | Gleam | [examples/gleam](examples/gleam) | a mailbox that never drains, a supervised actor whose `let assert` panics in a loop, and a job runner leaking processes |
 | LFE | [examples/lfe](examples/lfe) | a mailbox that never drains, an OTP application in a crash loop, and an index whose slices pin whole binaries |
@@ -569,7 +571,9 @@ provides; see `test/otp_debug_mcp/old_otp_test.exs`. Tests tagged
 `new_otp` need one running a newer release than the tool's, in the same
 way; see `test/otp_debug_mcp/new_otp_test.exs`. The tests run a Yaws
 server too, fetched from GitHub, whose build compiles a PAM driver: on
-Debian and Ubuntu, install `libpam0g-dev` first.
+Debian and Ubuntu, install `libpam0g-dev` first. The Postgrex tests
+start a throwaway PostgreSQL, with `initdb` and `pg_ctl` from the PATH
+or `/usr/lib/postgresql/*/bin`; without them they're skipped.
 
 The whole suite also runs over TLS distribution, peers included, which
 adds a test that the target sees the connection as TLS:
