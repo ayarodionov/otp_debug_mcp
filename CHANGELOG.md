@@ -1,6 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.11.0
+
+Four tools for what an application runs on: Postgrex connection pools
+(`postgrex`), Mnesia (`mnesia`), telemetry handlers
+(`telemetry_handlers`) and shackle client pools (`shackle`), each with a
+demo, a scenario and a walkthrough.
 
 - `postgrex`: the node's Postgrex connection pools (Ecto's Postgres repos
   too), from DBConnection's own tables: each pool's connections up or
