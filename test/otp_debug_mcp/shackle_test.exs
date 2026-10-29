@@ -44,9 +44,11 @@ defmodule OtpDebugMcp.ShackleTest do
 
   test "a slow request holding up one connection" do
     target = target()
-    _port = TestTarget.call(target, ShackleShop, :start, [[pool_size: 4, backlog_size: 4], 3_000])
+    # A backlog of 8: room for the held connection to stand out from the
+    # others, which have a lookup or two in flight at any moment.
+    _port = TestTarget.call(target, ShackleShop, :start, [[pool_size: 4, backlog_size: 8], 3_000])
     :ok = TestTarget.call(target, ShackleShop, :slow, [1])
-    :ok = TestTarget.call(target, ShackleShop, :lookups, [10, 200])
+    :ok = TestTarget.call(target, ShackleShop, :lookups, [12, 200])
     Process.sleep(500)
     {:ok, _} = TestTarget.connect(target)
 
@@ -59,7 +61,7 @@ defmodule OtpDebugMcp.ShackleTest do
     assert Enum.any?(
              r["findings"],
              &(&1 =~ "critical: pool :shop_pool" and &1 =~ "refused with {error, no_server}" and
-                 &1 =~ "backlog_size 4 reached")
+                 &1 =~ "backlog_size 8 reached")
            )
 
     assert Enum.any?(r["findings"], &(&1 =~ "timed out"))
