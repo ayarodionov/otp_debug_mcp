@@ -35,6 +35,15 @@ defmodule OtpDebugMcp.TestTarget do
     OtpDebugMcp.Fixtures.OldLoop,
     OtpDebugMcp.Fixtures.WebShop,
     OtpDebugMcp.Fixtures.CowboyShop,
+    OtpDebugMcp.Fixtures.RanchShop,
+    OtpDebugMcp.Fixtures.PhxShop,
+    OtpDebugMcp.Fixtures.PhxShop.Page,
+    OtpDebugMcp.Fixtures.PhxShop.Router,
+    OtpDebugMcp.Fixtures.PhxShop.UserSocket,
+    OtpDebugMcp.Fixtures.PhxShop.RoomChannel,
+    OtpDebugMcp.Fixtures.PhxShop.Endpoint,
+    OtpDebugMcp.Fixtures.PhxShop.FeedLive,
+    OtpDebugMcp.Fixtures.LiveClient,
     OtpDebugMcp.Fixtures.HttpClients,
     OtpDebugMcp.Fixtures.YawsShop,
     OtpDebugMcp.Fixtures.ShackleShop,
@@ -56,6 +65,17 @@ defmodule OtpDebugMcp.TestTarget do
   # Cowboy, with cowboy_telemetry, for `cowboy: true`.
   @cowboy_apps [:cowboy, :cowlib, :ranch, :cowboy_telemetry, :telemetry]
 
+  # Phoenix and LiveView, on Bandit, for `phoenix: true`.
+  @phoenix_apps [
+    :phoenix,
+    :phoenix_pubsub,
+    :phoenix_live_view,
+    :phoenix_html,
+    :phoenix_template,
+    :websock_adapter,
+    :jason
+  ]
+
   # Bandit and what it runs on, for `bandit: true`.
   @bandit_apps [
     :bandit,
@@ -73,7 +93,7 @@ defmodule OtpDebugMcp.TestTarget do
   Start a target node. Options: `:name`, `:cookie`, `longnames: true` (as
   `name@127.0.0.1`), `:env` (environment variables, as `{name, value}`),
   `telemetry: true` (the telemetry application started), `bandit: true`
-  (Bandit and what it needs started), `cowboy: true` (Cowboy and cowboy_telemetry started), `yaws: true` (Yaws on the code path, to start embedded), `shackle: true` (shackle started), `postgrex: true` (Postgrex started), `riak: true` (riak_core started, alone), `recon: true`
+  (Bandit and what it needs started), `phoenix: true` (Phoenix, LiveView and Bandit started), `cowboy: true` (Cowboy and cowboy_telemetry started), `yaws: true` (Yaws on the code path, to start embedded), `shackle: true` (shackle started), `postgrex: true` (Postgrex started), `riak: true` (riak_core started, alone), `recon: true`
   (recon application loaded, as in a
   release that depends on it), `:args` (more VM flags, as charlists),
   `erlang: true` (the Elixir application isn't started, so the node looks
@@ -92,7 +112,8 @@ defmodule OtpDebugMcp.TestTarget do
         [fixtures_dir()] ++
         if(opts[:recon], do: [lib_ebin(:recon)], else: []) ++
         if(opts[:telemetry], do: [lib_ebin(:telemetry)], else: []) ++
-        if(opts[:bandit], do: Enum.map(@bandit_apps, &lib_ebin/1), else: []) ++
+        if(opts[:bandit] || opts[:phoenix], do: Enum.map(@bandit_apps, &lib_ebin/1), else: []) ++
+        if(opts[:phoenix], do: Enum.map(@phoenix_apps, &lib_ebin/1), else: []) ++
         if(opts[:cowboy], do: Enum.map(@cowboy_apps, &lib_ebin/1), else: []) ++
         if(opts[:yaws], do: [lib_ebin(:yaws)], else: []) ++
         if(opts[:shackle], do: Enum.map(@shackle_apps, &lib_ebin/1), else: []) ++
@@ -129,6 +150,13 @@ defmodule OtpDebugMcp.TestTarget do
 
     if opts[:bandit],
       do: {:ok, _} = call(target, :application, :ensure_all_started, [:bandit])
+
+    if opts[:phoenix],
+      do:
+        {:ok, _} =
+          call(target, :application, :ensure_all_started, [
+            [:phoenix, :phoenix_live_view, :bandit]
+          ])
 
     if opts[:postgrex],
       do: {:ok, _} = call(target, :application, :ensure_all_started, [:postgrex])

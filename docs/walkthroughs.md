@@ -1,6 +1,6 @@
 # Walkthroughs
 
-Twenty-nine debugging sessions against the demo nodes in `examples/`, start to
+Thirty-one debugging sessions against the demo nodes in `examples/`, start to
 finish, for following along on your own machine. Each one gives the
 command that starts the demo, the prompt, every tool call the agent made
 with the part of its result that mattered, and the conclusion. The
@@ -47,7 +47,9 @@ Contents:
 27. [Profiling a slow function, and tuning it](#27-profiling-a-slow-function-and-tuning-it)
 28. [EMQX: a client that never acknowledges, and a client id shared](#28-emqx-a-client-that-never-acknowledges-and-a-client-id-shared)
 29. [ejabberd: a bot that reads slowly, an archive on Mnesia, a full offline queue](#29-ejabberd-a-bot-that-reads-slowly-an-archive-on-mnesia-a-full-offline-queue)
-30. [Cleaning up](#cleaning-up)
+30. [Ranch: dead connections keep new clients out](#30-ranch-dead-connections-keep-new-clients-out)
+31. [A LiveView whose assigns keep growing](#31-a-liveview-whose-assigns-keep-growing)
+32. [Cleaning up](#cleaning-up)
 
 ---
 
@@ -2593,6 +2595,163 @@ message to that account bounces.
   its history from MAM.
 
 The agent changed nothing on the node, and offered to kick the session.
+
+---
+
+## 30. Ranch: dead connections keep new clients out
+
+```sh
+examples/elixir/run.sh ranch
+```
+
+`ranch_ex` runs a point-of-sale server on Ranch, on port 5555, with 4
+acceptors × 25 connections. Its protocol, `pos_protocol`, is a line
+protocol of its own. The same node simulates the stores' tills
+(`tills.erl`): 40 tills that each keep one connection, 12 outlet tills
+behind a NAT that drops idle connections without telling either end, and
+a new till every 3 seconds. Every 5 seconds, each outlet till opens a
+new connection and leaves the old one, which the server still holds. The
+session ran a minute after the start.
+
+> New tills can't connect to our point-of-sale server,
+> `ranch_ex@yourhost` (port 5555): they time out, while the tills
+> already connected keep working. Restarting it helps for a minute or
+> so. Find out why.
+
+Only the otp-debug tools were allowed. The session took 58 seconds.
+
+**`connect`**, then **`diagnose`**: every check `ok`. **`ranch`**, for 10
+seconds:
+
+```json
+{"status": "critical",
+ "findings": [
+   "critical: :pos_listener: 4 of 4 acceptors waited for room through the whole window (connection supervisors at max_connections, 25 each, 100 for the listener): new clients wait in the listen backlog (1024), unaccepted, and nothing is refused or logged",
+   "critical: :pos_listener: 60 of 100 connections did nothing through the whole window (60 without a byte either way), most in prim_inet:recv0/3 from pos_protocol:loop/2: clients that went quiet, held open by a protocol waiting with no timeout. They hold 100 of the listener's 100 places, so new clients wait. A receive timeout (gen_tcp:recv's, or {active, once} with an after) closes them"],
+ "listeners": [{"listener": ":pos_listener", "listening": "0.0.0.0:5555", "protocol": ":pos_protocol",
+                "connections": {"active": 100, "limit": 100, "max_connections": 25, "connection_supervisors": 4,
+                                "acceptors_waiting_through_window": 4},
+                "accepted_per_s": 0.0, "closed_per_s": 0.0,
+                "doing": [{"connections": 100, "current_function": "prim_inet:recv0/3",
+                           "in_protocol_code": "pos_protocol:loop/2"}],
+                "idle_through_window": {"connections": 60, "of": 100, "no_bytes_either": 60}}]}
+```
+
+**`module_code`** on `pos_protocol:loop/2`:
+
+```erlang
+loop(Socket, Transport) ->
+    case Transport:recv(Socket, 0, infinity) of
+```
+
+Then the agent read `tills:outlet/2`, the simulation, and found its
+abandoned sockets. The real tills sit behind the NAT and leave nothing
+like this to read.
+
+**The answer.** The listener is full: 100 of 100 connections, and all
+four acceptors waited for room through the whole window. New tills wait
+in the listen backlog, unaccepted, until they time out, and Ranch
+neither refuses nor logs them. Sixty of the hundred connections moved
+no bytes at all. Each one waits in `pos_protocol:loop/2` on a `recv`
+with an `infinity` timeout, so a client that goes away without closing
+keeps its place forever. After a restart the leftovers fill the free
+places within about a minute.
+
+**Fixes.**
+
+- **The server:** give `recv` a timeout longer than a working till's
+  gap between requests, and close the connection on `{error, timeout}`
+  (the `{error, _}` branch already does). TCP keepalive
+  (`{keepalive, true}` in `socket_opts`) also finds dead peers, but only
+  after the OS's own interval, two hours by default.
+- **The tills:** behind a NAT, send a heartbeat more often than the NAT
+  drops idle connections.
+- A larger `max_connections` only postpones the problem.
+
+The agent changed nothing on the node.
+
+---
+
+## 31. A LiveView whose assigns keep growing
+
+```sh
+examples/elixir/run.sh live
+```
+
+`live_ex` runs a Phoenix LiveView orders dashboard on Bandit, on port
+4050. Every new order, about 10 a second, is broadcast over PubSub. The
+same node simulates 15 browser tabs that keep the dashboard open, three
+of them pressing Refresh every second. The session ran 90 seconds after
+the start.
+
+> The staff's orders dashboard, a LiveView on `live_ex@yourhost`
+> (http://localhost:4050/), gets sluggish the longer it's open, and the
+> node's memory keeps growing. Find out why.
+
+Only the otp-debug tools were allowed. The session took 84 seconds.
+
+**`connect`**, then **`diagnose`**: every check `ok`. **`phoenix`**, for 10
+seconds:
+
+```json
+{"status": "warning",
+ "findings": [
+   "warning: LiveShopWeb.OrdersLive's assign orders grew through the window in its biggest process, 11 KB a second, 101 more items, to 1584 KB (a list of 1438); the 15 LiveShopWeb.OrdersLive processes hold 82 MB in all: a LiveView keeps its assigns for as long as the page is open, so whatever is added to them, per message or event, stays, in every open page. Keep what grows bounded, or put it in a stream (stream/3), which the process doesn't keep",
+   "warning: LiveShopWeb.OrdersLive refresh (handle_event) takes 402.94 ms at p95 (30 in the window): the LiveView process does nothing else meanwhile, so that page's other events and its PubSub messages wait. Move the slow work out of the callback: start_async/3 or assign_async/3"],
+ "live_views": [{"view": "LiveShopWeb.OrdersLive", "processes": 15,
+                 "memory_bytes": {"total": 82902232, "max": 7657256, "mean": 5526815},
+                 "biggest_assigns": [{"assign": "orders", "length": 1438, "bytes": 1584683,
+                                      "grew_in_window": {"length": 101, "bytes_per_s": 11183}}]}],
+ "pubsub": [{"pubsub": "LiveShop.PubSub", "subscriptions": 15,
+             "topics_with_most": [{"topic": "orders", "subscribers": 15}]}],
+ "window": {"live_view_callbacks": [{"what": "LiveShopWeb.OrdersLive refresh (handle_event)",
+                                     "count": 30, "p50_ms": 400.77, "p95_ms": 402.94}]}}
+```
+
+**`module_code`** on the view's callbacks:
+
+```elixir
+def handle_info({:order, order}, socket) do
+  {:noreply, assign(socket, orders: [order | socket.assigns.orders])}
+end
+
+def handle_event("refresh", _params, socket) do
+  {:noreply, assign(socket, stats: LiveShop.Stats.today())}
+end
+```
+
+`LiveShop.Stats.today/0` turned out to be a 400 ms call, a stand-in for
+the reporting API. A **`snapshot`** around a second, 30-second
+**`phoenix`** call showed the same list 300 items longer. Process memory
+barely moved in that window, because a heap grows in steps.
+
+**The answer.** Every open dashboard adds each broadcast order to its
+`orders` assign and never removes one. The page shows only the latest
+ten and a count, but the whole list stays in the page's process for as
+long as the tab is open, in every tab: 15 pages, 82 MB, growing about
+10 orders a second each. And Refresh runs a 400 ms call inside
+`handle_event`, so while it runs, that page handles neither new orders
+nor clicks.
+
+**Fixes.**
+
+- **The orders:** keep a counter and the latest ten, or a stream that
+  the process doesn't keep:
+
+  ```elixir
+  socket |> update(:order_count, &(&1 + 1)) |> stream_insert(:orders, order, at: 0, limit: 10)
+  ```
+
+  Then use `@order_count` for the count, and render `@streams.orders` in
+  a `phx-update="stream"` container.
+- **Refresh:** `start_async(socket, :stats, fn -> LiveShop.Stats.today() end)`,
+  with a `handle_async(:stats, ...)` that assigns the result. A cache
+  in front of `Stats.today/0` also saves 15 tabs from running the same
+  call.
+- The tabs open now keep their lists until they're reloaded after the
+  deploy.
+
+The agent changed nothing on the node.
 
 ---
 

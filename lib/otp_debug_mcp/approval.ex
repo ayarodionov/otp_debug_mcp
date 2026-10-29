@@ -197,6 +197,16 @@ defmodule OtpDebugMcp.Approval do
       {:changes,
        "Reads the node's Cowboy (Ranch) listeners, connections and requests, and attaches a telemetry handler for the window."}
 
+  def step("phoenix", _),
+    do:
+      {:read,
+       "Reads the Phoenix endpoints, routes, LiveView and channel processes twice, a window apart, listening to Phoenix's telemetry between; the three biggest LiveViews' assigns are read with sys:get_state."}
+
+  def step("ranch", _),
+    do:
+      {:read,
+       "Reads Ranch's listeners and connection processes twice, a window apart, with a log watch for connection crashes meanwhile."}
+
   def step("ejabberd", _),
     do:
       {:read,

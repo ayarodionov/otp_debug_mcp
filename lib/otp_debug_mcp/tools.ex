@@ -1080,6 +1080,75 @@ defmodule OtpDebugMcp.Tools do
     end
   end
 
+  defmodule Phoenix do
+    @moduledoc """
+    A Phoenix application, sampled at the start and end of a window, with
+    its telemetry between: its endpoints (where they listen, their
+    sockets, settings such as code_reloader); its routers, and routes an
+    earlier route makes unreachable; its LiveView processes by view (one
+    per open page): memory, its growth, mailboxes, what the busy ones are
+    doing, and for the biggest, which assigns hold the memory; channels
+    by module; PubSub topics by subscribers; and over the window LiveView
+    callbacks (mount, handle_params, handle_event), channel messages and
+    requests, slowest first. Findings come first, worst first. Read-only
+    (a LiveView's assigns are read with sys:get_state, for three
+    processes at most).
+    """
+    use Anubis.Server.Component, type: :tool
+    use OtpDebugMcp.Approval
+
+    alias OtpDebugMcp.Tools
+
+    schema do
+      field(:duration_ms, :integer,
+        description: "How long between the two samples (default 5000, max 30000)"
+      )
+    end
+
+    def perform(params, frame) do
+      duration = (params[:duration_ms] || 5_000) |> min(30_000) |> max(500)
+
+      case OtpDebugMcp.Phoenix.report(duration) do
+        {:ok, report} -> Tools.json_response(frame, report)
+        {:error, reason} -> Tools.error_response(frame, reason)
+      end
+    end
+  end
+
+  defmodule Ranch do
+    @moduledoc """
+    Ranch listeners, whatever protocol they run (HTTP for Cowboy, AMQP
+    for RabbitMQ, a protocol of your own), sampled at the start and end
+    of a window: limits and connections (per connection supervisor),
+    acceptors waiting for room; connection processes grouped by where
+    they are and the first frame of the protocol's code; connections that
+    did nothing through the window (gone quiet, held open with no
+    timeout), stuck in their handshake, or with bytes waiting for a slow
+    reader; connections removed from the count; and connection processes
+    that crashed, from Ranch's log lines, by reason. For Cowboy's
+    requests, use the cowboy tool. Read-only.
+    """
+    use Anubis.Server.Component, type: :tool
+    use OtpDebugMcp.Approval
+
+    alias OtpDebugMcp.Tools
+
+    schema do
+      field(:duration_ms, :integer,
+        description: "How long between the two samples (default 5000, max 30000)"
+      )
+    end
+
+    def perform(params, frame) do
+      duration = (params[:duration_ms] || 5_000) |> min(30_000) |> max(500)
+
+      case OtpDebugMcp.Ranch.report(duration) do
+        {:ok, report} -> Tools.json_response(frame, report)
+        {:error, reason} -> Tools.error_response(frame, reason)
+      end
+    end
+  end
+
   defmodule Ejabberd do
     @moduledoc """
     ejabberd, the XMPP server, from a node of its cluster, sampled at the

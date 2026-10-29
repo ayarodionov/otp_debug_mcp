@@ -1335,3 +1335,356 @@ defmodule OtpDebugMcp.Fixtures.Tunable do
     loop(list)
   end
 end
+
+defmodule OtpDebugMcp.Fixtures.RanchShop do
+  @moduledoc """
+  A line protocol on Ranch, of its own: each line is answered with `ok`;
+  `boom` crashes the connection; `big N` answers with N bytes. It waits
+  for each line with no timeout. `start/1` takes Ranch's transport
+  options and returns the port; the client functions start clients that
+  go quiet, crash it, chat, or never read.
+  """
+  @behaviour :ranch_protocol
+
+  def start(transport_options) do
+    {:ok, _} =
+      :ranch.start_listener(
+        :ranch_shop,
+        :ranch_tcp,
+        Map.merge(%{socket_opts: [ip: {127, 0, 0, 1}, port: 0]}, Map.new(transport_options)),
+        __MODULE__,
+        []
+      )
+
+    :ranch.get_port(:ranch_shop)
+  end
+
+  @impl true
+  def start_link(ref, transport, _opts) do
+    {:ok, spawn_link(fn -> init(ref, transport) end)}
+  end
+
+  defp init(ref, transport) do
+    {:ok, socket} = :ranch.handshake(ref)
+    :ok = transport.setopts(socket, packet: :line)
+    loop(socket, transport)
+  end
+
+  defp loop(socket, transport) do
+    case transport.recv(socket, 0, :infinity) do
+      {:ok, "boom" <> _} ->
+        raise "boom"
+
+      {:ok, "big " <> n} ->
+        transport.send(socket, :binary.copy("x", String.to_integer(String.trim(n))))
+        loop(socket, transport)
+
+      {:ok, _} ->
+        transport.send(socket, "ok\n")
+        loop(socket, transport)
+
+      _ ->
+        :ok
+    end
+  end
+
+  @doc "`n` clients that connect and then say nothing."
+  def quiet(port, n), do: clients(n, fn -> connect(port) && Process.sleep(:infinity) end)
+
+  @doc "`n` clients that send a line and read the answer, over and over."
+  def chatty(port, n) do
+    clients(n, fn ->
+      with socket when socket != nil <- connect(port), do: chat(socket)
+    end)
+  end
+
+  @doc "`n` clients that crash their connection, again and again."
+  def crashing(port, n) do
+    clients(n, fn ->
+      Stream.repeatedly(fn ->
+        with socket when socket != nil <- connect(port) do
+          :gen_tcp.send(socket, "boom\n")
+          :gen_tcp.recv(socket, 0, 1_000)
+          :gen_tcp.close(socket)
+        end
+
+        Process.sleep(50)
+      end)
+      |> Stream.run()
+    end)
+  end
+
+  @doc "A client that asks for `bytes` and never reads them."
+  def unread(port, bytes) do
+    clients(1, fn ->
+      with socket when socket != nil <- connect(port, recbuf: 4096) do
+        :gen_tcp.send(socket, "big #{bytes}\n")
+        Process.sleep(:infinity)
+      end
+    end)
+  end
+
+  defp chat(socket) do
+    with :ok <- :gen_tcp.send(socket, "price\n"), {:ok, _} <- :gen_tcp.recv(socket, 0, 5_000) do
+      Process.sleep(20)
+      chat(socket)
+    end
+  end
+
+  defp connect(port, opts \\ []) do
+    case :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, active: false] ++ opts, 1_000) do
+      {:ok, socket} -> socket
+      _ -> nil
+    end
+  end
+
+  defp clients(n, fun) do
+    for _ <- 1..n, do: spawn(fun)
+    :ok
+  end
+end
+
+defmodule OtpDebugMcp.Fixtures.PhxShop do
+  @moduledoc """
+  A Phoenix application, on Bandit: a LiveView, `FeedLive` at `/`, that
+  keeps every item broadcast on the "feed" topic in its assigns and
+  whose "slow" event takes 300 ms; a channel, `RoomChannel`, on
+  `/socket`; and a router where `GET /products/search` comes after
+  `GET /products/:id`. `start/0` starts it on a free port and returns the
+  port; `feed/2` broadcasts items; `client/1` opens the LiveView like a
+  browser (see `OtpDebugMcp.Fixtures.LiveClient`).
+  """
+
+  def start do
+    Application.put_env(:otpdbg_phx, __MODULE__.Endpoint,
+      adapter: Bandit.PhoenixAdapter,
+      http: [ip: {127, 0, 0, 1}, port: 0],
+      server: true,
+      secret_key_base: String.duplicate("test-only-not-a-secret-", 4),
+      live_view: [signing_salt: "test-only"],
+      pubsub_server: __MODULE__.PubSub
+    )
+
+    {:ok, _} = Application.ensure_all_started(:inets)
+
+    {:ok, sup} =
+      Supervisor.start_link([{Phoenix.PubSub, name: __MODULE__.PubSub}, __MODULE__.Endpoint],
+        strategy: :one_for_one
+      )
+
+    Process.unlink(sup)
+    {:ok, {_, port}} = __MODULE__.Endpoint.server_info(:http)
+    port
+  end
+
+  @doc "`n` items of about `bytes` each (a list, on the heap) on the feed, `per_s` a second."
+  def feed(n, bytes, per_s) do
+    spawn(fn ->
+      for i <- 1..n do
+        Phoenix.PubSub.broadcast(
+          __MODULE__.PubSub,
+          "feed",
+          {:item, i, Enum.to_list(1..div(bytes, 16))}
+        )
+
+        Process.sleep(div(1000, per_s))
+      end
+    end)
+
+    :ok
+  end
+
+  @doc "A browser tab on the LiveView: returns the process that holds it; send it `{:click, event}`."
+  def client(port) do
+    parent = self()
+
+    pid =
+      spawn(fn ->
+        c = OtpDebugMcp.Fixtures.LiveClient.open("http://127.0.0.1:#{port}/")
+        :ok = OtpDebugMcp.Fixtures.LiveClient.active(c)
+        send(parent, {:joined, self()})
+        tab(c)
+      end)
+
+    receive do
+      {:joined, ^pid} -> pid
+    after
+      5_000 -> raise "no join"
+    end
+  end
+
+  @doc "A channel client in room `room`: returns its process."
+  def room(port, room) do
+    parent = self()
+
+    pid =
+      spawn(fn ->
+        c = OtpDebugMcp.Fixtures.LiveClient.socket(port, "/socket/websocket")
+        c = OtpDebugMcp.Fixtures.LiveClient.join(c, "room:#{room}")
+        :ok = OtpDebugMcp.Fixtures.LiveClient.active(c)
+        send(parent, {:joined, self()})
+        tab(c)
+      end)
+
+    receive do
+      {:joined, ^pid} -> pid
+    after
+      5_000 -> raise "no join"
+    end
+  end
+
+  defp tab(c) do
+    receive do
+      {:click, event} -> tab(OtpDebugMcp.Fixtures.LiveClient.click(c, event))
+      {:tcp, _, _} -> tab(c)
+      _ -> tab(c)
+    end
+  end
+
+  defmodule PubSub do
+    @moduledoc false
+  end
+
+  defmodule Page do
+    @moduledoc false
+    def init(action), do: action
+    def call(conn, action), do: Plug.Conn.send_resp(conn, 200, "#{action}")
+  end
+
+  defmodule Router do
+    @moduledoc false
+    use Phoenix.Router
+    import Phoenix.LiveView.Router
+
+    pipeline :browser do
+      plug(:fetch_session)
+    end
+
+    scope "/" do
+      pipe_through(:browser)
+      live("/", OtpDebugMcp.Fixtures.PhxShop.FeedLive)
+      get("/products/:id", OtpDebugMcp.Fixtures.PhxShop.Page, :show)
+      get("/products/search", OtpDebugMcp.Fixtures.PhxShop.Page, :search)
+    end
+  end
+
+  defmodule UserSocket do
+    @moduledoc false
+    use Phoenix.Socket
+    channel("room:*", OtpDebugMcp.Fixtures.PhxShop.RoomChannel)
+    def connect(_params, socket, _info), do: {:ok, socket}
+    def id(_), do: nil
+  end
+
+  defmodule RoomChannel do
+    @moduledoc false
+    use Phoenix.Channel
+    def join(_topic, _params, socket), do: {:ok, socket}
+  end
+
+  defmodule Endpoint do
+    @moduledoc false
+    use Phoenix.Endpoint, otp_app: :otpdbg_phx
+
+    socket("/live", Phoenix.LiveView.Socket)
+    socket("/socket", OtpDebugMcp.Fixtures.PhxShop.UserSocket, websocket: true)
+
+    plug(Plug.Session, store: :cookie, key: "_otpdbg", signing_salt: "test-only")
+    plug(OtpDebugMcp.Fixtures.PhxShop.Router)
+  end
+
+  defmodule FeedLive do
+    @moduledoc false
+    use Phoenix.LiveView
+
+    def mount(_params, _session, socket) do
+      if connected?(socket),
+        do: Phoenix.PubSub.subscribe(OtpDebugMcp.Fixtures.PhxShop.PubSub, "feed")
+
+      {:ok, assign(socket, items: [])}
+    end
+
+    def handle_info({:item, i, data}, socket),
+      do: {:noreply, assign(socket, items: [{i, data} | socket.assigns.items])}
+
+    def handle_event("slow", _, socket) do
+      Process.sleep(300)
+      {:noreply, socket}
+    end
+
+    def render(assigns), do: ~H"<p>{length(@items)} items</p>"
+  end
+end
+
+defmodule OtpDebugMcp.Fixtures.LiveClient do
+  @moduledoc """
+  Just enough of a browser for Phoenix: the page over HTTP, then a
+  WebSocket of its own speaking Phoenix's V2 protocol, to join the
+  page's LiveView or a channel, and send `phx-click` events.
+  """
+  defstruct [:socket, :topic, ref: 1]
+
+  def open(url) do
+    %URI{port: port} = URI.parse(url)
+
+    {:ok, {{_, 200, _}, _, body}} =
+      :httpc.request(:get, {String.to_charlist(url), []}, [], body_format: :binary)
+
+    [_, id] = Regex.run(~r/id="(phx-[^"]+)"/, body)
+    [_, session] = Regex.run(~r/data-phx-session="([^"]+)"/, body)
+    [_, static] = Regex.run(~r/data-phx-static="([^"]*)"/, body)
+
+    port
+    |> socket("/live/websocket")
+    |> Map.put(:topic, "lv:" <> id)
+    |> push("phx_join", %{url: url, session: session, static: static, params: %{"_mounts" => 0}})
+  end
+
+  def socket(port, path) do
+    {:ok, s} = :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, active: false], 5_000)
+    key = Base.encode64(:crypto.strong_rand_bytes(16))
+
+    :ok =
+      :gen_tcp.send(
+        s,
+        "GET #{path}?vsn=2.0.0 HTTP/1.1\r\nhost: localhost\r\nupgrade: websocket\r\n" <>
+          "connection: Upgrade\r\nsec-websocket-key: #{key}\r\nsec-websocket-version: 13\r\n\r\n"
+      )
+
+    {:ok, "HTTP/1.1 101" <> _} = :gen_tcp.recv(s, 0, 5_000)
+    %__MODULE__{socket: s}
+  end
+
+  def join(client, topic), do: push(%{client | topic: topic}, "phx_join", %{})
+
+  def click(client, event), do: push(client, "event", %{type: "click", event: event, value: %{}})
+
+  def active(client), do: :inet.setopts(client.socket, active: true)
+
+  defp push(client, event, payload) do
+    frame(client.socket, Jason.encode!(["1", "#{client.ref}", client.topic, event, payload]))
+    %{client | ref: client.ref + 1}
+  end
+
+  defp frame(socket, text) do
+    mask = :crypto.strong_rand_bytes(4)
+    size = byte_size(text)
+
+    len =
+      cond do
+        size < 126 -> <<1::1, size::7>>
+        size < 65_536 -> <<1::1, 126::7, size::16>>
+        true -> <<1::1, 127::7, size::64>>
+      end
+
+    <<a, b, c, d>> = mask
+    keys = {a, b, c, d}
+
+    masked =
+      for {byte, i} <- Enum.with_index(:binary.bin_to_list(text)),
+          into: <<>>,
+          do: <<Bitwise.bxor(byte, elem(keys, rem(i, 4)))>>
+
+    :ok = :gen_tcp.send(socket, [<<0x81>>, len, mask, masked])
+  end
+end

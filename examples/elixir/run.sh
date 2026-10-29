@@ -7,10 +7,12 @@
 #     examples/elixir/run.sh release     # demo_shop: a Mix release, with its own cookie
 #     examples/elixir/run.sh billing     # billing_ex: every charge recorded twice, by a macro
 #     examples/elixir/run.sh phoenix     # phoenix_ex: a Phoenix API whose search always 404s
+#     examples/elixir/run.sh live        # live_ex: a LiveView dashboard that gets sluggish, and memory that grows
 #     examples/elixir/run.sh bandit      # bandit_ex: a Bandit API refusing connections, silently
 #     examples/elixir/run.sh cowboy      # cowboy_ex: a Cowboy API where even trivial requests hang
 #     examples/elixir/run.sh yaws        # yaws_ex: a Yaws API whose memory keeps growing
 #     examples/elixir/run.sh shackle     # shackle_ex: price lookups through a shackle pool fail now and then
+#     examples/elixir/run.sh ranch       # ranch_ex: a point-of-sale server on Ranch where new tills can't connect
 #     examples/elixir/run.sh telemetry   # telemetry_ex: checkout slower the longer it runs, from its telemetry handlers
 #     examples/elixir/run.sh postgrex    # postgrex_ex: product pages slow or failing, on PostgreSQL through Postgrex
 #     examples/elixir/run.sh riak        # riak_a, riak_b, riak_c: a riak_core cluster, one member down, one vnode swamped
@@ -93,6 +95,20 @@ case "${1:-}" in
     (cd "$here/shackle_shop" && mix deps.get --quiet && mix compile --quiet &&
       start shackle_ex -S mix run --no-halt -e ":shackle_shop.traffic()")
     ;;
+  live)
+    # A Mix project: fetches Phoenix and LiveView from Hex the first time.
+    # Its dashboard is at http://localhost:4050/; the staff's browser
+    # tabs, simulated, run in the same node.
+    (cd "$here/live_shop" && mix deps.get --quiet && mix compile --quiet &&
+      start live_ex -S mix run --no-halt -e "LiveShop.Application.traffic()")
+    ;;
+  ranch)
+    # A Mix project with Erlang sources: fetches Ranch from Hex the first
+    # time. Its point-of-sale server listens on port 5555; the stores'
+    # tills, simulated, run in the same node.
+    (cd "$here/ranch_shop" && mix deps.get --quiet && mix compile --quiet &&
+      start ranch_ex -S mix run --no-halt -e ":ranch_shop.traffic()")
+    ;;
   telemetry)
     # A Mix project: fetches telemetry from Hex the first time.
     (cd "$here/telemetry_shop" && mix deps.get --quiet && mix compile --quiet &&
@@ -144,13 +160,13 @@ case "${1:-}" in
     ;;
   stop)
     elixir --sname "stopper_$$" -e "
-      for n <- ~w(shop_ex payments_ex billing_ex phoenix_ex bandit_ex cowboy_ex yaws_ex shackle_ex telemetry_ex postgrex_ex riak_a riak_b riak_c ex_a ex_b ex_c),
+      for n <- ~w(shop_ex payments_ex billing_ex phoenix_ex live_ex bandit_ex cowboy_ex yaws_ex shackle_ex ranch_ex telemetry_ex postgrex_ex riak_a riak_b riak_c ex_a ex_b ex_c),
           do: :rpc.call(:\"#{n}@$host\", :init, :stop, [], 2000)"
     if [ -x "$release/bin/demo_shop" ]; then "$release/bin/demo_shop" stop 2>/dev/null || true; fi
     if [ -d "$pgdata" ]; then pg pg_ctl -D "$pgdata" -m fast stop >/dev/null 2>&1 || true; fi
     ;;
   *)
-    echo "usage: $0 shop|payments|cluster|release|billing|phoenix|bandit|cowboy|yaws|shackle|telemetry|postgrex|riak|wishlist|stop" >&2
+    echo "usage: $0 shop|payments|cluster|release|billing|phoenix|live|bandit|cowboy|yaws|shackle|ranch|telemetry|postgrex|riak|wishlist|stop" >&2
     exit 1
     ;;
 esac

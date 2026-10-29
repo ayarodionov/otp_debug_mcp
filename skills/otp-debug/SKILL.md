@@ -76,13 +76,22 @@ raw introspection when a purpose-built tool exists.
      and the slowest example, from events the libraries already emit,
      much cheaper than tracing. `queue_time_ms` high on Ecto queries means
      the pool is exhausted.
+   - A Phoenix app: LiveView pages sluggish, memory growing with open
+     pages, a route that never runs → `phoenix`: LiveViews by view
+     (memory, growth, the assigns holding it), slow LiveView callbacks
+     and channel messages, shadowed routes, PubSub fan-out.
    - A web service whose clients get connection resets, or wait before
      the first byte, while request times look fine → `bandit` (Phoenix,
      Bandit), `cowboy` (Cowboy, including Phoenix on plug_cowboy) or `yaws`: the
      connection limit and how full it is, acceptors waiting for room,
      what the busy connections or requests wait in, and connections
      refused at the limit (neither Thousand Island nor Ranch logs any of
-     this). Ranch caps each connection supervisor, not the listener. On
+     this). Ranch caps each connection supervisor, not the listener.
+     For a Ranch listener with a protocol of its own (not HTTP), or
+     clients that can't connect while those connected work → `ranch`:
+     connections idle through the window, held open by a protocol with
+     no receive timeout, slow readers, stuck handshakes, connection
+     crashes. On
      Yaws, memory growing under steady traffic → `yaws`: cookie sessions
      started on every request pile up for an hour or more.
    - Requests slower with telemetry attached, metrics that stopped, or

@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- `phoenix`: a Phoenix application, sampled a window apart with its
+  telemetry between: endpoints (where they listen, their sockets,
+  code_reloader and the like); routers, and routes an earlier route
+  makes unreachable; LiveView processes by view (one per open page):
+  memory, how many grew and how fast, mailboxes, the busy ones, and for
+  the biggest, which assigns hold the memory; channels by module;
+  PubSub topics by subscribers; LiveView callbacks, channel messages
+  and requests over the window, slowest first. The `telemetry` tool
+  now groups LiveView and channel events by view, channel and event. A
+  LiveView demo (`examples/elixir/live_shop`, `run.sh live`: an orders
+  dashboard whose assigns keep every order), scenarios 1 and 2, and
+  walkthrough 31.
+- `ranch`: Ranch listeners, whatever protocol they run, sampled a window
+  apart: limits and connections per connection supervisor, acceptors
+  waiting for room; connection processes grouped by where they are and
+  the first frame of the protocol's code; connections that did nothing
+  through the window (no reductions, no bytes), stuck in their
+  handshake, or with bytes waiting for a slow reader; connections
+  removed from the count; and connection processes that crashed, from
+  Ranch's log lines, by reason. A Ranch demo (`examples/elixir`, `run.sh
+  ranch`: a point-of-sale server whose tills behind a NAT leave dead
+  connections open), scenario 15, and walkthrough 30.
 - `ejabberd`: ejabberd, the XMPP server, through its own APIs and tables,
   sampled a window apart: version, hosts, database, cluster nodes running
   and down; users online by host; client connections (c2s processes)

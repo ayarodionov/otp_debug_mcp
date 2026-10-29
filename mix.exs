@@ -44,10 +44,13 @@ defmodule OtpDebugMcp.MixProject do
       # injected into the target node at connect time (see OtpDebugMcp.Target),
       # so the target app needs no recon dependency of its own.
       {:recon, "~> 2.5"},
-      # Only so tests can run a Bandit, Cowboy or Yaws server, shackle
+      # Only so tests can run a Bandit, Phoenix, Cowboy or Yaws server, shackle
       # client pools, Postgrex connection pools, and a riak_core cluster
       # with riak_dt's CRDTs, on target nodes.
       {:bandit, "~> 1.13", only: :test},
+      {:phoenix, "~> 1.8", only: :test},
+      {:phoenix_live_view, "~> 1.2", only: :test},
+      {:jason, "~> 1.4", only: :test},
       {:cowboy, "~> 2.12", only: :test},
       {:cowboy_telemetry, "~> 0.4", only: :test},
       # Yaws isn't on Hex; its build compiles a PAM driver (libpam0g-dev on

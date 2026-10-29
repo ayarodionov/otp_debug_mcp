@@ -80,6 +80,9 @@ defmodule OtpDebugMcp.Telemetry do
         (_, #{'__struct__' := 'Elixir.Plug.Conn'} = C) -> {ok, maps:with([method, request_path, status, host], C)};
         (_, #{'__struct__' := 'Elixir.Oban.Job'} = J) -> {ok, maps:with([worker, queue, attempt, state], J)};
         (_, #{'__struct__' := 'Elixir.Finch.Request'} = Rq) -> {ok, maps:with([method, host, path], Rq)};
+        %% A LiveView's socket, and a channel's: which view, which channel.
+        (socket, #{'__struct__' := 'Elixir.Phoenix.LiveView.Socket', view := V}) -> {ok, #{view => V}};
+        (socket, #{'__struct__' := 'Elixir.Phoenix.Socket'} = So) -> {ok, maps:with([channel, topic], So)};
         %% Cowboy's request.
         (K, #{method := _, path := _} = Rq) when K =:= req; K =:= partial_req ->
           {ok, maps:with([method, host, path], Rq)};
@@ -121,6 +124,7 @@ defmodule OtpDebugMcp.Telemetry do
       end,
       %% What groups events: a route, a query, a worker, a controller action.
       Str = fun(V) when is_binary(V) -> V; (V) when is_atom(V) -> atom_to_binary(V); (V) -> Text(V) end,
+      Mod = fun(A) -> case atom_to_binary(A) of <<"Elixir.", R/binary>> -> R; B -> B end end,
       Path = fun(P) -> re:replace(P, "/[0-9]+(?=/|$)", "/:id", [global, {return, binary}]) end,
       Key0 = fun(Md) ->
         Conn = maps:get(conn, Md, #{}),
@@ -158,6 +162,20 @@ defmodule OtpDebugMcp.Telemetry do
                ([cowboy, request | _], #{req := #{method := M, path := P}} = Md) ->
                   <<(Str(M))/binary, " ", (Path(P))/binary, " -> ",
                     (Str(maps:get(resp_status, Md, <<"no status">>)))/binary>>;
+               %% LiveView callbacks by view (and event), channel messages by
+               %% channel and event.
+               ([phoenix, live_view | _], #{socket := #{view := V}} = Md) when is_atom(V) ->
+                  case Md of
+                    #{event := E} when is_binary(E) -> <<(Mod(V))/binary, " ", E/binary>>;
+                    _ -> Mod(V)
+                  end;
+               ([phoenix, live_component | _], #{component := C} = Md) when is_atom(C) ->
+                  case Md of
+                    #{event := E} when is_binary(E) -> <<(Mod(C))/binary, " ", E/binary>>;
+                    _ -> Mod(C)
+                  end;
+               ([phoenix, channel_handled_in], #{event := E, socket := #{channel := C}}) when is_atom(C) ->
+                  <<(Mod(C))/binary, " ", (Str(E))/binary>>;
                (_, Md) -> Key0(Md)
             end,
       Times = [duration, total_time, query_time, queue_time, decode_time, idle_time],

@@ -51,10 +51,11 @@ defmodule OtpDebugMcp.ProfilerTest do
              Enum.sort([crunch["function"], square["function"]])
 
     # Every step calls crunch and light once, and crunch calls the fn once
-    # per element: 2,000 times for busy, 10 for busy_light.
+    # per element: 2,000 times for busy, 10 for busy_light. The window can
+    # end between a step's crunch and its light.
     assert crunch["calls"] > 100
-    assert crunch["calls"] == light["calls"]
-    assert step["calls"] == crunch["calls"]
+    assert abs(crunch["calls"] - light["calls"]) <= 1
+    assert abs(step["calls"] - crunch["calls"]) <= 1
     assert square["calls"] > 100 * crunch["calls"]
 
     # crunch's own time includes Enum's, which isn't profiled; step's

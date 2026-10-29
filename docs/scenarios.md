@@ -75,10 +75,20 @@ category that's large:
 | `ets` | a table without eviction | `ets_tables`, then `ets_table` for what's in it; `yaws` when it's Yaws's cookie sessions |
 | `atom` | atoms created from input | `atom_table` |
 | nothing: the OS sees far more than `erlang:memory()` reports | allocator fragmentation: carriers kept alive by a few live blocks | `allocator_fragmentation` |
+| `processes`, on a Phoenix node with LiveViews | assigns that grow for as long as a page is open | `phoenix` |
 
 It then takes a `snapshot`, waits under real load, and diffs it. A single
 large number is a guess; a number that keeps growing across diffs is the
 evidence.
+
+On a Phoenix node, `phoenix` looks at the LiveView processes, one per
+open page, by view: how many, their memory, how many grew through the
+window and how fast. For the biggest, it reads which assigns hold the
+memory, and how long a list is. A LiveView keeps its assigns for as long
+as the page is open, so a list that gains an item with every PubSub
+message grows in every open tab. Against the LiveView demo
+(`examples/elixir/run.sh live`), it found an orders dashboard whose
+`orders` assign kept every order since the page opened (walkthrough 31).
 
 **Watch out.** `binary_leak` forces a garbage collection in every process.
 That's cheap, but say so if the node is under pressure.
@@ -90,11 +100,16 @@ examples/elixir/run.sh shop        # a mailbox that never drains
 examples/erlang/run.sh sessions    # atoms and ETS rows piling up
 examples/books/run.sh slice        # small slices pinning large binaries
 examples/elixir/run.sh yaws        # a Yaws API starting a session on every request
+examples/elixir/run.sh live        # a LiveView dashboard whose assigns keep growing
 ```
 
 > `shop_ex@yourhost` is getting slower and using more memory; find out why.
 
-Walkthroughs 1 and 14.
+> The staff's orders dashboard, a LiveView on `live_ex@yourhost`
+> (http://localhost:4050/), gets sluggish the longer it's open, and the
+> node's memory keeps growing. Find out why.
+
+Walkthroughs 1, 14 and 31.
 
 ### 2. Requests are getting slow
 
@@ -122,6 +137,13 @@ node. Against the Phoenix demo (`examples/elixir/run.sh phoenix`), it
 showed in its first call that every request to `/api/products/search`
 was dispatched to the route `/api/products/:id`, action `show`, and
 answered 404 (walkthrough 12).
+
+`phoenix` gives the same window's LiveView callbacks (mount,
+handle_params, handle_event, by view and event) and channel messages,
+slowest first. A LiveView handles one message at a time, so a slow
+`handle_event` holds up everything else for that page, its PubSub
+messages included. It also lists the routes that an earlier route for
+the same verb makes unreachable, as the Phoenix demo's search was.
 
 On a Phoenix or Bandit node whose clients get connection resets or wait
 before the first byte, `bandit` shows whether the server is at its
@@ -844,7 +866,7 @@ Walkthrough 17.
 
 ### 15. A web server refusing or stalling connections
 
-**Situation.** Some clients of a Phoenix, Bandit, Cowboy or Yaws
+**Situation.** Some clients of a Phoenix, Bandit, Cowboy, Yaws or Ranch
 service get their connections reset, or wait seconds before the first
 byte, while the request times the server reports look fine and nothing
 is logged; or the server's memory keeps growing under steady traffic.
@@ -890,6 +912,18 @@ that started them, and expired ones still kept. Against the Yaws demo
 (`examples/elixir/run.sh yaws`), it found a new session on every
 request (walkthrough 22).
 
+`ranch` looks at the Ranch listeners themselves, whatever protocol they
+run: HTTP under Cowboy, AMQP under RabbitMQ, or a protocol of your own.
+It reports each listener's limit per connection supervisor and the
+acceptors waiting for room, and groups the connection processes by
+where they are in the protocol's code. Then it lists the connections
+that did nothing through the window (no reductions, no bytes), those
+stuck in a handshake, and those with bytes waiting for a slow reader,
+and counts the connection processes that crashed, from Ranch's own log
+lines. Against the Ranch demo (`examples/elixir/run.sh ranch`), it
+found a point-of-sale server full, 60 of its 100 connections idle in a
+`recv` with no timeout, and the acceptors waiting (walkthrough 30).
+
 **Typical findings.** A connection limit set far below the default
 (16,384 per acceptor), slow requests holding connections (an upstream
 call, a pool checkout), idle keep-alives holding the rest for up to
@@ -907,7 +941,10 @@ default), closes each new connection as soon as it accepts it, and logs
 "Max connections reached". Its cookie sessions are kept for 30 minutes
 after their last use, and expired ones are removed only by an hourly
 sweep, so code that starts a session per request (or clients that don't
-send the cookie back) piles up an hour and a half of sessions.
+send the cookie back) piles up an hour and a half of sessions. A
+protocol of your own on Ranch that waits with an `infinity` timeout
+keeps every client that went away without closing (behind a NAT, a
+laptop put to sleep) until the listener is full.
 
 **Watch out.** Listening attaches a telemetry handler for the window,
 detached afterwards; nothing else is loaded. Connections are looked at
@@ -937,6 +974,17 @@ examples/elixir/run.sh cowboy
 
 It fetches Cowboy from Hex the first time, and serves port 8090.
 Walkthrough 21.
+
+```sh
+examples/elixir/run.sh ranch
+```
+
+> New tills can't connect to our point-of-sale server,
+> `ranch_ex@yourhost` (port 5555): they time out, while the tills
+> already connected keep working. Restarting it helps for a minute or
+> so. Find out why.
+
+It fetches Ranch from Hex the first time. Walkthrough 30.
 
 ```sh
 examples/elixir/run.sh yaws
