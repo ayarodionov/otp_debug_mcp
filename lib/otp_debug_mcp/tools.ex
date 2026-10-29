@@ -1080,6 +1080,101 @@ defmodule OtpDebugMcp.Tools do
     end
   end
 
+  defmodule HotSpots do
+    @moduledoc """
+    Where the node's CPU goes, by function, without tracing: a sampling
+    profiler. It finds the busiest processes, samples their stacks every
+    10 ms through the window (and scans for busy short-lived processes),
+    and ranks functions by their share of the samples: at the top of the
+    stack (own time), anywhere in it (with what they call), and the first
+    frame of your code (the place to change), with the hottest stacks,
+    the busiest processes, and the share of time collecting garbage.
+    Start here to tune a program; then profile the module it points to,
+    and benchmark the function.
+    """
+    use Anubis.Server.Component, type: :tool
+    use OtpDebugMcp.Approval
+
+    alias OtpDebugMcp.Tools
+
+    schema do
+      field(:duration_ms, :integer, description: "How long to sample (default 5000, max 10000)")
+    end
+
+    def perform(params, frame) do
+      duration = (params[:duration_ms] || 5_000) |> min(10_000) |> max(1_000)
+
+      case OtpDebugMcp.HotSpots.report(duration) do
+        {:ok, report} -> Tools.json_response(frame, report)
+        {:error, reason} -> Tools.error_response(frame, reason)
+      end
+    end
+  end
+
+  defmodule Benchmark do
+    @moduledoc """
+    Measure a function on the node, and compare: each function called
+    with the same arguments, repeatedly, by fresh processes (concurrency
+    of them at once), under each set of spawn options. For each: time per
+    call (p50, p95, p99, mean, max), reductions per call, calls a second,
+    and whether it returned exactly what the first did. Use it to measure
+    a hot function, to compare a rewritten version loaded under another
+    module name (load_module), and to try process tuning such as a larger
+    min_heap_size. It runs the functions for real: whatever they do (a
+    write, a message, a call out), they do.
+    """
+    use Anubis.Server.Component, type: :tool
+    use OtpDebugMcp.Approval
+
+    alias OtpDebugMcp.Tools
+
+    schema do
+      field(:functions, {:required, {:list, :string}},
+        description:
+          "Functions to compare, 1 to 4: mod:fun (Erlang) or Mod.fun (Elixir), each taking the same arguments"
+      )
+
+      field(:args, {:required, :string},
+        description:
+          "An Erlang expression, evaluated once on the node, for the list of arguments, e.g. \"[42]\" or \"[quote:sample_order(3000)]\""
+      )
+
+      field(:spawn_options, {:list, :string},
+        description:
+          "Spawn options to compare, each an Erlang list, e.g. [\"[]\", \"[{min_heap_size, 1000000}]\"] (default: [\"[]\"])"
+      )
+
+      field(:duration_ms, :integer,
+        description: "How long to call each variant (default 2000; at most 12 s in all)"
+      )
+
+      field(:concurrency, :integer, description: "Processes calling at once (default 1, max 64)")
+      field(:runs, :integer, description: "At most this many calls per process (default 100000)")
+    end
+
+    def perform(params, frame) do
+      functions = params[:functions] || []
+
+      cond do
+        functions == [] or length(functions) > 4 ->
+          Tools.error_response(frame, "give 1 to 4 functions")
+
+        true ->
+          opts = [
+            spawn_options: params[:spawn_options],
+            duration_ms: params[:duration_ms] && params[:duration_ms] |> max(100),
+            concurrency: params[:concurrency] && params[:concurrency] |> max(1) |> min(64),
+            runs: params[:runs] && params[:runs] |> max(1)
+          ]
+
+          case OtpDebugMcp.Benchmark.report(functions, params[:args], opts) do
+            {:ok, report} -> Tools.json_response(frame, report)
+            {:error, reason} -> Tools.error_response(frame, reason)
+          end
+      end
+    end
+  end
+
   defmodule Profile do
     @moduledoc """
     Profile where the time goes, by function: calls, own time and memory

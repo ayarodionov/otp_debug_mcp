@@ -1302,3 +1302,36 @@ defmodule OtpDebugMcp.Fixtures.PgShop do
     read()
   end
 end
+
+defmodule OtpDebugMcp.Fixtures.Tunable do
+  @moduledoc """
+  Code to profile and tune: `slow_sum/1` sums a list by index, each
+  Enum.at walking the list from its head (quadratic); `fast_sum/1` and
+  `wrong_sum/1` (off by one) for comparing; `alloc/1` builds big
+  intermediate lists; `churn/2` keeps processes summing.
+  """
+
+  def list(n), do: Enum.to_list(1..n)
+
+  def slow_sum(list) do
+    Enum.reduce(0..(length(list) - 1)//1, 0, fn i, acc -> acc + Enum.at(list, i) end)
+  end
+
+  def fast_sum(list), do: Enum.sum(list)
+  def wrong_sum(list), do: Enum.sum(list) + 1
+
+  def alloc(n) do
+    for(i <- 1..n, do: {i, i * 2}) |> Enum.map(fn {a, b} -> a + b end) |> Enum.sum()
+  end
+
+  def churn(n, procs) do
+    list = list(n)
+    for _ <- 1..procs, do: spawn(fn -> loop(list) end)
+    :ok
+  end
+
+  defp loop(list) do
+    slow_sum(list)
+    loop(list)
+  end
+end

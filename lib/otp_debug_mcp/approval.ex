@@ -197,6 +197,16 @@ defmodule OtpDebugMcp.Approval do
       {:changes,
        "Reads the node's Cowboy (Ranch) listeners, connections and requests, and attaches a telemetry handler for the window."}
 
+  def step("hot_spots", _),
+    do:
+      {:read,
+       "Samples the busiest processes' stacks through the window, to find where the CPU goes."}
+
+  def step("benchmark", p),
+    do:
+      {:changes,
+       "Calls #{Enum.join(p[:functions] || [], ", ")} with #{p[:args]} repeatedly, for real, in processes of its own: whatever those functions do, they do, many times."}
+
   def step("postgrex", %{server: true}),
     do:
       {:changes,

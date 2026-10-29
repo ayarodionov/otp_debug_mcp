@@ -1,6 +1,6 @@
 # Walkthroughs
 
-Twenty-six debugging sessions against the demo nodes in `examples/`, start to
+Twenty-seven debugging sessions against the demo nodes in `examples/`, start to
 finish, for following along on your own machine. Each one gives the
 command that starts the demo, the prompt, every tool call the agent made
 with the part of its result that mattered, and the conclusion. The
@@ -44,7 +44,8 @@ Contents:
 24. [Telemetry handlers attached per checkout](#24-telemetry-handlers-attached-per-checkout)
 25. [Mnesia transactions waiting on one record](#25-mnesia-transactions-waiting-on-one-record)
 26. [A Postgrex pool held through a payment call](#26-a-postgrex-pool-held-through-a-payment-call)
-27. [Cleaning up](#cleaning-up)
+27. [Profiling a slow function, and tuning it](#27-profiling-a-slow-function-and-tuning-it)
+28. [Cleaning up](#cleaning-up)
 
 ---
 
@@ -2359,6 +2360,94 @@ error the pages see.
   part of the pool, so slow checkouts can't starve them.
 - A larger `pool_size` only postpones it: the transactions still queue
   on the row.
+
+---
+
+## 27. Profiling a slow function, and tuning it
+
+```sh
+examples/erlang/run.sh tuning
+```
+
+`tuning_erl` builds price quotes (`examples/erlang/src/quote.erl`): four
+sales reps keep building quotes for 3000-line orders.
+
+> Quotes for big orders on `tuning_erl@yourhost` take about a second each
+> (`quote:build/1`, e.g. `quote:build(quote:sample_order(3000))`).
+> Profile it, find what to change, and measure. Don't load new code.
+
+Only the otp-debug tools were allowed. The session took 71 seconds.
+
+**`connect`**, then **`diagnose`**: every check `ok`; `top_reductions`
+and `long_schedules` show the four reps each holding a scheduler in
+`erlang:'++'/2`, under `quote:price_lines/5`. **`profile`** on `quote`
+for 3 seconds: `price_lines/5` takes 99.9% of the time, and allocates
+41 GB in those 3 seconds. **`module_code`** for it:
+
+```erlang
+price_lines(Lines, Catalog, I, Text, Total) when I =< length(Lines) ->
+    {Sku, Qty} = lists:nth(I, Lines),
+    {Sku, Price} = lists:keyfind(Sku, 1, Catalog),
+    Line = io_lib:format("~6w x~2w @ ~4w = ~7w~n", [Sku, Qty, Price, Qty * Price]),
+    price_lines(Lines, Catalog, I + 1, Text ++ lists:flatten(Line), Total + Qty * Price);
+price_lines(_Lines, _Catalog, _I, Text, Total) ->
+    {Text, Total}.
+```
+
+**`benchmark`** of `quote:build` on orders of 750, 1500 and 3000 lines:
+
+| Lines | Mean per call | Reductions per call |
+|---|---|---|
+| 750 | 44 ms | 0.83 M |
+| 1500 | 175 ms | 2.5 M |
+| 3000 | 665 ms | 9.0 M |
+
+Twice the lines, four times the time: quadratic. With garbage collection
+at about a quarter of the work, a **`benchmark`** of the same call under
+two spawn options:
+
+```json
+{"findings": ["info: fastest: quote:build ([{min_heap_size, 4000000}]), 367720.6 µs a call on average, 1.8 times faster than quote:build ([])"],
+ "variants": [
+   {"function": "quote:build", "spawn_options": "[]", "us_mean": 673069.0, "reductions_per_call": 9005911, ...},
+   {"function": "quote:build", "spawn_options": "[{min_heap_size, 4000000}]", "us_mean": 367720.6,
+    "speedup_vs_first": 1.83, "same_result_as_first": true, ...}]}
+```
+
+Fewer collections halve it, but the work is still quadratic.
+
+**The answer.** Each line copies all the text so far (`Text ++`), walks
+the list to the line (`lists:nth`) and again for its length (the guard),
+and scans the 5000-product catalog list (`lists:keyfind`). The session
+proposed one pass over the lines, the prices in a map, and the text
+built as a list of lines, reversed and flattened once; and, to confirm
+it, loading the rewrite under another name and benchmarking both.
+
+**Then, with the user's approval.** That rewrite is
+`examples/erlang/tuning/quote_fast.erl`, compiled by `run.sh`. The rest
+was run by script, with the same tools, the user accepting
+`load_module`'s dialog:
+
+```
+Load new code for quote_fast on tuning_erl@yourhost?
+New code: md5 b9227720461607655f3679186a0f8619, .../examples/erlang/tuning/quote_fast.beam
+Running now: not loaded on the node
+```
+
+**`load_module`** loaded it, until the node restarts. **`benchmark`** of
+both on `quote:sample_order(3000)`:
+
+```json
+{"findings": ["info: fastest: quote_fast:build ([]), 6725.8 µs a call on average, 101.9 times faster than quote:build ([])"],
+ "variants": [
+   {"function": "quote:build", "us_mean": 685608.7, "us_p95": 704866.9, "reductions_per_call": 9022917, "calls": 4},
+   {"function": "quote_fast:build", "us_mean": 6725.8, "us_p95": 10926.3, "reductions_per_call": 1133377, "calls": 444,
+    "same_result_as_first": true, "speedup_vs_first": 101.94}]}
+```
+
+102 times faster, with exactly the same quote. And `quote_fast` under a
+larger `min_heap_size`: 6.1 ms against 6.5 ms, 7%; with the garbage gone,
+the process setting no longer matters much.
 
 ---
 

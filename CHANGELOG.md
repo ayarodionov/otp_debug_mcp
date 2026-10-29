@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- `hot_spots`: where a node's CPU goes, by function, without tracing: the
+  busiest processes' stacks sampled every 10 ms (and a scan for busy
+  short-lived ones), ranked by own time, time with callees and the first
+  frame of your code, with the hottest stacks, the busiest processes and
+  the share of time collecting garbage.
+- `benchmark`: a function called on the node with the same arguments,
+  repeatedly, by fresh processes: time per call (p50 to max), reductions
+  per call, calls a second; several functions compared, each checked to
+  return what the first does, and several spawn options (a larger
+  `min_heap_size`) tried. A tuning demo (`examples/erlang/run.sh
+  tuning`, with a tuned version to load and compare), scenario 3, and
+  walkthrough 27.
+
 ## 0.11.0
 
 Four tools for what an application runs on: Postgrex connection pools

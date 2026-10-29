@@ -14,6 +14,7 @@
 #     examples/erlang/run.sh deploy      # deploy_erl: a fix deployed but never loaded, a process in old code
 #     examples/erlang/run.sh dist        # dist_a, dist_b: one node shipping 2 MB to the other ten times a second
 #     examples/erlang/run.sh mnesia      # mnesia_erl: orders slow at busy times, on Mnesia
+#     examples/erlang/run.sh tuning      # tuning_erl: quotes for big orders take seconds: profile and tune
 #     examples/erlang/run.sh stop        # stop them all
 #
 # Each node runs in the background, named with -sname on this host, with
@@ -84,6 +85,13 @@ case "${1:-}" in
     ;;
   reports) build; start reports_erl "ok = reports:start()" ;;
   mnesia) build; start mnesia_erl "ok = mnesia_shop:start()" ;;
+  tuning)
+    # quote_fast, the tuned version, is compiled into tuning/ to load and
+    # compare with (walkthrough 27), never loaded by the node itself.
+    build
+    erlc +debug_info -o "$here/tuning" "$here/tuning/quote_fast.erl"
+    start tuning_erl "ok = quote:start_reps()"
+    ;;
   deploy)
     # discounts lives apart, in deploy/, so another demo's build can't
     # overwrite its deployed version.
@@ -119,11 +127,11 @@ case "${1:-}" in
       [rpc:call(list_to_atom(N ++ \"@$host\"), init, stop, [], 2000)
        || N <- [\"shop_erl\", \"payments_erl\", \"sessions_erl\", \"native_erl\", \"ports_erl\",
                 \"orders_erl\", \"crash_erl\", \"locks_erl\", \"reports_erl\", \"deploy_erl\",
-                \"dist_a\", \"dist_b\", \"erl_a\", \"erl_b\", \"erl_c\", \"mnesia_erl\"]],
+                \"dist_a\", \"dist_b\", \"erl_a\", \"erl_b\", \"erl_c\", \"mnesia_erl\", \"tuning_erl\"]],
       halt()."
     ;;
   *)
-    echo "usage: $0 shop|payments|sessions|cluster|native|ports|orders|locks|crash|reports|deploy|dist|mnesia|stop" >&2
+    echo "usage: $0 shop|payments|sessions|cluster|native|ports|orders|locks|crash|reports|deploy|dist|mnesia|tuning|stop" >&2
     exit 1
     ;;
 esac

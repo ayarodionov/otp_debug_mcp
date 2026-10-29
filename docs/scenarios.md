@@ -196,9 +196,10 @@ The Postgrex demo runs its own PostgreSQL (`initdb` and `pg_ctl` on the
 PATH), created in `examples/elixir/postgrex_shop/pgdata` and listening on
 127.0.0.1:5544; `run.sh stop` stops it. Walkthroughs 1, 12, 24 and 26.
 
-### 3. High CPU
+### 3. High CPU, and making code faster
 
-**Situation.** Monitoring shows the node near 100% CPU.
+**Situation.** Monitoring shows the node near 100% CPU, or one operation
+is slower than it should be and you want it faster.
 
 > CPU on `worker@batch-2` is pegged. Is it really busy, and doing what?
 
@@ -215,6 +216,25 @@ top one then shows the arguments it's called with.
 > Profile `Pricing` on `worker@batch-2` for 5 seconds. Which functions use
 > the time?
 
+To tune a program, the loop is: find where the time goes, measure, change,
+measure again. `hot_spots` is the first step on any node, as it needs no
+module to start from and traces nothing: it samples the busiest
+processes' stacks every 10 ms and ranks functions by their share of the
+samples, at the top of the stack (own time) and anywhere in it, with the
+first frame of your code (the place to change), the hottest stacks, and
+the time spent collecting garbage. `profile` on the module it points to
+then counts calls and time exactly. `benchmark` measures the function:
+called with the same arguments by fresh processes, for a while, it gives
+the time per call (p50 to max), reductions per call and calls a second.
+Given several functions, it compares them and checks each returns
+exactly what the first did, so a rewritten version loaded under another
+name (`load_module`, with the user's approval) is measured against the
+original. Given several spawn options, it tries a process's tuning, such
+as a larger `min_heap_size` for a function that allocates a lot. Against
+the tuning demo (`examples/erlang/run.sh tuning`), the loop took a quote
+for a 3000-line order from about a second to a few milliseconds
+(walkthrough 27).
+
 **Typical findings.** Real saturation (all schedulers near 1.0) versus one
 pegged scheduler with the rest idle, which points to a long-running NIF
 (scenario 11: `long_schedules` names it). A large `gc_share_of_work` in
@@ -223,6 +243,12 @@ or many short-lived terms; large heaps are collected on the dirty CPU
 schedulers, so it counts those too.
 A profile usually puts most of the time in a few functions: a loop over a
 large list, repeated encoding or decoding, a regex compiled on every call.
+The usual tunings: `lists:nth` or `length` in a loop (quadratic: walk the
+list once), lookups in a list (`lists:keyfind` on a big list: a map or
+ETS), `++` onto a growing list or string (build an iolist, reversed or
+not, and flatten once), work repeated per call that could be done once
+(a catalog rebuilt, a regex compiled), and for a function that allocates
+a lot, a larger `min_heap_size` for the process running it.
 
 **Watch out.**
 - Counting slows down every profiled call, so profile one module for a few
@@ -237,12 +263,17 @@ large list, repeated encoding or decoding, a regex compiled on every call.
 ```sh
 examples/erlang/run.sh reports     # CPU spent collecting garbage
 examples/erlang/run.sh native      # a NIF holding a scheduler
+examples/erlang/run.sh tuning      # quotes that take a second: profile and tune
 ```
 
 > `reports_erl@yourhost` uses a lot of CPU for what it does: it only adds
 > up the day's sales. Find out where the CPU goes.
 
-Walkthroughs 15 and 7.
+> Quotes for big orders on `tuning_erl@yourhost` take about a second each
+> (`quote:build/1`, e.g. `quote:build(quote:sample_order(3000))`).
+> Profile it, find what to change, and measure.
+
+Walkthroughs 15, 7 and 27.
 
 ### 4. A process is stuck, or calls time out
 

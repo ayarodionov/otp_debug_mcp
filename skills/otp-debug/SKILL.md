@@ -89,6 +89,12 @@ raw introspection when a purpose-built tool exists.
      CPU creeping up in an app that attaches handlers at run time →
      `telemetry_handlers`: handlers too slow for the processes that emit
      their events, handlers detached after raising, handlers piling up.
+   - Making code faster, or a busy node's CPU → `hot_spots` first (a
+     sampling profiler: own time, the first frame of your code, GC share),
+     then `profile` on that module, then `benchmark` the function: with a
+     rewritten version loaded under another name (load_module, the user
+     approving) to compare speed and that it returns the same, and with
+     spawn_options (a larger min_heap_size) when it allocates a lot.
    - Queries slow, or failing with "connection not available and request
      was dropped from queue", on PostgreSQL (Postgrex, Ecto) → `postgrex`:
      the pool exhausted, who holds its connections and where (slow work

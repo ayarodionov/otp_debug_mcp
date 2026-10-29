@@ -41,6 +41,7 @@ defmodule OtpDebugMcp.TestTarget do
     OtpDebugMcp.Fixtures.TelemetryShop,
     OtpDebugMcp.Fixtures.MnesiaShop,
     OtpDebugMcp.Fixtures.PgShop,
+    OtpDebugMcp.Fixtures.Tunable,
     OtpDebugMcp.Fixtures.RiakShop
   ]
 

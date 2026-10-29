@@ -74,6 +74,8 @@ introspection primitives, but an encoded diagnostic playbook in the spirit of
 | `trace_port` | A port's traffic, or the ports opened and closed in a window with who opened them; rate-limited, in its own trace session on OTP 27+ |
 | `cowboy` | A Cowboy web server, through Ranch under it: its listeners and connection limits (per connection supervisor), acceptors blocked waiting for room, idle and WebSocket connections, the requests in flight grouped by where they wait and those running through the whole window, timeouts and routes, and over the window Ranch's accept rate and, with cowboy_telemetry, requests by status, the slowest routes and handler crashes |
 | `yaws` | A Yaws web server: each listening server's virtual servers and appmods, its connections against `max_connections`, what its acceptor processes are doing (each connection is one, and runs `out/1`), the requests in flight grouped by where they wait and those running through the window, and its cookie sessions: how many, how fast they grow, how many were used only once |
+| `hot_spots` | Where the CPU goes, by function, without tracing: a sampling profiler over the busiest processes' stacks, with own time, time with callees, the first frame of your code, the hottest stacks and the share in garbage collection |
+| `benchmark` | A function measured on the node, and compared: time per call (p50 to max), reductions per call, calls a second, for each function and set of spawn options, and whether each returns what the first does: for tuning a rewrite, or a process setting such as `min_heap_size` |
 | `postgrex` | Postgrex connection pools (Ecto's Postgres repos too): connections up or reconnecting, idle or checked out, who holds each and where in their code (and whether in a transaction while doing something else), and the callers waiting; with `server: true`, `pg_stat_activity` and lock waits matched to those connections |
 | `mnesia` | Mnesia: its nodes and tables (storage, size, memory, copies, whether any is reachable), commits, aborts and restarts a second, the records transactions wait for a lock on (sampled through the window) with where their holders are in the code, Mnesia's own mailboxes, and its system events in the window (overload, partitions, nodes down) |
 | `telemetry_handlers` | The telemetry handlers attached: their events and functions, and what they cost: how many processes are inside each at a time and about how long it takes per event (handlers run in the emitting process), from sampling stacks; handlers that raised and were detached in the window; functions that don't exist; one function attached twice; handlers piling up |
@@ -151,7 +153,7 @@ To approve the investigation step by step, start the server with
 | Value | The server asks before |
 |---|---|
 | `off` (the default) | nothing but `load_module`'s loads |
-| `changes` | each step that does something on the node beyond reading it: connecting (which may load recon there), `diagnose` (it forces garbage collections and briefly turns on microstate accounting and a trace session), checks that do the same, tracing, profiling, `recent_errors`, `telemetry`, `telemetry_handlers`, `bandit`, `cowboy` and `shackle` (which attach a handler while they listen), `mnesia` (which subscribes to its events), `postgrex` with `server` (which opens a connection to the database), `process_info` with the process's state, `riak_core` with `crdts` (it asks the vnodes for their state), `cluster`, and `remote_eval` |
+| `changes` | each step that does something on the node beyond reading it: connecting (which may load recon there), `diagnose` (it forces garbage collections and briefly turns on microstate accounting and a trace session), checks that do the same, tracing, profiling, `recent_errors`, `telemetry`, `telemetry_handlers`, `bandit`, `cowboy` and `shackle` (which attach a handler while they listen), `mnesia` (which subscribes to its events), `benchmark` (which runs the functions it measures), `postgrex` with `server` (which opens a connection to the database), `process_info` with the process's state, `riak_core` with `crdts` (it asks the vnodes for their state), `cluster`, and `remote_eval` |
 | `all` | every step, reads included |
 
 In Claude Code:
@@ -516,7 +518,7 @@ a link between nodes saturated, a Bandit server out of connections, a
 Cowboy server whose acceptors wait for room, a Yaws server starting a
 session on every request, a shackle pool with one connection held up,
 telemetry handlers piling up, Mnesia transactions waiting on one record, a Postgrex pool held up by
-a payment call, a
+a payment call, profiling and tuning a slow function, a
 riak_core cluster with a member down and a vnode swamped, and riak_dt
 sets whose actors pile up.
 
