@@ -1,6 +1,6 @@
 # Walkthroughs
 
-Twenty-seven debugging sessions against the demo nodes in `examples/`, start to
+Twenty-eight debugging sessions against the demo nodes in `examples/`, start to
 finish, for following along on your own machine. Each one gives the
 command that starts the demo, the prompt, every tool call the agent made
 with the part of its result that mattered, and the conclusion. The
@@ -45,7 +45,8 @@ Contents:
 25. [Mnesia transactions waiting on one record](#25-mnesia-transactions-waiting-on-one-record)
 26. [A Postgrex pool held through a payment call](#26-a-postgrex-pool-held-through-a-payment-call)
 27. [Profiling a slow function, and tuning it](#27-profiling-a-slow-function-and-tuning-it)
-28. [Cleaning up](#cleaning-up)
+28. [EMQX: a client that never acknowledges, and a client id shared](#28-emqx-a-client-that-never-acknowledges-and-a-client-id-shared)
+29. [Cleaning up](#cleaning-up)
 
 ---
 
@@ -2448,6 +2449,65 @@ both on `quote:sample_order(3000)`:
 102 times faster, with exactly the same quote. And `quote_fast` under a
 larger `min_heap_size`: 6.1 ms against 6.5 ms, 7%; with the garbage gone,
 the process setting no longer matters much.
+
+---
+
+## 28. EMQX: a client that never acknowledges, and a client id shared
+
+```sh
+examples/emqx/run.sh start
+```
+
+EMQX 5.8.6 runs in Docker as `emqx@127.0.0.1` (cookie `emqxdemo`), with
+`examples/emqx/clients.py`: 19 sensors publishing readings at QoS 1, a
+dashboard subscribed to them all, and two devices both connecting as
+`sensor-7`. The server was started with `ERL_FLAGS="-erl_epmd_port 4370"`,
+as EMQX listens for distribution on 4370 without epmd.
+
+> Our dashboard (MQTT client `dashboard-1`) misses sensor readings, and
+> device `sensor-7` keeps going offline. EMQX is `emqx@127.0.0.1`. Find
+> out why.
+
+Only the otp-debug tools were allowed. The session took 69 seconds.
+
+**`connect`** (EMQX ships recon, which is used as it is), then
+**`diagnose`**: every check `ok`; the busiest process is the dashboard's
+connection. **`emqx`**, for 15 seconds:
+
+```json
+{"status": "warning",
+ "findings": [
+   "warning: 1 clients can't keep up; dashboard-1 has 32 of 32 messages in flight unacknowledged and 1000 of 1000 queued, and has had 9787 dropped (EMQX drops 180.1 a second for full queues now): EMQX keeps QoS 1 and 2 messages in flight until the client acknowledges them, queues the rest, and drops what doesn't fit (delivery.dropped.queue_full). A client that never acknowledges, or reads too slowly, misses messages",
+   "warning: 4.8 sessions a second taken over or discarded, with 4.8 connects a second (reconnecting in the window: sensor-7): clients reconnecting with a client id already connected, which kicks the other off; two devices sharing one client id kick each other off forever"],
+ "slow_consumers": [{"client_id": "dashboard-1", "in_flight": "32 of 32", "queued": "1000 of 1000",
+                     "dropped": 9787, "delivered": 32, "memory_bytes": 4736184}],
+ "reconnecting": {"clients": 1, "some": ["sensor-7"]},
+ "window": {"messages_received_per_s": 180.1, "messages_delivered_per_s": 0.0,
+            "dropped_per_s": {"queue_full": 180.1},
+            "connects_per_s": 4.8, "disconnects_per_s": 4.8, "sessions_discarded_per_s": 4.8},
+ "clients": {"connections": 21, "sessions": 21, "subscriptions": 1}}
+```
+
+**`recent_errors`** for 10 seconds: nothing, as EMQX logs only warnings
+and up.
+
+**The answer.** Two client bugs; the broker is healthy. `dashboard-1`
+took its first 32 messages and acknowledged none: EMQX sends no more until
+it does, queues the next thousand, and drops every reading after that,
+180 a second, everything the sensors publish. And two clients connect as
+`sensor-7`: each connection discards the other's session, and both
+reconnect at once, about five times a second.
+
+**Fixes.**
+
+- **The dashboard:** acknowledge each message (or auto-acknowledge), with
+  a handler that doesn't block; or subscribe at QoS 0 if only the latest
+  readings matter. A larger `max_inflight` or `max_mqueue_len` only delays
+  the drops.
+- **sensor-7:** a client id of its own for every device (from its serial
+  or MAC), and the duplicate found: a cloned image, a second process. An
+  ACL tying the client id to the device's credentials keeps it from
+  happening again, and a back-off in the reconnect loop stops a storm.
 
 ---
 

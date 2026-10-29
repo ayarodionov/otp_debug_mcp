@@ -1080,6 +1080,39 @@ defmodule OtpDebugMcp.Tools do
     end
   end
 
+  defmodule Emqx do
+    @moduledoc """
+    EMQX, the MQTT broker, from a node of its cluster, sampled at the
+    start and the end of a window: version, cluster and overload
+    protection; EMQX's own active alarms; listeners and how full they
+    are; clients, sessions, subscriptions; its counters over the window
+    (connects, messages received and delivered, dropped by reason,
+    sessions taken over or discarded, authentication failures); clients
+    that can't keep up (messages in flight unacknowledged, queues full,
+    drops); client ids reconnecting; rules and actions failing or
+    disconnected. Findings come first, worst first. Read-only.
+    """
+    use Anubis.Server.Component, type: :tool
+    use OtpDebugMcp.Approval
+
+    alias OtpDebugMcp.Tools
+
+    schema do
+      field(:duration_ms, :integer,
+        description: "How long between the two samples (default 5000, max 30000)"
+      )
+    end
+
+    def perform(params, frame) do
+      duration = (params[:duration_ms] || 5_000) |> min(30_000) |> max(500)
+
+      case OtpDebugMcp.Emqx.report(duration) do
+        {:ok, report} -> Tools.json_response(frame, report)
+        {:error, reason} -> Tools.error_response(frame, reason)
+      end
+    end
+  end
+
   defmodule HotSpots do
     @moduledoc """
     Where the node's CPU goes, by function, without tracing: a sampling

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- `emqx`: EMQX, the MQTT broker, through its own APIs and tables: version,
+  cluster, overload protection, its active alarms, listeners and how full
+  they are, clients and sessions; its counters over a window (messages
+  received and delivered, dropped by reason, sessions taken over or
+  discarded, authentication failures); clients that can't keep up (in
+  flight unacknowledged, queues full, drops, from its channel table);
+  client ids reconnecting; rules and actions failing or disconnected. An
+  EMQX demo (`examples/emqx`, EMQX in Docker and misbehaving MQTT
+  clients), scenario 26, and walkthrough 28. Tests against an EMQX node
+  in Docker, in CI's new EMQX target job.
 - `hot_spots`: where a node's CPU goes, by function, without tracing: the
   busiest processes' stacks sampled every 10 ms (and a scan for busy
   short-lived ones), ranked by own time, time with callees and the first

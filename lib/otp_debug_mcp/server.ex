@@ -30,6 +30,7 @@ defmodule OtpDebugMcp.Server do
   component(Tools.Postgrex)
   component(Tools.HotSpots)
   component(Tools.Benchmark)
+  component(Tools.Emqx)
   component(Tools.RiakCore)
   component(Tools.ProcessInfo)
   component(Tools.PortInfo)

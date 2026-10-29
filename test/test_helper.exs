@@ -6,13 +6,15 @@
 # the :new_otp tests one running a newer release, given by NEW_OTP_NODE and
 # NEW_OTP_COOKIE (see new_otp_test.exs). The
 # :tls_dist tests need the suite to run over TLS (see tls_dist_test.exs).
-# The :postgres tests need PostgreSQL's binaries (see PgServer).
+# The :postgres tests need PostgreSQL's binaries (see PgServer), the :emqx
+# ones an EMQX node given by EMQX_NODE (see emqx_test.exs).
 tls? = match?({:ok, [[~c"inet_tls" | _] | _]}, :init.get_argument(:proto_dist))
 
 exclude =
   if(System.get_env("OLD_OTP_NODE"), do: [], else: [:old_otp]) ++
     if(System.get_env("NEW_OTP_NODE"), do: [], else: [:new_otp]) ++
     if(tls?, do: [], else: [:tls_dist]) ++
-    if(OtpDebugMcp.PgServer.bindir(), do: [], else: [:postgres])
+    if(OtpDebugMcp.PgServer.bindir(), do: [], else: [:postgres]) ++
+    if(System.get_env("EMQX_NODE"), do: [], else: [:emqx])
 
 ExUnit.start(exclude: exclude)

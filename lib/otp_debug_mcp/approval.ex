@@ -197,6 +197,11 @@ defmodule OtpDebugMcp.Approval do
       {:changes,
        "Reads the node's Cowboy (Ranch) listeners, connections and requests, and attaches a telemetry handler for the window."}
 
+  def step("emqx", _),
+    do:
+      {:read,
+       "Reads EMQX's stats, counters, listeners, alarms, rules and channel table, twice, a window apart."}
+
   def step("hot_spots", _),
     do:
       {:read,

@@ -1384,8 +1384,24 @@ and [examples/lfe](../examples/lfe)). Nothing has to be installed on the target,
 distribution as a hidden node. If the product ships its own recon, that copy
 is used as-is.
 
+For EMQX, the MQTT broker, `emqx` reads it through its own APIs and
+tables: its version, cluster and overload protection, its own active
+alarms, its listeners and how full they are, its clients and sessions,
+its counters over a window (messages received and delivered, dropped by
+reason, sessions taken over or discarded, authentication failures), the
+clients that can't keep up (messages in flight unacknowledged, queues
+full, drops, from its channel table), the client ids reconnecting, and
+its rules and actions failing or disconnected. EMQX 5 listens for
+distribution on port 4370 without epmd: the server dials that port when
+its `ERL_FLAGS` say `-erl_epmd_port 4370` (a registration of its own, as
+in [production.md](production.md)). Against the EMQX demo
+(`examples/emqx/run.sh start`), it found a dashboard client that never
+acknowledges, its messages dropped, and two devices sharing one client id
+(walkthrough 28).
+
 **Watch out.** You won't have the source in the session, so findings stop at
-"this process, in this function." Products often have their own diagnostics
+"this process, in this function." (For EMQX, the findings are about
+clients and configuration, where the fixes usually are.) Products often have their own diagnostics
 too, such as RabbitMQ's `rabbitmq-diagnostics`; use both. Locate the cookie
 with care: it grants full control of the node.
 
@@ -1394,12 +1410,19 @@ with care: it grants full control of the node.
 ```sh
 examples/gleam/run.sh shop        # needs Gleam
 examples/lfe/run.sh shop          # needs LFE
+examples/emqx/run.sh start        # EMQX in Docker, and misbehaving MQTT clients
 ```
 
 > `shop_gleam@yourhost` is getting slower and using more memory; find out why.
 
-No third-party product here: the Gleam and LFE demos are BEAM code from
-other languages, debugged the same way.
+> Our dashboard (MQTT client `dashboard-1`) misses sensor readings, and
+> device `sensor-7` keeps going offline. EMQX is `emqx@127.0.0.1`.
+> Find out why.
+
+The Gleam and LFE demos are BEAM code from other languages, debugged the
+same way; the EMQX demo is a third-party product, in Docker (see
+[examples/emqx](../examples/emqx) for registering a server for it).
+Walkthrough 28.
 
 ### 27. Your own node during development
 

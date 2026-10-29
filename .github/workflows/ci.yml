@@ -99,6 +99,46 @@ jobs:
         if: always()
         run: docker logs otp26
 
+  emqx:
+    name: EMQX target
+    runs-on: ubuntu-24.04
+    env:
+      MIX_ENV: test
+    steps:
+      - uses: actions/checkout@v7
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28"
+          elixir-version: "1.19"
+      - uses: actions/cache@v6
+        with:
+          path: |
+            deps
+            _build
+          key: mix-test-28-${{ hashFiles('mix.lock') }}
+      # Yaws, a test dependency, compiles a PAM driver.
+      - run: sudo apt-get update && sudo apt-get install -y libpam0g-dev
+      - run: mix deps.get
+      - run: mix compile
+      # EMQX 5 listens for distribution on 4370, without epmd: the tests
+      # connect there directly, without listening themselves.
+      - name: Start EMQX
+        run: |
+          docker run -d --name emqx -e EMQX_NODE__NAME=emqx@127.0.0.1 -e EMQX_NODE__COOKIE=testcookie \
+            -p 1883:1883 -p 4370:4370 emqx/emqx:5.8.6
+          for i in $(seq 1 60); do
+            docker logs emqx 2>&1 | grep -q "is running now" && break
+            sleep 2
+          done
+      - run: mix test --only emqx
+        env:
+          EMQX_NODE: emqx@127.0.0.1
+          EMQX_COOKIE: testcookie
+          ERL_FLAGS: -erl_epmd_port 4370 -dist_listen false
+      - name: EMQX log
+        if: always()
+        run: docker logs emqx | tail -100
+
   new-otp:
     name: OTP 29 target
     runs-on: ubuntu-24.04

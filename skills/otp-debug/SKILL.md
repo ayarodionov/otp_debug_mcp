@@ -89,6 +89,11 @@ raw introspection when a purpose-built tool exists.
      CPU creeping up in an app that attaches handlers at run time →
      `telemetry_handlers`: handlers too slow for the processes that emit
      their events, handlers detached after raising, handlers piling up.
+   - EMQX (MQTT broker) problems: messages lost, clients disconnecting,
+     a slow or overloaded broker → `emqx`: slow consumers (in flight
+     unacknowledged, queues full, drops), client ids kicking each other
+     off, its alarms, auth failures, rules and actions failing. EMQX 5
+     needs the server started with ERL_FLAGS="-erl_epmd_port 4370".
    - Making code faster, or a busy node's CPU → `hot_spots` first (a
      sampling profiler: own time, the first frame of your code, GC share),
      then `profile` on that module, then `benchmark` the function: with a
