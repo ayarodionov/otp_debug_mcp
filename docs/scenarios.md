@@ -198,7 +198,9 @@ Walkthroughs 15 and 7.
 
 ### 4. A process is stuck, or calls time out
 
-**Situation.** A feature hangs, or calls to one GenServer time out.
+**Situation.** A feature hangs, or calls to one GenServer time out, or
+calls to a backend through a client pool time out or are refused now
+and then.
 
 > Calls to `Billing.Ledger` time out after 5 seconds. Why?
 
@@ -226,10 +228,26 @@ fetches its state, and a `sys:get_state` timeout is itself a finding:
 the process is too busy or blocked to answer. `supervision_tree` shows
 what it depends on and what restarts with it.
 
+For calls to a backend through shackle (and the clients built on it:
+marina for Cassandra, anchor for memcached, buoy for HTTP), `shackle`
+reads each pool: its backend, size, `backlog_size` and retries, each
+connection up or reconnecting with its requests in flight, the
+callers waiting for a reply grouped by where they called from; and over
+a window shackle's telemetry: replies and their times, timeouts, and
+calls refused. Against the shackle demo (`examples/elixir/run.sh
+shackle`), it found one connection's backlog full while the other three
+were idle, an export holding it up (walkthrough 23).
+
 **Typical findings.** Two processes calling each other (deadlock), often
 one calling back into the other from a callback, a call to a slow
 external service made inside a GenServer, or a process blocked behind its
-own backlog.
+own backlog. With shackle: head-of-line blocking (a backend that
+answers a connection's requests in order, so one slow request holds up
+every request behind it on that connection, and they time out while the
+other connections idle); connections down and reconnecting; and calls
+refused with `{error, no_server}`, which is what shackle returns when
+the connections a call picked were full (`backlog_size`) as well as
+when they were down, once `max_retries` (0 by default) ran out.
 
 **Try it.**
 
@@ -242,6 +260,17 @@ examples/erlang/run.sh locks
 
 Walkthrough 11. `examples/books/run.sh lock` has a deadlock that a
 timeout ends every few seconds ([plausible-but-wrong.md](plausible-but-wrong.md)).
+
+```sh
+examples/elixir/run.sh shackle
+```
+
+> On `shackle_ex@yourhost`, price lookups (`price_api:lookup/1`) fail
+> now and then, though the pricing backend answers a lookup in a
+> millisecond. Find out why.
+
+It fetches shackle from Hex the first time; its pricing backend runs in
+the same node, on port 8097. Walkthrough 23.
 
 ### 5. Approaching a system limit
 

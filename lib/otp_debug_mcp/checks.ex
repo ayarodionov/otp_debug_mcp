@@ -705,7 +705,10 @@ defmodule OtpDebugMcp.Checks do
   %% removed: not on the code path, and the file it was loaded from gone
   %% too. (Mix takes Hex's and the build tools' directories off the code
   %% path once the project is built, with their modules still loaded.)
+  %% Modules compiled at run time and loaded under a bare name (foil's,
+  %% mochiglobal's) never had a file: not counted.
   Disk = [{M, S, F} || {M, F} <- code:all_loaded(), is_list(F),
+                       filename:pathtype(F) =:= absolute,
                        S <- [catch code:module_status(M)],
                        S =:= modified orelse (S =:= removed andalso not filelib:is_regular(F))],
   {length(Old), InOld, Infos, Disk}.

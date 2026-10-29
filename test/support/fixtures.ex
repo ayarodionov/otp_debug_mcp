@@ -958,3 +958,135 @@ defmodule OtpDebugMcp.Fixtures.YawsShop do
 
   def clients(port, n, path), do: OtpDebugMcp.Fixtures.HttpClients.start(port, n, path)
 end
+
+defmodule OtpDebugMcp.Fixtures.ShackleShop do
+  @moduledoc """
+  A shackle pool, :shop_pool, of this client, to a backend in the same
+  node: a line protocol (`Id Command`, answered `Id ok`), each
+  connection's requests handled one at a time, `slow` taking `slow_ms`.
+  `start/2` takes the pool options and slow_ms; `lookups/2` and `slow/1`
+  keep callers busy; `backend_down/0` closes the backend.
+  """
+  @behaviour :shackle_client
+
+  def start(pool_options, slow_ms) do
+    parent = self()
+
+    spawn(fn ->
+      {:ok, listen} = :gen_tcp.listen(0, [:binary, packet: :line, active: false, reuseaddr: true])
+      {:ok, port} = :inet.port(listen)
+      :persistent_term.put({__MODULE__, :listen}, listen)
+      send(parent, {:port, port})
+      accept(listen, slow_ms)
+    end)
+
+    port =
+      receive do
+        {:port, port} -> port
+      end
+
+    :ok =
+      :shackle_pool.start(
+        :shop_pool,
+        __MODULE__,
+        [port: port, reconnect_time_min: 200, socket_options: [:binary]],
+        pool_options
+      )
+
+    Process.sleep(300)
+    port
+  end
+
+  def backend_down do
+    :gen_tcp.close(:persistent_term.get({__MODULE__, :listen}))
+    for pid <- :persistent_term.get({__MODULE__, :conns}, []), do: Process.exit(pid, :kill)
+    :ok
+  end
+
+  defp accept(listen, slow_ms) do
+    case :gen_tcp.accept(listen) do
+      {:ok, socket} ->
+        # It reads only once the socket is its own.
+        pid =
+          spawn(fn ->
+            receive do
+              :go -> serve(socket, slow_ms)
+            end
+          end)
+
+        :ok = :gen_tcp.controlling_process(socket, pid)
+        send(pid, :go)
+
+        :persistent_term.put({__MODULE__, :conns}, [
+          pid | :persistent_term.get({__MODULE__, :conns}, [])
+        ])
+
+        accept(listen, slow_ms)
+
+      _ ->
+        :ok
+    end
+  end
+
+  # One request at a time on a connection, as many backends do.
+  defp serve(socket, slow_ms) do
+    case :gen_tcp.recv(socket, 0) do
+      {:ok, line} ->
+        [id, command] = line |> String.trim() |> String.split(" ")
+        if command == "slow", do: Process.sleep(slow_ms)
+        :ok = :gen_tcp.send(socket, "#{id} ok\n")
+        serve(socket, slow_ms)
+
+      _ ->
+        :ok
+    end
+  end
+
+  def lookups(n, timeout) do
+    for _ <- 1..n, do: spawn(fn -> lookup(timeout) end)
+    :ok
+  end
+
+  defp lookup(timeout) do
+    :shackle.call(:shop_pool, :get, timeout)
+    Process.sleep(10)
+    lookup(timeout)
+  end
+
+  def slow(n) do
+    for _ <- 1..n, do: spawn(fn -> slow_call() end)
+    :ok
+  end
+
+  defp slow_call do
+    :shackle.call(:shop_pool, :slow, 60_000)
+    slow_call()
+  end
+
+  @impl true
+  def init(_), do: {:ok, %{next: 0, buffer: ""}}
+
+  @impl true
+  def setup(_socket, state), do: {:ok, state}
+
+  @impl true
+  def handle_request(command, %{next: id} = state),
+    do: {:ok, id, "#{id} #{command}\n", %{state | next: id + 1}}
+
+  @impl true
+  def handle_data(data, %{buffer: buffer} = state) do
+    lines = String.split(buffer <> data, "\n")
+    {complete, [rest]} = Enum.split(lines, -1)
+
+    replies =
+      for line <- complete, line != "" do
+        [id, reply] = String.split(line, " ")
+        {String.to_integer(id), reply}
+      end
+
+    {:ok, replies, %{state | buffer: rest}}
+  end
+
+  @impl true
+  def terminate(_state), do: :ok
+end

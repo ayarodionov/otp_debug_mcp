@@ -266,6 +266,21 @@ defmodule OtpDebugMcp.ChecksTest do
 
     assert %{findings: %{different_on_disk: disk}} = Checks.run(:stale_code)
     assert %{on_disk: :removed, file: ^beam} = Enum.find(disk, &(&1.module == ":otpdbg_tool"))
+
+    # A module compiled at run time and loaded under a bare file name, as
+    # foil (under shackle) does, never had a file: not stale.
+    forms = [hd(forms) |> put_elem(3, :otpdbg_generated) | tl(forms)]
+    {:ok, :otpdbg_generated, generated} = :compile.forms(forms)
+
+    {:module, _} =
+      TestTarget.call(target, :code, :load_binary, [
+        :otpdbg_generated,
+        ~c"otpdbg_generated.erl",
+        generated
+      ])
+
+    assert %{findings: %{different_on_disk: disk}} = Checks.run(:stale_code)
+    refute Enum.any?(disk, &(&1.module == ":otpdbg_generated"))
   end
 
   test "distribution: the node's connections, and this tool's marked" do

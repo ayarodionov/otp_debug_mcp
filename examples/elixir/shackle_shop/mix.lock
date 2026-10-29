@@ -1,0 +1,7 @@
+%{
+  "foil": {:hex, :foil, "0.1.6", "31a9048e8ec6e8ac951ed3c4e4eb8f549465920c70f19e92cd9fc8a6867e7253", [:rebar3], [{:metal, "0.1.2", [hex: :metal, repo: "hexpm", optional: false]}], "hexpm", "8d34b12d712ffb30ad9e192f57885abb1a61510cd3d9f6aa44470510a50b979e"},
+  "knot": {:hex, :knot, "0.1.2", "3b6c07cd24831d62752d879f031bcedcfadb343738679eb1774a029d0a8b7d48", [:rebar3], [], "hexpm", "42cb91a8024a8857d70a61b33e83d31370d5eb48681b366ae1203cb7c7ccfb38"},
+  "metal": {:hex, :metal, "0.1.2", "7501f14b075380f829498c4ce605643d6c7f0c55f60ebfcfbf694c33a558df98", [:rebar3], [], "hexpm", "cac84e5cf2875b56e68874f3f0b3d598af3ec30397ec2151d5c81c408961e6e4"},
+  "shackle": {:hex, :shackle, "0.8.0", "891a6fd0adf8f91ff2f3c5ce7574127ce0f2ecedc31c852e97fb02c68f7211d5", [:rebar3], [{:foil, "0.1.6", [hex: :foil, repo: "hexpm", optional: false]}, {:knot, "0.1.2", [hex: :knot, repo: "hexpm", optional: false]}, {:metal, "0.1.2", [hex: :metal, repo: "hexpm", optional: false]}, {:telemetry, "1.4.2", [hex: :telemetry, repo: "hexpm", optional: false]}], "hexpm", "695f75d6503808717b3376552cb553566a996f561cde63bb0c37e2d6e4cf72e9"},
+  "telemetry": {:hex, :telemetry, "1.4.2", "a0cb522801dffb1c49fe6e30561badffc7b6d0e180db1300df759faa22062855", [:rebar3], [], "hexpm", "928f6495066506077862c0d1646609eed891a4326bee3126ba54b60af61febb1"},
+}

@@ -197,6 +197,11 @@ defmodule OtpDebugMcp.Approval do
       {:changes,
        "Reads the node's Cowboy (Ranch) listeners, connections and requests, and attaches a telemetry handler for the window."}
 
+  def step("shackle", _),
+    do:
+      {:changes,
+       "Reads the node's shackle pools and their connections, and attaches a telemetry handler for the window."}
+
   def step("yaws", _),
     do: {:read, "Reads the node's Yaws servers, their acceptors and its cookie sessions."}
 

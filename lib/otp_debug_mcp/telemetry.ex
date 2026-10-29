@@ -138,12 +138,14 @@ defmodule OtpDebugMcp.Telemetry do
       end,
       %% Bandit's and Cowboy's requests by path and status, failed ones by
       %% their error, Thousand Island's errors by reason; Cowboy's early
-      %% errors (a request it answered before any handler) by status.
+      %% errors (a request it answered before any handler) by status;
+      %% shackle's events by client module.
       Key = fun([bandit, request | _], #{conn := #{request_path := P} = C}) ->
                   <<(Str(maps:get(method, C, <<>>)))/binary, " ", (Path(P))/binary, " -> ",
                     (Str(maps:get(status, C, <<"no status">>)))/binary>>;
                ([bandit | _], #{error := E}) -> <<"error: ", (Str(E))/binary>>;
                ([thousand_island | _], #{error := E}) -> Str(E);
+               ([shackle | _], #{client := C}) -> Str(C);
                ([cowboy, request, early_error], Md) ->
                   <<"early error -> ", (Str(maps:get(resp_status, Md, <<"no status">>)))/binary>>;
                ([cowboy, request | _], #{req := #{method := M, path := P}} = Md) ->
@@ -154,7 +156,10 @@ defmodule OtpDebugMcp.Telemetry do
       Times = [duration, total_time, query_time, queue_time, decode_time, idle_time],
       Add = fun({event, Event, Ms, Md}, Groups) ->
         G = maps:get({Event, Key(Event, Md)}, Groups, #{count => 0, samples => #{}, slowest => none, error => none}),
-        Us = maps:from_list([{T, erlang:convert_time_unit(V, native, microsecond)}
+        %% Times are in native units, but shackle's reply duration is in
+        %% microseconds already.
+        Unit = case Event of [shackle, reply] -> microsecond; _ -> native end,
+        Us = maps:from_list([{T, erlang:convert_time_unit(V, Unit, microsecond)}
                              || T <- Times, V <- [maps:get(T, Ms, none)], is_integer(V)]),
         Samples = maps:fold(fun(T, V, Acc) ->
                               {N, L} = maps:get(T, Acc, {0, []}),

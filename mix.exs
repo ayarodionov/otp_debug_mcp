@@ -44,8 +44,9 @@ defmodule OtpDebugMcp.MixProject do
       # injected into the target node at connect time (see OtpDebugMcp.Target),
       # so the target app needs no recon dependency of its own.
       {:recon, "~> 2.5"},
-      # Only so tests can run a Bandit, Cowboy or Yaws server, and a
-      # riak_core cluster with riak_dt's CRDTs, on target nodes.
+      # Only so tests can run a Bandit, Cowboy or Yaws server, shackle
+      # client pools, and a riak_core cluster with riak_dt's CRDTs, on
+      # target nodes.
       {:bandit, "~> 1.13", only: :test},
       {:cowboy, "~> 2.12", only: :test},
       {:cowboy_telemetry, "~> 0.4", only: :test},
@@ -53,6 +54,7 @@ defmodule OtpDebugMcp.MixProject do
       # Debian and Ubuntu).
       {:yaws,
        github: "erlyaws/yaws", tag: "yaws-2.3.1", only: :test, runtime: false, manager: :rebar3},
+      {:shackle, "~> 0.8.0", only: :test, runtime: false},
       {:riak_core, "~> 0.11.1", hex: :riak_core_lite, only: :test, runtime: false},
       {:riak_dt, "~> 2.1", only: :test, runtime: false}
     ]

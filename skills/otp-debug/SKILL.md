@@ -85,6 +85,10 @@ raw introspection when a purpose-built tool exists.
      this). Ranch caps each connection supervisor, not the listener. On
      Yaws, memory growing under steady traffic → `yaws`: cookie sessions
      started on every request pile up for an hour or more.
+   - Calls to a backend through shackle (marina, anchor, buoy) timing
+     out or refused with {error, no_server} → `shackle`: connections down,
+     one connection's backlog full while the others idle (a slow request
+     holding up those behind it, head-of-line), timeouts and reply times.
    - A riak_core cluster (Riak KV, riak_core_lite) slow or losing
      requests → `riak_core` from any member: members down or unreachable,
      fallbacks, ownership changes stuck awaiting handoff, and the

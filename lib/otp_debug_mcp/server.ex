@@ -24,6 +24,7 @@ defmodule OtpDebugMcp.Server do
   component(Tools.Bandit)
   component(Tools.Cowboy)
   component(Tools.Yaws)
+  component(Tools.Shackle)
   component(Tools.RiakCore)
   component(Tools.ProcessInfo)
   component(Tools.PortInfo)

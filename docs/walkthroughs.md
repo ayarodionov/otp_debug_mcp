@@ -1,6 +1,6 @@
 # Walkthroughs
 
-Twenty-two debugging sessions against the demo nodes in `examples/`, start to
+Twenty-three debugging sessions against the demo nodes in `examples/`, start to
 finish, for following along on your own machine. Each one gives the
 command that starts the demo, the prompt, every tool call the agent made
 with the part of its result that mattered, and the conclusion. The
@@ -40,7 +40,8 @@ Contents:
 20. [riak_dt sets whose actors pile up](#20-riak_dt-sets-whose-actors-pile-up)
 21. [A Cowboy server whose acceptors wait for room](#21-a-cowboy-server-whose-acceptors-wait-for-room)
 22. [A Yaws API whose cookie sessions pile up](#22-a-yaws-api-whose-cookie-sessions-pile-up)
-23. [Cleaning up](#cleaning-up)
+23. [A shackle pool with one connection held up](#23-a-shackle-pool-with-one-connection-held-up)
+24. [Cleaning up](#cleaning-up)
 
 ---
 
@@ -2037,6 +2038,86 @@ only at the hourly sweep. At 50 a second, the table can't level off for
   `persistent_term`.
 - **Shorter lives:** a shorter ttl in `new_cookie_session/2`, and a
   shorter `ysession_long_timeout`, so expired sessions go sooner.
+
+---
+
+## 23. A shackle pool with one connection held up
+
+```sh
+examples/elixir/run.sh shackle
+```
+
+`shackle_ex` prices its products through a shackle pool, `prices`
+(`examples/elixir/shackle_shop`): 4 connections, a backlog of 16, to a
+pricing backend in the same node, on port 8097, that answers each
+connection's requests in order. 20 shoppers look prices up with a 100 ms
+timeout; a report job runs an export through the same pool, again 200 ms
+after each one ends.
+
+> On `shackle_ex@yourhost`, price lookups (`price_api:lookup/1`) fail
+> now and then, though the pricing backend answers a lookup in a
+> millisecond. Find out why.
+
+Only the otp-debug tools were allowed. The session took 46 seconds.
+
+**`connect`**, then **`diagnose`**: every check `ok`. **`shackle`**, for
+10 seconds:
+
+```json
+{"status": "warning",
+ "findings": [
+   "warning: pool :prices (price_client to 127.0.0.1:8097): 524 of 2747 calls timed out ({error, timeout}) in 10026 ms; replies took 2.08 ms at p50, 4.08 ms at p95, and 531 replies came after their call had given up",
+   "warning: pool :prices (price_client to 127.0.0.1:8097): connection 3 had 8 requests in flight (of 16), while the others had at most 0: something holds that connection up (a slow request ahead of the others, as a backend answers a connection's requests in order, or a slow backend instance), and the calls behind it wait"],
+ "pools": [{"pool": ":prices", "client": "price_client", "backend": "127.0.0.1:8097",
+            "pool_size": 4, "pool_strategy": "random", "backlog_size": 16, "max_retries": 0,
+            "connections": [{"index": 1, "up": true, "in_flight": 0},
+                            {"index": 2, "up": true, "in_flight": 0},
+                            {"index": 3, "up": true, "in_flight": 8},
+                            {"index": 4, "up": true, "in_flight": 0}],
+            "held_up": {"index": 3, "in_flight": 8, "others_at_most": 0},
+            "window": {"replies": 2223, "timeout": 524, "not_found": 531,
+                       "reply_ms": {"p50": 2.08, "p95": 4.08, "max": 801.97}}}],
+ "callers_waiting": {"count": 8, "in": [
+   {"callers": 7, "in_your_code": "shackle_shop:shopper/0"},
+   {"callers": 1, "in_your_code": "shackle_shop:reports/0"}]}}
+```
+
+A fifth of the calls time out, though replies take 2 ms; the replies
+come anyway, too late (`not_found`), the slowest after 802 ms. One
+connection has 8 requests in flight, the others none, and among the
+callers waiting, one is the report job. **`module_code`** for
+`price_api:lookup/1`, `price_reports:export/0` and the client:
+
+```erlang
+lookup(Sku) -> shackle:call(prices, {get, Sku}, 100).
+export()    -> shackle:call(prices, export, 5000).
+```
+
+**`trace_calls`** on `price_reports:export`: each takes 800 ms.
+
+**The answer.** Exports and lookups share the pool, and the backend
+answers a connection's requests in order. While an export runs, every
+lookup that the pool's random pick sends to that connection waits behind
+it, up to 800 ms, well past its 100 ms timeout. A quarter of the lookups
+land there, and an export runs 80% of the time: about 20% fail, as
+measured.
+
+**Fixes.**
+
+- **A pool of their own for exports**, so slow requests never share a
+  connection with lookups:
+
+  ```erlang
+  shackle_pool:start(price_exports, price_client,
+                     [{port, 8097}, {socket_options, [binary]}],
+                     [{pool_size, 1}, {backlog_size, 4}]).
+  ```
+
+  and `shackle:call(price_exports, export, 5000)` in `price_reports`.
+- **A backend that answers out of order:** the protocol already tags each
+  request with an id, and the client matches replies by it.
+- Not a longer lookup timeout: the failures would go, but lookups behind
+  an export would still take up to 800 ms.
 
 ---
 

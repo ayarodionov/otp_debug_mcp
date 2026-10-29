@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+- `shackle`: the node's shackle client pools (and the clients built on
+  shackle: marina, anchor, buoy): each pool's client, backend, size,
+  strategy, backlog size and retries, each connection up or reconnecting
+  with its requests in flight and its mailbox, and the callers waiting
+  for a reply grouped by where they called from, all read from shackle's
+  own counters without touching the connections. Over a window, shackle's
+  telemetry by client: replies and their times, timeouts, calls refused
+  with `{error, no_server}` and why (connections full or down), late
+  replies. Findings include one connection backed up while the others
+  idle: head-of-line blocking. A shackle demo
+  (`examples/elixir/run.sh shackle`), scenario 4, and walkthrough 23.
+- `diagnose`'s `stale_code` no longer reports modules compiled at run
+  time and loaded under a bare file name (foil's, under shackle;
+  mochiglobal's) as removed from disk: they never had a file.
+
 ## 0.10.0
 
 A tool for Yaws web servers (`yaws`), with a demo, a scenario and a

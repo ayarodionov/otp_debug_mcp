@@ -676,6 +676,38 @@ defmodule OtpDebugMcp.Tools do
     end
   end
 
+  defmodule Shackle do
+    @moduledoc """
+    The node's shackle client pools (and the clients built on shackle:
+    marina, anchor, buoy...): for each, its client module and backend,
+    pool size, strategy, backlog size and retries, each connection up or
+    reconnecting with its requests in flight, and the processes waiting
+    for a reply grouped by where they called from. Then, over the window,
+    shackle's telemetry by client: replies and their times, timeouts,
+    calls refused ({error, no_server}: their connections full or down)
+    and late replies. One
+    connection backed up while the others aren't is a slow request
+    holding up those behind it. Findings come first, worst first.
+    """
+    use Anubis.Server.Component, type: :tool
+    use OtpDebugMcp.Approval
+
+    alias OtpDebugMcp.Tools
+
+    schema do
+      field(:duration_ms, :integer, description: "How long to listen (default 5000, max 30000)")
+    end
+
+    def perform(params, frame) do
+      duration = (params[:duration_ms] || 5_000) |> min(30_000) |> max(500)
+
+      case OtpDebugMcp.Shackle.report(duration) do
+        {:ok, report} -> Tools.json_response(frame, report)
+        {:error, reason} -> Tools.error_response(frame, reason)
+      end
+    end
+  end
+
   defmodule RiakCore do
     @moduledoc """
     A riak_core cluster (Riak KV, riak_core_lite, and systems built on

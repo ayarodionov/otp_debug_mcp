@@ -74,6 +74,7 @@ introspection primitives, but an encoded diagnostic playbook in the spirit of
 | `trace_port` | A port's traffic, or the ports opened and closed in a window with who opened them; rate-limited, in its own trace session on OTP 27+ |
 | `cowboy` | A Cowboy web server, through Ranch under it: its listeners and connection limits (per connection supervisor), acceptors blocked waiting for room, idle and WebSocket connections, the requests in flight grouped by where they wait and those running through the whole window, timeouts and routes, and over the window Ranch's accept rate and, with cowboy_telemetry, requests by status, the slowest routes and handler crashes |
 | `yaws` | A Yaws web server: each listening server's virtual servers and appmods, its connections against `max_connections`, what its acceptor processes are doing (each connection is one, and runs `out/1`), the requests in flight grouped by where they wait and those running through the window, and its cookie sessions: how many, how fast they grow, how many were used only once |
+| `shackle` | shackle client pools (and marina, anchor, buoy built on them): each pool's backend, size, backlog and retries, each connection up or reconnecting with its requests in flight, the callers waiting for a reply by where they called from, and over a window replies and their times, timeouts and calls refused, from shackle's telemetry |
 | `bandit` | A Phoenix or Bandit web server, through Thousand Island under it: where it listens, its connection limit and how full it is, acceptors waiting for room, connections idle or busy (the busy ones grouped by where they wait), and over a window requests by status, the slowest routes, socket errors and connections refused at the limit, which nothing logs |
 | `riak_core` | A riak_core cluster (Riak KV, riak_core_lite) from one member: members and whether they're reachable, the claimant, ownership and the changes awaiting handoff, fallback vnodes, the busiest vnode mailboxes on every member, handoffs, services, and riak_core's own ringready and transfers; with `crdts: true`, the riak_dt sets and maps its vnodes hold: size, actors, deferred removes |
 | `telemetry` | What the node's `:telemetry` events say over a window: Phoenix requests by route, Ecto queries by table and query (with pool wait time), Oban jobs, HTTP client calls, each with count, p50/p95/max and the slowest example, and the errors of exception events |
@@ -147,7 +148,7 @@ To approve the investigation step by step, start the server with
 | Value | The server asks before |
 |---|---|
 | `off` (the default) | nothing but `load_module`'s loads |
-| `changes` | each step that does something on the node beyond reading it: connecting (which may load recon there), `diagnose` (it forces garbage collections and briefly turns on microstate accounting and a trace session), checks that do the same, tracing, profiling, `recent_errors`, `telemetry`, `bandit` and `cowboy` (which attach a handler while they listen), `process_info` with the process's state, `riak_core` with `crdts` (it asks the vnodes for their state), `cluster`, and `remote_eval` |
+| `changes` | each step that does something on the node beyond reading it: connecting (which may load recon there), `diagnose` (it forces garbage collections and briefly turns on microstate accounting and a trace session), checks that do the same, tracing, profiling, `recent_errors`, `telemetry`, `bandit`, `cowboy` and `shackle` (which attach a handler while they listen), `process_info` with the process's state, `riak_core` with `crdts` (it asks the vnodes for their state), `cluster`, and `remote_eval` |
 | `all` | every step, reads included |
 
 In Claude Code:
@@ -510,7 +511,7 @@ API seen through its telemetry, failures that nothing logs, what's in an
 ETS table, CPU spent collecting garbage, a fix deployed but never loaded,
 a link between nodes saturated, a Bandit server out of connections, a
 Cowboy server whose acceptors wait for room, a Yaws server starting a
-session on every request, a
+session on every request, a shackle pool with one connection held up, a
 riak_core cluster with a member down and a vnode swamped, and riak_dt
 sets whose actors pile up.
 
@@ -527,7 +528,7 @@ background, on this host with `-sname`, and `run.sh stop` stops them:
 
 | Language | Directory | Demos |
 |---|---|---|
-| Elixir | [examples/elixir](examples/elixir) | a mailbox that never drains, a crash loop, a cluster with one bad node, a billing service whose macro DSL records every charge twice, a Phoenix API whose search route is shadowed by one `resources` generates, a Bandit API out of connections, a Cowboy API whose slow route leaves no room for the fast ones, a Yaws API whose cookie sessions pile up, a riak_core cluster with a member down and a hot partition, riak_dt wishlists whose actors pile up, and a Mix release with its own cookie |
+| Elixir | [examples/elixir](examples/elixir) | a mailbox that never drains, a crash loop, a cluster with one bad node, a billing service whose macro DSL records every charge twice, a Phoenix API whose search route is shadowed by one `resources` generates, a Bandit API out of connections, a Cowboy API whose slow route leaves no room for the fast ones, a Yaws API whose cookie sessions pile up, a shackle pool where one slow request holds up a connection, a riak_core cluster with a member down and a hot partition, riak_dt wishlists whose actors pile up, and a Mix release with its own cookie |
 | Erlang | [examples/erlang](examples/erlang) | a mailbox that never drains, an OTP application in a crash loop, a session store leaking atoms and ETS rows, a cluster with one bad node, a C NIF library that blocks a scheduler and leaks native memory, a shop that leaks sockets and external programs and fills a slow peer's socket, an orders service whose errors only its logs show, a node that runs out of memory and leaves a crash dump, two gen_servers that deadlock, report workers whose CPU goes to garbage collection, a fix deployed but never loaded, and a node flooding the link to another |
 | Gleam | [examples/gleam](examples/gleam) | a mailbox that never drains, a supervised actor whose `let assert` panics in a loop, and a job runner leaking processes |
 | LFE | [examples/lfe](examples/lfe) | a mailbox that never drains, an OTP application in a crash loop, and an index whose slices pin whole binaries |
