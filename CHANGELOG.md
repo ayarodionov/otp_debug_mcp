@@ -1,6 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.12.0
+
+Six tools: a sampling profiler (`hot_spots`) and a benchmark
+(`benchmark`) for tuning code on a live node; two Erlang products,
+EMQX (`emqx`) and ejabberd (`ejabberd`), each against its Docker image,
+in CI too; Ranch listeners of any protocol (`ranch`); and Phoenix
+applications, LiveView included (`phoenix`). Each has a demo, a
+scenario and a walkthrough.
 
 - `phoenix`: a Phoenix application, sampled a window apart with its
   telemetry between: endpoints (where they listen, their sockets,
