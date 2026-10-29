@@ -1,6 +1,6 @@
 # Walkthroughs
 
-Nineteen debugging sessions against the demo nodes in `examples/`, start to
+Twenty-two debugging sessions against the demo nodes in `examples/`, start to
 finish, for following along on your own machine. Each one gives the
 command that starts the demo, the prompt, every tool call the agent made
 with the part of its result that mattered, and the conclusion. The
@@ -37,7 +37,10 @@ Contents:
 17. [A link between nodes saturated](#17-a-link-between-nodes-saturated)
 18. [A Bandit server out of connections](#18-a-bandit-server-out-of-connections)
 19. [A riak_core cluster: a member down, a vnode swamped](#19-a-riak_core-cluster-a-member-down-a-vnode-swamped)
-20. [Cleaning up](#cleaning-up)
+20. [riak_dt sets whose actors pile up](#20-riak_dt-sets-whose-actors-pile-up)
+21. [A Cowboy server whose acceptors wait for room](#21-a-cowboy-server-whose-acceptors-wait-for-room)
+22. [A Yaws API whose cookie sessions pile up](#22-a-yaws-api-whose-cookie-sessions-pile-up)
+23. [Cleaning up](#cleaning-up)
 
 ---
 
