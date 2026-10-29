@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- `telemetry_handlers`: the telemetry handlers attached on the node and
+  what they cost. Each handler's events and function, and whether that
+  function exists; over a window, from sampling the processes' stacks,
+  how many processes are inside each handler at a time (which handler is
+  read from telemetry's own frame, as a handler may tail-call away) and
+  about how long it takes per event; handlers that raised and were
+  detached, from telemetry's `[telemetry, handler, failure]` event; one
+  function attached twice to an event; handlers attached per process or
+  request, piling up. A telemetry demo (`examples/elixir/run.sh
+  telemetry`), scenario 2, and walkthrough 24.
 - `shackle`: the node's shackle client pools (and the clients built on
   shackle: marina, anchor, buoy): each pool's client, backend, size,
   strategy, backlog size and retries, each connection up or reconnecting

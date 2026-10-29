@@ -1,6 +1,6 @@
 # Walkthroughs
 
-Twenty-three debugging sessions against the demo nodes in `examples/`, start to
+Twenty-four debugging sessions against the demo nodes in `examples/`, start to
 finish, for following along on your own machine. Each one gives the
 command that starts the demo, the prompt, every tool call the agent made
 with the part of its result that mattered, and the conclusion. The
@@ -41,7 +41,8 @@ Contents:
 21. [A Cowboy server whose acceptors wait for room](#21-a-cowboy-server-whose-acceptors-wait-for-room)
 22. [A Yaws API whose cookie sessions pile up](#22-a-yaws-api-whose-cookie-sessions-pile-up)
 23. [A shackle pool with one connection held up](#23-a-shackle-pool-with-one-connection-held-up)
-24. [Cleaning up](#cleaning-up)
+24. [Telemetry handlers attached per checkout](#24-telemetry-handlers-attached-per-checkout)
+25. [Cleaning up](#cleaning-up)
 
 ---
 
@@ -2118,6 +2119,83 @@ measured.
   request with an id, and the client matches replies by it.
 - Not a longer lookup timeout: the failures would go, but lookups behind
   an export would still take up to 800 ms.
+
+---
+
+## 24. Telemetry handlers attached per checkout
+
+```sh
+examples/elixir/run.sh telemetry
+```
+
+`telemetry_ex` runs a shop's checkout (`examples/elixir/telemetry_shop`):
+5 shoppers, each checking out ten times a second. To hear how long its
+payment took, each checkout attaches a telemetry handler to
+`[:shop, :payment, :stop]`. The session started after the shop had run
+for a minute and a half.
+
+> Checkout on `telemetry_ex@yourhost` (`Shop.Checkout.run/1`) gets
+> slower the longer the shop runs, and its CPU use creeps up. Find out
+> why.
+
+Only the otp-debug tools were allowed. The session took 41 seconds.
+
+**`connect`**, then **`diagnose`**: `message_queues` flagged the five
+shoppers, each with over 4,000 messages queued, while sleeping between
+checkouts; `top_reductions` had `:telemetry_handler_table` at the top,
+and `ets_tables` its table at 4,640 rows. **`telemetry_handlers`**, for
+5 seconds:
+
+```json
+{"status": "warning",
+ "findings": [
+   "warning: 5450 handlers with ids like {'Elixir.Shop.Checkout',#Ref<...>} (all handlers: 5205 at the start of the window, 5450 at its end): attached per process or per request, and not detached; each runs on every event it's attached to"],
+ "handlers": 5450, "handlers_at_start": 5205,
+ "id_patterns": [{"pattern": "{'Elixir.Shop.Checkout',#Ref<...>}",
+                  "handlers": 5450, "at_start": 5205}],
+ "busiest": [{"id": "{'Elixir.Shop.Checkout',#Ref<...>}",
+              "events": ["shop.payment.stop"],
+              "function": "Shop.Checkout.payment_done/4",
+              "events_per_s": 46.0}, ...]}
+```
+
+245 more handlers in 5 seconds, about 49 a second, one per checkout, all
+on the payment event. **`module_code`** for `Shop.Checkout.run/1` and
+`payment_done/4`:
+
+```elixir
+def run(order) do
+  :ok = :telemetry.attach({Shop.Checkout, make_ref()}, [:shop, :payment, :stop],
+                          &Shop.Checkout.payment_done/4, %{checkout: self(), order: order})
+  :ok = Shop.Payments.charge(order)
+  receive do
+    {:payment_ms, ms} -> ms
+  after
+    1000 -> :unknown
+  end
+end
+
+def payment_done(_event, %{duration: duration}, %{order: order}, %{checkout: pid, order: order}),
+  do: send(pid, {:payment_ms, System.convert_time_unit(duration, :native, :millisecond)})
+
+def payment_done(_event, _measurements, _metadata, _config), do: :ok
+```
+
+**The answer.** Every checkout attaches a handler and never detaches it.
+Handlers are global and outlive the call that attached them, and every
+payment event runs them all: the work per checkout grows with the
+number of checkouts so far, which is why checkout gets slower and CPU
+creeps up. And an old handler whose order equals a later one's (orders
+are only a shopper and a total) sends that shopper a stray
+`{:payment_ms, ms}` that nothing receives, hence the mailboxes; or a
+stray one is taken for the current checkout's.
+
+**Fixes.**
+
+- **Don't attach per call:** time the charge where it's made, with
+  `:timer.tc/1`, or attach one handler when the application starts.
+- If a handler per call is kept: detach it in an `after`, and tag the
+  message with the call's ref, so a stale one can't be taken.
 
 ---
 

@@ -676,6 +676,38 @@ defmodule OtpDebugMcp.Tools do
     end
   end
 
+  defmodule TelemetryHandlers do
+    @moduledoc """
+    The telemetry handlers attached on the node, and what they cost: each
+    handler's events and function, and whether that function exists (if
+    not, it's detached on its first event); handlers that raised in the
+    window, which telemetry detached for good, so what they reported has
+    stopped; how many processes are inside each handler at a time, and
+    about how long it takes per event (a handler runs in the process that
+    emits the event, so a slow one slows every emitter), from sampling
+    stacks, without tracing; one function attached twice to an event; and
+    handlers attached per process or request, piling up. Findings come
+    first, worst first.
+    """
+    use Anubis.Server.Component, type: :tool
+    use OtpDebugMcp.Approval
+
+    alias OtpDebugMcp.Tools
+
+    schema do
+      field(:duration_ms, :integer, description: "How long to watch (default 5000, max 10000)")
+    end
+
+    def perform(params, frame) do
+      duration = (params[:duration_ms] || 5_000) |> min(10_000) |> max(1_000)
+
+      case OtpDebugMcp.TelemetryHandlers.report(duration) do
+        {:ok, report} -> Tools.json_response(frame, report)
+        {:error, reason} -> Tools.error_response(frame, reason)
+      end
+    end
+  end
+
   defmodule Shackle do
     @moduledoc """
     The node's shackle client pools (and the clients built on shackle:

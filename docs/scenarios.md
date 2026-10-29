@@ -127,18 +127,37 @@ On a Phoenix or Bandit node whose clients get connection resets or wait
 before the first byte, `bandit` shows whether the server is at its
 connection limit and what holds the connections (scenario 15).
 
+Telemetry itself can be the cause. A handler runs in the process that
+emits the event, inside `telemetry:execute`, so every request waits for
+every handler attached to its events. `telemetry_handlers` lists the
+handlers and what they cost: it samples the processes' stacks through
+the window for those inside a handler (which one, read from telemetry's
+own frame) and divides the average number inside by the events a second
+the handler gets, which is about its time per event, without tracing.
+It also reports handlers that raised in the window (telemetry detaches
+them for good, so what they reported stops, with one log line), handlers
+whose function doesn't exist, one function attached twice to an event,
+and handlers attached per process or request that pile up. Against the
+telemetry demo (`examples/elixir/run.sh telemetry`), it found thousands
+of handlers attached one per checkout, never detached, all run on every
+payment (walkthrough 24).
+
 **Typical findings.** One process serializing work for everyone (a registry,
 a single DB connection, the owner of an ETS table doing all writes), or
 fire-and-forget casts with no backpressure. From `telemetry`: one route or
 query far slower than the rest, a p95 far above the p50 (some calls wait
 on something), queries waiting on the pool (`queue_time_ms`), or one
-request running many fast queries.
+request running many fast queries. From `telemetry_handlers`: a handler
+that calls a busy process (a metrics reporter behind a `GenServer.call`),
+handlers piling up, or metrics that stopped because their handler raised
+once and was detached.
 
 **Try it.**
 
 ```sh
 examples/elixir/run.sh shop
 examples/elixir/run.sh phoenix
+examples/elixir/run.sh telemetry
 ```
 
 > `shop_ex@yourhost` is getting slower and using more memory; find out why.
@@ -146,7 +165,11 @@ examples/elixir/run.sh phoenix
 > `phoenix_ex@yourhost` is a Phoenix API. Tell me what requests it's
 > serving right now, how fast, and whether anything looks wrong.
 
-Walkthroughs 1 and 12.
+> Checkout on `telemetry_ex@yourhost` (`Shop.Checkout.run/1`) gets
+> slower the longer the shop runs, and its CPU use creeps up. Find out
+> why.
+
+Walkthroughs 1, 12 and 24.
 
 ### 3. High CPU
 

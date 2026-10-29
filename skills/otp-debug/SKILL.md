@@ -85,6 +85,10 @@ raw introspection when a purpose-built tool exists.
      this). Ranch caps each connection supervisor, not the listener. On
      Yaws, memory growing under steady traffic → `yaws`: cookie sessions
      started on every request pile up for an hour or more.
+   - Requests slower with telemetry attached, metrics that stopped, or
+     CPU creeping up in an app that attaches handlers at run time →
+     `telemetry_handlers`: handlers too slow for the processes that emit
+     their events, handlers detached after raising, handlers piling up.
    - Calls to a backend through shackle (marina, anchor, buoy) timing
      out or refused with {error, no_server} → `shackle`: connections down,
      one connection's backlog full while the others idle (a slow request

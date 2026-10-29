@@ -91,6 +91,9 @@ defmodule OtpDebugMcp.Telemetry do
         (result, {ok, _}) -> {ok, ok};
         (result, {error, E}) -> {ok, {error, Text(E)}};
         (reason, V) -> {ok, Text(V)};
+        %% A failed handler's id and event, as text: they're tuples and lists.
+        (handler_id, V) when not is_binary(V) -> {ok, Text(V)};
+        (event_name, V) when is_list(V) -> {ok, Text(V)};
         (_, V) when is_atom(V); is_number(V) -> {ok, V};
         (_, V) when is_binary(V) -> {ok, Short(V)};
         (_, _) -> skip
@@ -139,13 +142,17 @@ defmodule OtpDebugMcp.Telemetry do
       %% Bandit's and Cowboy's requests by path and status, failed ones by
       %% their error, Thousand Island's errors by reason; Cowboy's early
       %% errors (a request it answered before any handler) by status;
-      %% shackle's events by client module.
+      %% shackle's events by client module; handler failures by handler.
       Key = fun([bandit, request | _], #{conn := #{request_path := P} = C}) ->
                   <<(Str(maps:get(method, C, <<>>)))/binary, " ", (Path(P))/binary, " -> ",
                     (Str(maps:get(status, C, <<"no status">>)))/binary>>;
                ([bandit | _], #{error := E}) -> <<"error: ", (Str(E))/binary>>;
                ([thousand_island | _], #{error := E}) -> Str(E);
                ([shackle | _], #{client := C}) -> Str(C);
+               %% A handler that failed, and was detached: which, on what, why.
+               ([telemetry, handler, failure], #{handler_id := H} = Md) ->
+                  <<(Str(H))/binary, " on ", (Str(maps:get(event_name, Md, <<"?">>)))/binary, ": ",
+                    (Text(maps:get(kind, Md, error)))/binary, " ", (Str(maps:get(reason, Md, <<>>)))/binary>>;
                ([cowboy, request, early_error], Md) ->
                   <<"early error -> ", (Str(maps:get(resp_status, Md, <<"no status">>)))/binary>>;
                ([cowboy, request | _], #{req := #{method := M, path := P}} = Md) ->

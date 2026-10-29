@@ -11,6 +11,7 @@
 #     examples/elixir/run.sh cowboy      # cowboy_ex: a Cowboy API where even trivial requests hang
 #     examples/elixir/run.sh yaws        # yaws_ex: a Yaws API whose memory keeps growing
 #     examples/elixir/run.sh shackle     # shackle_ex: price lookups through a shackle pool fail now and then
+#     examples/elixir/run.sh telemetry   # telemetry_ex: checkout slower the longer it runs, from its telemetry handlers
 #     examples/elixir/run.sh riak        # riak_a, riak_b, riak_c: a riak_core cluster, one member down, one vnode swamped
 #     examples/elixir/run.sh wishlist    # riak_a, riak_b: riak_core wishlists, riak_dt sets that keep growing
 #     examples/elixir/run.sh stop        # stop them all
@@ -81,6 +82,11 @@ case "${1:-}" in
     (cd "$here/shackle_shop" && mix deps.get --quiet && mix compile --quiet &&
       start shackle_ex -S mix run --no-halt -e ":shackle_shop.traffic()")
     ;;
+  telemetry)
+    # A Mix project: fetches telemetry from Hex the first time.
+    (cd "$here/telemetry_shop" && mix deps.get --quiet && mix compile --quiet &&
+      start telemetry_ex -S mix run --no-halt -e "Shop.Application.traffic()")
+    ;;
   riak)
     # A Mix project on riak_core_lite, fetched from Hex the first time.
     # Three nodes form a cluster; then riak_c goes down, and the traffic,
@@ -116,12 +122,12 @@ case "${1:-}" in
     ;;
   stop)
     elixir --sname "stopper_$$" -e "
-      for n <- ~w(shop_ex payments_ex billing_ex phoenix_ex bandit_ex cowboy_ex yaws_ex shackle_ex riak_a riak_b riak_c ex_a ex_b ex_c),
+      for n <- ~w(shop_ex payments_ex billing_ex phoenix_ex bandit_ex cowboy_ex yaws_ex shackle_ex telemetry_ex riak_a riak_b riak_c ex_a ex_b ex_c),
           do: :rpc.call(:\"#{n}@$host\", :init, :stop, [], 2000)"
     if [ -x "$release/bin/demo_shop" ]; then "$release/bin/demo_shop" stop 2>/dev/null || true; fi
     ;;
   *)
-    echo "usage: $0 shop|payments|cluster|release|billing|phoenix|bandit|cowboy|yaws|shackle|riak|wishlist|stop" >&2
+    echo "usage: $0 shop|payments|cluster|release|billing|phoenix|bandit|cowboy|yaws|shackle|telemetry|riak|wishlist|stop" >&2
     exit 1
     ;;
 esac

@@ -1090,3 +1090,87 @@ defmodule OtpDebugMcp.Fixtures.ShackleShop do
   @impl true
   def terminate(_state), do: :ok
 end
+
+defmodule OtpDebugMcp.Fixtures.TelemetryShop do
+  @moduledoc """
+  Telemetry handlers of every kind on a shop's [:shop, :order, :stop]
+  events: `attach/1` a cheap counter (:counter, and :counter_again, the
+  same function under another id), one that calls a slow reporter
+  (:slow), one that raises on orders without a coupon (:fragile), one
+  whose module doesn't exist (:missing), an anonymous fun (:local).
+  `orders/2` keeps processes emitting orders; with `leak: true`, each
+  order also attaches a handler of its own, never detached.
+  """
+  use GenServer
+
+  def start do
+    {:ok, _} = GenServer.start(__MODULE__, nil, name: __MODULE__)
+    :ok
+  end
+
+  @impl true
+  def init(nil) do
+    :ets.new(:shop_orders, [:named_table, :public])
+    :ets.insert(:shop_orders, {:count, 0})
+    {:ok, nil}
+  end
+
+  # The reporter: 5 ms a report, one at a time.
+  @impl true
+  def handle_call(:report, _from, state) do
+    Process.sleep(5)
+    {:reply, :ok, state}
+  end
+
+  @order [:shop, :order, :stop]
+
+  def attach(:counter), do: :telemetry.attach(:counter, @order, &__MODULE__.count/4, nil)
+
+  def attach(:counter_again),
+    do: :telemetry.attach({:counter, :again}, @order, &__MODULE__.count/4, nil)
+
+  def attach(:slow), do: :telemetry.attach(:reporter, @order, &__MODULE__.report/4, nil)
+  def attach(:fragile), do: :telemetry.attach(:audit, @order, &__MODULE__.audit/4, nil)
+
+  # Made at run time: the compiler would rightly warn about it.
+  def attach(:missing) do
+    handler = Function.capture(:otpdbg_no_such_module, :handle, 4)
+    :telemetry.attach(:refunds, [:shop, :refund], handler, nil)
+  end
+
+  def attach(:local), do: :telemetry.attach(:inline, @order, fn _, _, _, _ -> :ok end, nil)
+
+  def attach({:many, n}) do
+    for i <- 1..n, do: :ok = :telemetry.attach({:many, i}, @order, &__MODULE__.count/4, nil)
+    :ok
+  end
+
+  def count(_event, _measurements, _metadata, _config),
+    do: :ets.update_counter(:shop_orders, :count, 1)
+
+  def report(_event, _measurements, _metadata, _config), do: GenServer.call(__MODULE__, :report)
+
+  def audit(_event, _measurements, %{coupon: coupon}, _config),
+    do: :ets.insert(:shop_orders, {:last_coupon, String.upcase(coupon)})
+
+  def orders(n, opts \\ []) do
+    for i <- 1..n, do: spawn(fn -> order(i, opts) end)
+    :ok
+  end
+
+  defp order(i, opts) do
+    if opts[:leak],
+      do:
+        :telemetry.attach(
+          {:request, make_ref()},
+          [:shop, :order, :start],
+          &__MODULE__.count/4,
+          nil
+        )
+
+    coupon = if rem(i, 2) == 0, do: "spring", else: nil
+    :telemetry.execute(@order, %{duration: 1}, %{coupon: coupon})
+    Process.sleep(Keyword.get(opts, :every, 5))
+    order(i, opts)
+  end
+end
