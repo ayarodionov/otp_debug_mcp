@@ -74,6 +74,7 @@ introspection primitives, but an encoded diagnostic playbook in the spirit of
 | `trace_port` | A port's traffic, or the ports opened and closed in a window with who opened them; rate-limited, in its own trace session on OTP 27+ |
 | `cowboy` | A Cowboy web server, through Ranch under it: its listeners and connection limits (per connection supervisor), acceptors blocked waiting for room, idle and WebSocket connections, the requests in flight grouped by where they wait and those running through the whole window, timeouts and routes, and over the window Ranch's accept rate and, with cowboy_telemetry, requests by status, the slowest routes and handler crashes |
 | `yaws` | A Yaws web server: each listening server's virtual servers and appmods, its connections against `max_connections`, what its acceptor processes are doing (each connection is one, and runs `out/1`), the requests in flight grouped by where they wait and those running through the window, and its cookie sessions: how many, how fast they grow, how many were used only once |
+| `mnesia` | Mnesia: its nodes and tables (storage, size, memory, copies, whether any is reachable), commits, aborts and restarts a second, the records transactions wait for a lock on (sampled through the window) with where their holders are in the code, Mnesia's own mailboxes, and its system events in the window (overload, partitions, nodes down) |
 | `telemetry_handlers` | The telemetry handlers attached: their events and functions, and what they cost: how many processes are inside each at a time and about how long it takes per event (handlers run in the emitting process), from sampling stacks; handlers that raised and were detached in the window; functions that don't exist; one function attached twice; handlers piling up |
 | `shackle` | shackle client pools (and marina, anchor, buoy built on them): each pool's backend, size, backlog and retries, each connection up or reconnecting with its requests in flight, the callers waiting for a reply by where they called from, and over a window replies and their times, timeouts and calls refused, from shackle's telemetry |
 | `bandit` | A Phoenix or Bandit web server, through Thousand Island under it: where it listens, its connection limit and how full it is, acceptors waiting for room, connections idle or busy (the busy ones grouped by where they wait), and over a window requests by status, the slowest routes, socket errors and connections refused at the limit, which nothing logs |
@@ -149,7 +150,7 @@ To approve the investigation step by step, start the server with
 | Value | The server asks before |
 |---|---|
 | `off` (the default) | nothing but `load_module`'s loads |
-| `changes` | each step that does something on the node beyond reading it: connecting (which may load recon there), `diagnose` (it forces garbage collections and briefly turns on microstate accounting and a trace session), checks that do the same, tracing, profiling, `recent_errors`, `telemetry`, `telemetry_handlers`, `bandit`, `cowboy` and `shackle` (which attach a handler while they listen), `process_info` with the process's state, `riak_core` with `crdts` (it asks the vnodes for their state), `cluster`, and `remote_eval` |
+| `changes` | each step that does something on the node beyond reading it: connecting (which may load recon there), `diagnose` (it forces garbage collections and briefly turns on microstate accounting and a trace session), checks that do the same, tracing, profiling, `recent_errors`, `telemetry`, `telemetry_handlers`, `bandit`, `cowboy` and `shackle` (which attach a handler while they listen), `mnesia` (which subscribes to its events), `process_info` with the process's state, `riak_core` with `crdts` (it asks the vnodes for their state), `cluster`, and `remote_eval` |
 | `all` | every step, reads included |
 
 In Claude Code:
@@ -513,7 +514,7 @@ ETS table, CPU spent collecting garbage, a fix deployed but never loaded,
 a link between nodes saturated, a Bandit server out of connections, a
 Cowboy server whose acceptors wait for room, a Yaws server starting a
 session on every request, a shackle pool with one connection held up,
-telemetry handlers piling up, a
+telemetry handlers piling up, Mnesia transactions waiting on one record, a
 riak_core cluster with a member down and a vnode swamped, and riak_dt
 sets whose actors pile up.
 

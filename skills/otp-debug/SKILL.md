@@ -89,6 +89,11 @@ raw introspection when a purpose-built tool exists.
      CPU creeping up in an app that attaches handlers at run time →
      `telemetry_handlers`: handlers too slow for the processes that emit
      their events, handlers detached after raising, handlers piling up.
+   - Mnesia transactions slow, aborting or restarting, a table that
+     can't be read, or a cluster that split → `mnesia`: the records
+     waited for and where their lock holders are, restarts against
+     commits, tables with no reachable copy, nodes down, overload and
+     partition events.
    - Calls to a backend through shackle (marina, anchor, buoy) timing
      out or refused with {error, no_server} → `shackle`: connections down,
      one connection's backlog full while the others idle (a slow request

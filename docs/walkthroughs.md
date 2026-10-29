@@ -1,6 +1,6 @@
 # Walkthroughs
 
-Twenty-four debugging sessions against the demo nodes in `examples/`, start to
+Twenty-five debugging sessions against the demo nodes in `examples/`, start to
 finish, for following along on your own machine. Each one gives the
 command that starts the demo, the prompt, every tool call the agent made
 with the part of its result that mattered, and the conclusion. The
@@ -42,7 +42,8 @@ Contents:
 22. [A Yaws API whose cookie sessions pile up](#22-a-yaws-api-whose-cookie-sessions-pile-up)
 23. [A shackle pool with one connection held up](#23-a-shackle-pool-with-one-connection-held-up)
 24. [Telemetry handlers attached per checkout](#24-telemetry-handlers-attached-per-checkout)
-25. [Cleaning up](#cleaning-up)
+25. [Mnesia transactions waiting on one record](#25-mnesia-transactions-waiting-on-one-record)
+26. [Cleaning up](#cleaning-up)
 
 ---
 
@@ -2196,6 +2197,80 @@ stray one is taken for the current checkout's.
   `:timer.tc/1`, or attach one handler when the application starts.
 - If a handler per call is kept: detach it in an `after`, and tag the
   message with the call's ref, so a stale one can't be taken.
+
+---
+
+## 25. Mnesia transactions waiting on one record
+
+```sh
+examples/erlang/run.sh mnesia
+```
+
+`mnesia_erl` runs a shop on Mnesia (`examples/erlang/src/mnesia_shop.erl`,
+RAM tables): 20 shoppers place orders, each a transaction.
+
+> Placing an order on `mnesia_erl@yourhost`
+> (`mnesia_shop:place_order/2`) takes up to a second at busy times,
+> though an order's work takes about 30 ms. Find out why.
+
+Only the otp-debug tools were allowed. The session took 41 seconds.
+
+**`connect`**, then **`diagnose`**: every check `ok`, the CPU at 2%.
+**`mnesia`**, for 5 seconds:
+
+```json
+{"status": "warning",
+ "findings": [
+   "warning: transactions waited for a read_write lock on {stats,orders_today} in 39 of 49 samples, 2.9 on average and 8 at most, its lock held mostly in fraud:check/2 (37): a transaction holds its locks until it ends, so what it does meanwhile, every transaction after that record waits for",
+   "warning: 197.1 transactions restarted a second, against 31.6 commits: they conflict on locks, and Mnesia restarts the younger of two that would wait for each other, running its fun again"],
+ "contended": [{"record": "{stats,orders_today}", "for": ["read_write"],
+                "waited_for_in": "39 of 49 samples", "waiting_on_average": 2.9,
+                "waiting_at_most": 8, "held_by_code": ["fraud:check/2 (37)", ...]}],
+ "transactions": {"running": 20, "commits_per_s": 31.6, "restarts_per_s": 197.1,
+                  "failures_per_s": 0.0},
+ "tables": [{"table": "order", "storage": "ram_copies", "size": 1442, "growing_per_s": 31.6, ...},
+            {"table": "product", "size": 100, ...},
+            {"table": "stats", "size": 1, ...}]}
+```
+
+One record, waited for nearly all the time, its lock held in
+`fraud:check/2`; and six restarts for every commit. 31.6 commits a
+second is one every 30 ms: the orders go through one at a time.
+**`module_code`** for `mnesia_shop:place_order/2` and `fraud:check/2`:
+
+```erlang
+place_order(Sku, Qty) ->
+    mnesia:transaction(
+      fun() ->
+              [#stats{orders = N} = Stats] = mnesia:read(stats, orders_today, write),
+              [#product{stock = Stock} = Product] = mnesia:read(product, Sku, write),
+              ok = fraud:check(Sku, Qty),
+              ok = mnesia:write(Product#product{stock = Stock - Qty}),
+              ok = mnesia:write(Stats#stats{orders = N + 1}),
+              mnesia:write(#order{id = make_ref(), sku = Sku, qty = Qty})
+      end).
+
+check(_Sku, _Qty) ->
+    timer:sleep(30),
+    ok.
+```
+
+**The answer.** Every order write-locks the same record, the day's stats,
+first, and holds it through the 30 ms fraud check, since a transaction
+holds its locks until it ends. So orders go through one at a time, about
+33 a second whatever the CPUs. When several want the lock, Mnesia
+restarts the younger ones, which wait and run the whole fun again: 197
+restarts a second, and an order that keeps losing waits behind up to 8
+others, often more than once, up to a second.
+
+**Fixes.**
+
+- **The fraud check out of the transaction:** before
+  `mnesia:transaction/1`. It reads nothing the transaction protects, so
+  nothing should be locked while it waits.
+- **No global counter in every order:** `mnesia:dirty_update_counter/3`
+  on the stats after the transaction, or the stats read and written last
+  in it, so its lock is held for microseconds.
 
 ---
 

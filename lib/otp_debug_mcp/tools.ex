@@ -676,6 +676,38 @@ defmodule OtpDebugMcp.Tools do
     end
   end
 
+  defmodule Mnesia do
+    @moduledoc """
+    Mnesia on the node, sampled at the start and the end of a window: its
+    db nodes and which run; its tables, largest first, with storage, size,
+    memory, where their copies are and whether any is reachable; the
+    records transactions wait for a lock on, with who holds the lock and
+    where in your code that transaction is; transactions running through
+    the window; commits, aborts and restarts a second; its own processes'
+    mailboxes; and the system events it reports meanwhile (overload, a
+    partition, a node down). Findings come first, worst first.
+    """
+    use Anubis.Server.Component, type: :tool
+    use OtpDebugMcp.Approval
+
+    alias OtpDebugMcp.Tools
+
+    schema do
+      field(:duration_ms, :integer,
+        description: "How long between the two samples (default 5000, max 30000)"
+      )
+    end
+
+    def perform(params, frame) do
+      duration = (params[:duration_ms] || 5_000) |> min(30_000) |> max(500)
+
+      case OtpDebugMcp.Mnesia.report(duration) do
+        {:ok, report} -> Tools.json_response(frame, report)
+        {:error, reason} -> Tools.error_response(frame, reason)
+      end
+    end
+  end
+
   defmodule TelemetryHandlers do
     @moduledoc """
     The telemetry handlers attached on the node, and what they cost: each

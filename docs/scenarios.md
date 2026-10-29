@@ -251,6 +251,18 @@ fetches its state, and a `sys:get_state` timeout is itself a finding:
 the process is too busy or blocked to answer. `supervision_tree` shows
 what it depends on and what restarts with it.
 
+On Mnesia, the waits are for locks. `mnesia` reads Mnesia through its
+own `system_info` and `table_info`: its nodes and tables (storage,
+size, memory, where their copies are, and whether any is reachable), the
+transactions running and their commits, aborts and restarts a second;
+it samples the lock queue through the window for the records
+transactions wait for a lock on, with where in the code their holders
+are; and it subscribes to Mnesia's system events meanwhile (overload, a
+partitioned network, a node down). Against the Mnesia demo
+(`examples/erlang/run.sh mnesia`), it found every order waiting for the
+day's stats record, held by transactions that call a fraud check while
+holding it (walkthrough 25).
+
 For calls to a backend through shackle (and the clients built on it:
 marina for Cassandra, anchor for memcached, buoy for HTTP), `shackle`
 reads each pool: its backend, size, `backlog_size` and retries, each
@@ -264,7 +276,11 @@ were idle, an export holding it up (walkthrough 23).
 **Typical findings.** Two processes calling each other (deadlock), often
 one calling back into the other from a callback, a call to a slow
 external service made inside a GenServer, or a process blocked behind its
-own backlog. With shackle: head-of-line blocking (a backend that
+own backlog. On Mnesia: a hot record (a counter every transaction
+updates) and slow work inside a transaction, which holds its locks
+until it ends, with many restarts (Mnesia restarts the younger of two
+transactions that would wait for each other, running its fun again: a
+fun with side effects does them again). With shackle: head-of-line blocking (a backend that
 answers a connection's requests in order, so one slow request holds up
 every request behind it on that connection, and they time out while the
 other connections idle); connections down and reconnecting; and calls
@@ -294,6 +310,16 @@ examples/elixir/run.sh shackle
 
 It fetches shackle from Hex the first time; its pricing backend runs in
 the same node, on port 8097. Walkthrough 23.
+
+```sh
+examples/erlang/run.sh mnesia
+```
+
+> Placing an order on `mnesia_erl@yourhost`
+> (`mnesia_shop:place_order/2`) takes up to a second at busy times,
+> though an order's work takes about 30 ms. Find out why.
+
+Walkthrough 25.
 
 ### 5. Approaching a system limit
 
@@ -503,7 +529,11 @@ others don't have (uneven load, a stuck singleton), a node that never
 joined or lost its links, or a node whose atom count has crept up. On one
 node, `diagnose`'s `distribution` check shows its connections: bytes per
 second each way, and bytes waiting to be sent against the busy limit,
-past which every process sending to that node is suspended.
+past which every process sending to that node is suspended. On a
+Mnesia cluster, `mnesia` names the db nodes Mnesia isn't running on,
+the tables with fewer copies for it or none reachable at all, and a
+partition healed with tables that may differ (`inconsistent_database`),
+which Mnesia doesn't merge by itself.
 
 **Watch out.** Nodes are attached with the current target's cookie, as a
 cluster shares one; a node with another cookie shows as unreachable.

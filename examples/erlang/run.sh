@@ -13,6 +13,7 @@
 #     examples/erlang/run.sh reports     # reports_erl: CPU spent mostly collecting garbage
 #     examples/erlang/run.sh deploy      # deploy_erl: a fix deployed but never loaded, a process in old code
 #     examples/erlang/run.sh dist        # dist_a, dist_b: one node shipping 2 MB to the other ten times a second
+#     examples/erlang/run.sh mnesia      # mnesia_erl: orders slow at busy times, on Mnesia
 #     examples/erlang/run.sh stop        # stop them all
 #
 # Each node runs in the background, named with -sname on this host, with
@@ -82,6 +83,7 @@ case "${1:-}" in
     echo "started native_erl@$host"
     ;;
   reports) build; start reports_erl "ok = reports:start()" ;;
+  mnesia) build; start mnesia_erl "ok = mnesia_shop:start()" ;;
   deploy)
     # discounts lives apart, in deploy/, so another demo's build can't
     # overwrite its deployed version.
@@ -117,11 +119,11 @@ case "${1:-}" in
       [rpc:call(list_to_atom(N ++ \"@$host\"), init, stop, [], 2000)
        || N <- [\"shop_erl\", \"payments_erl\", \"sessions_erl\", \"native_erl\", \"ports_erl\",
                 \"orders_erl\", \"crash_erl\", \"locks_erl\", \"reports_erl\", \"deploy_erl\",
-                \"dist_a\", \"dist_b\", \"erl_a\", \"erl_b\", \"erl_c\"]],
+                \"dist_a\", \"dist_b\", \"erl_a\", \"erl_b\", \"erl_c\", \"mnesia_erl\"]],
       halt()."
     ;;
   *)
-    echo "usage: $0 shop|payments|sessions|cluster|native|ports|orders|locks|crash|reports|deploy|dist|stop" >&2
+    echo "usage: $0 shop|payments|sessions|cluster|native|ports|orders|locks|crash|reports|deploy|dist|mnesia|stop" >&2
     exit 1
     ;;
 esac

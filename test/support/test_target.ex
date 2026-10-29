@@ -39,6 +39,7 @@ defmodule OtpDebugMcp.TestTarget do
     OtpDebugMcp.Fixtures.YawsShop,
     OtpDebugMcp.Fixtures.ShackleShop,
     OtpDebugMcp.Fixtures.TelemetryShop,
+    OtpDebugMcp.Fixtures.MnesiaShop,
     OtpDebugMcp.Fixtures.RiakShop
   ]
 

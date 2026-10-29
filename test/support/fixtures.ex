@@ -1174,3 +1174,61 @@ defmodule OtpDebugMcp.Fixtures.TelemetryShop do
     order(i, opts)
   end
 end
+
+defmodule OtpDebugMcp.Fixtures.MnesiaShop do
+  @moduledoc """
+  Mnesia, in RAM, with a shop's tables: :stock, one row counting what's
+  sold, and :orders. `orders/2` keeps processes placing orders, each a
+  transaction that reads the stock row for a write lock, does `slow_ms`
+  of work holding it, and writes. `join/1` adds another node's Mnesia;
+  `remote_table/2` creates a table with its only copy there.
+  """
+
+  # Mnesia is OTP's, but not one of this project's applications.
+  @compile {:no_warn_undefined, [:mnesia, :mnesia_lib]}
+
+  def start(dir) do
+    :ok = :application.set_env(:mnesia, :dir, String.to_charlist(dir))
+    :ok = :mnesia.start()
+    {:atomic, :ok} = :mnesia.create_table(:stock, attributes: [:item, :sold])
+    {:atomic, :ok} = :mnesia.create_table(:orders, attributes: [:id, :item])
+    :ok = :mnesia.dirty_write({:stock, :total, 0})
+    :ok
+  end
+
+  def start_bare(dir) do
+    :ok = :application.set_env(:mnesia, :dir, String.to_charlist(dir))
+    :mnesia.start()
+  end
+
+  def join(node) do
+    {:ok, [^node]} = :mnesia.change_config(:extra_db_nodes, [node])
+    :ok
+  end
+
+  def remote_table(table, node) do
+    {:atomic, :ok} = :mnesia.create_table(table, ram_copies: [node], attributes: [:k, :v])
+    :ok
+  end
+
+  def orders(n, slow_ms) do
+    for _ <- 1..n, do: spawn(fn -> order(slow_ms) end)
+    :ok
+  end
+
+  defp order(slow_ms) do
+    :mnesia.transaction(fn -> place(slow_ms) end)
+    order(slow_ms)
+  end
+
+  def place(slow_ms) do
+    [{:stock, :total, sold}] = :mnesia.read(:stock, :total, :write)
+    # The slow part: done while holding the stock row's write lock.
+    if slow_ms > 0, do: Process.sleep(slow_ms)
+    :mnesia.write({:stock, :total, sold + 1})
+    :mnesia.write({:orders, make_ref(), :kettle})
+  end
+
+  def overload,
+    do: :mnesia_lib.report_system_event({:mnesia_overload, {:dump_log, :write_threshold}})
+end

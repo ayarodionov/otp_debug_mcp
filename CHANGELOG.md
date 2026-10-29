@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- `mnesia`: Mnesia on the node, through its own `system_info` and
+  `table_info`: its db nodes and which run, its tables (storage, size,
+  memory, copies, where to read them, growth), the transactions running
+  and their commits, aborts and restarts a second, and its own
+  processes' mailboxes. Through the window it samples the lock queue,
+  for the records transactions wait for a lock on and where in the code
+  their holders are, and subscribes to Mnesia's system events (overload,
+  `inconsistent_database`, `mnesia_down`). A Mnesia demo
+  (`examples/erlang/run.sh mnesia`), scenarios 4 and 9, and
+  walkthrough 25.
 - `telemetry_handlers`: the telemetry handlers attached on the node and
   what they cost. Each handler's events and function, and whether that
   function exists; over a window, from sampling the processes' stacks,
