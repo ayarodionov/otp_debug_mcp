@@ -1,6 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.13.0
+
+Tuning and products: a check of the VM's setup against its container
+(`vm_config`, in `diagnose`), a gen_server's callers' waits without
+telemetry (`call_latency`), socket options and traffic (`socket_tuning`),
+and RabbitMQ (`rabbitmq`), each with a demo and a walkthrough; and the
+walkthroughs as a regression suite of blind sessions
+(`scripts/blind_eval.py`).
 
 - `socket_tuning`: every TCP and UDP socket on the node, its options and
   statistics read twice a window apart, grouped by what owns them, with
