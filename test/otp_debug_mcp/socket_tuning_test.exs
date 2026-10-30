@@ -25,9 +25,10 @@ defmodule OtpDebugMcp.SocketTuningTest do
     assert r["by_kind"]["tcp_listen"] == 1
     assert r["by_kind"]["tcp"] == 2
     assert Enum.any?(r["groups"], &(&1["options"]["nodelay"] == false))
-    # The client writes each request in two; the server replies in one.
+    # The client writes each request in two (a window can end between
+    # them); the server replies in one.
     assert findings(r) =~
-             ~r/warning: 1 TCP socket owned by .*SocketShop.ask\/1 makes small writes.*2.0 writes for every read/
+             ~r/warning: 1 TCP socket owned by .*SocketShop.ask\/1 makes small writes.*(1\.[5-9]|2\.\d) writes for every read/
 
     assert findings(r) =~
              ~r/info: 1 TCP socket owned by .*SocketShop.echo\/1 makes small writes.*one per read/
