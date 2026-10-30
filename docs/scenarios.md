@@ -51,6 +51,7 @@ Contents:
   - [27. Your own node during development](#27-your-own-node-during-development)
 - [Before pointing it at production](#before-pointing-it-at-production)
 - [Not supported yet](#not-supported-yet)
+- [Cleaning up](#cleaning-up)
 
 ---
 
@@ -1620,3 +1621,28 @@ the README's TODO list):
   so the recon-based checks are unavailable there.
 - **Tracing alongside other tracing on OTP 26 and earlier.** There
   `trace_calls` would end someone else's trace, so it asks first.
+
+## Cleaning up
+
+Each demo directory's `run.sh stop` stops what its `run.sh` started:
+
+```sh
+examples/elixir/run.sh stop      # every Elixir demo node, and the Postgrex demo's PostgreSQL
+examples/erlang/run.sh stop      # every Erlang demo node
+examples/gleam/run.sh stop
+examples/lfe/run.sh stop
+examples/books/run.sh stop
+```
+
+The demos of products in Docker remove their container, and stop the
+clients they started:
+
+```sh
+examples/emqx/run.sh stop
+examples/ejabberd/run.sh stop
+examples/rabbitmq/run.sh stop
+examples/container/run.sh stop
+```
+
+A server registered for one of them (`otp-debug-emqx` and the like, with
+its own `ERL_FLAGS`) can go too: `claude mcp remove otp-debug-emqx`.
