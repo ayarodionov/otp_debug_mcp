@@ -84,6 +84,11 @@ raw introspection when a purpose-built tool exists.
      OOM kills → `diagnose`'s `vm_config` first: schedulers against the
      CPU quota and how often the kernel throttles it, memory against the
      container's limit, busy-waiting. Fixes go in vm.args or the limits.
+   - Network latency or throughput: requests taking ~40 ms (or a steady
+     extra delay) over TCP, sends blocking, a socket owner's mailbox
+     growing → `socket_tuning`: per owner, nodelay with messages written
+     in pieces (writes per read), {active, true} floods, senders blocked
+     at high_watermark with send_timeout infinity, small buffers.
    - One gen_server slow to answer, callers timing out, with no telemetry
      → `call_latency` on it: per request, time waiting in its mailbox vs
      time handling, and which request takes the server's time. Wait much

@@ -787,6 +787,17 @@ Ports are how the node talks to the outside: sockets, external programs
   (`send_pend`) and options (`active`, `packet`, buffers, watermarks).
 - `trace_port` traces a port's traffic, or with `opened: true` the ports
   opened and closed in a window, with who opened them.
+- `socket_tuning` reads every TCP and UDP socket's options and
+  statistics twice, a window apart, grouped by owner, and says what to
+  change: `{nodelay, true}` where a message is written in pieces with
+  Nagle on (every such message waits for a delayed acknowledgement, up
+  to 40 ms on Linux), `{active, once}` or `{active, N}` where an owner's
+  mailbox floods, `send_timeout` and the watermarks for blocked senders,
+  `buffer` for bulk reads, keepalive for idle connections. Against the
+  sockets demo (`examples/sockets/run.sh start`), it found quotes
+  written in two pieces with Nagle on (41 ms a quote), a collector
+  flooded through `{active, true}`, and an export blocked with no send
+  timeout (walkthrough 35).
 
 In testing against the ports demo (`examples/erlang/run.sh ports`), a
 session with only these tools found all three of its bugs in under a
@@ -799,7 +810,8 @@ none closed.
 **Typical findings.** A process that opens a connection or an external
 program per request and never closes it; a socket whose peer reads slower
 than it's written to, with sends blocking at the high watermark; an
-owner with `{active, true}` flooding its own mailbox.
+owner with `{active, true}` flooding its own mailbox; a request written
+in pieces with Nagle on, 40 ms a request on Linux.
 
 **Watch out.**
 - Sockets opened with the `socket` backend (`{inet_backend, socket}`)
@@ -821,6 +833,17 @@ examples/erlang/run.sh ports
 > connections stops sending now and then. Find out why.
 
 Walkthrough 8.
+
+```sh
+examples/sockets/run.sh start      # in Docker: Linux, where Nagle's delay shows
+```
+
+> Quotes from our quotes service, quotes@127.0.0.1 (in a container,
+> cookie socketsdemo), take 40 ms each, though the pricing backend
+> answers in microseconds; the node's memory keeps growing, and the
+> nightly price export never finishes. Find out why.
+
+Walkthrough 35.
 
 ### 13. Garbage collection eating the CPU
 
@@ -1642,6 +1665,7 @@ examples/emqx/run.sh stop
 examples/ejabberd/run.sh stop
 examples/rabbitmq/run.sh stop
 examples/container/run.sh stop
+examples/sockets/run.sh stop
 ```
 
 A server registered for one of them (`otp-debug-emqx` and the like, with

@@ -207,6 +207,9 @@ defmodule OtpDebugMcp.Approval do
       {:read,
        "Reads Ranch's listeners and connection processes twice, a window apart, with a log watch for connection crashes meanwhile."}
 
+  def step("socket_tuning", _),
+    do: {:read, "Reads every socket's options and statistics, twice, a window apart."}
+
   def step("rabbitmq", _),
     do:
       {:read, "Reads RabbitMQ's queues, channels, connections and alarms, twice, a window apart."}

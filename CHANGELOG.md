@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- `socket_tuning`: every TCP and UDP socket on the node, its options and
+  statistics read twice a window apart, grouped by what owns them, with
+  the settings that cost latency or throughput: small writes with
+  Nagle on (warned when a message is written in pieces, by the writes
+  per read), `{active, true}` sockets whose owner's mailbox backs up,
+  senders blocked past `high_watermark` (and `send_timeout` infinity),
+  bulk reads through a small buffer, idle connections with keepalive
+  off, UDP receive buffers small for their traffic, `delay_send`. A
+  sockets demo (`examples/sockets`, in Docker, as Nagle's delay shows on
+  Linux loopback, not macOS) and walkthrough 35.
 - `vm_config`, a check that `diagnose` runs first: the VM's setup
   against what it runs on. Schedulers online against the container's
   CPU quota (cgroup v1 or v2) and its CPU affinity, with how often the

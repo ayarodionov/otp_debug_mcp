@@ -1477,6 +1477,47 @@ defmodule OtpDebugMcp.Tools do
     defp process(name), do: Tools.resolve_process(name)
   end
 
+  defmodule SocketTuning do
+    @moduledoc """
+    Every TCP and UDP socket on the node, its options and statistics read
+    twice a window apart, grouped by what owns them (traffic in and out,
+    sends a second, the common value of each option: active, nodelay,
+    packet, buffers, watermarks, send_timeout, keepalive), with the
+    settings that cost latency or throughput: small writes with Nagle on
+    (nodelay false), {active, true} sockets whose owner's mailbox backs
+    up, senders blocked past high_watermark (and send_timeout infinity),
+    bulk reads through a small buffer, idle connections with keepalive
+    off, UDP receive buffers small for their traffic, delay_send.
+    Read-only.
+    """
+    use Anubis.Server.Component, type: :tool
+    use OtpDebugMcp.Approval
+
+    alias OtpDebugMcp.Tools
+
+    schema do
+      field(:duration_ms, :integer,
+        description: "How long between the two samples (default 5000, max 30000)"
+      )
+
+      field(:port, :integer, description: "Only sockets with this local or remote port")
+
+      field(:owner, :string,
+        description:
+          "Only sockets owned by this: a registered name, an initial call as shown in groups, or a pid"
+      )
+    end
+
+    def perform(params, frame) do
+      duration = (params[:duration_ms] || 5_000) |> min(30_000) |> max(500)
+
+      case OtpDebugMcp.SocketTuning.report(duration, port: params[:port], owner: params[:owner]) do
+        {:ok, report} -> Tools.json_response(frame, report)
+        {:error, reason} -> Tools.error_response(frame, reason)
+      end
+    end
+  end
+
   defmodule PortInfo do
     @moduledoc """
     Deep-inspect one port: what it is (a socket, an external program, a

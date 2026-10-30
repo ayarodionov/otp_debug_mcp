@@ -69,6 +69,7 @@ introspection primitives, but an encoded diagnostic playbook in the spirit of
 | `process_info` | Deep-inspect one process: recon:info, an age estimate, its supervisor's restart history, optional `sys:get_state` |
 | `supervision_tree` | Render an application's supervision tree, with each supervisor's strategy and restart history |
 | `ets_table` | What's in one ETS table: its type, protection, owner and heir, its first rows, and a bounded scan for the average and largest rows and, for a bag, the most repeated keys |
+| `socket_tuning` | Every TCP and UDP socket, grouped by owner, with its options and traffic over a window, and what to tune: Nagle with messages written in pieces (`nodelay`), `{active, true}` flooding a mailbox, senders blocked at the high watermark with no send timeout, small read buffers, idle connections without keepalive |
 | `port_info` | Deep-inspect one port: a socket's addresses, statistics and options, an external program's OS pid, its owner and queue |
 | `call_latency` | How long one gen_server makes its callers wait, and why, without telemetry: calls by request, split into time waiting in the mailbox and time handled (p50, p95, max), casts and other messages, how busy the server was, who waited longest |
 | `trace_calls` | Rate-limited call tracing (isolated trace session on OTP 27+, recon_trace before); with `exceptions: true`, only the calls that raise, with their arguments and caller; with `process`, one process's calls, and with no module, every function that raises in it |
@@ -529,7 +530,8 @@ telemetry handlers piling up, Mnesia transactions waiting on one record, a Postg
 a payment call, profiling and tuning a slow function, an EMQX broker with a slow
 consumer and a client-id clash, a RabbitMQ broker whose memory alarm blocks
 its publishers, a service throttled by its container's CPU quota, a
-gen_server whose callers wait behind one slow request, an ejabberd server with a bot that reads
+gen_server whose callers wait behind one slow request, quotes slowed by
+Nagle's algorithm, an ejabberd server with a bot that reads
 slowly, its archive on Mnesia and an offline queue full, a
 riak_core cluster with a member down and a vnode swamped, and riak_dt
 sets whose actors pile up.
@@ -551,6 +553,7 @@ background, on this host with `-sname`, and `run.sh stop` stops them:
 | Erlang | [examples/erlang](examples/erlang) | a mailbox that never drains, an OTP application in a crash loop, a session store leaking atoms and ETS rows, a cluster with one bad node, a C NIF library that blocks a scheduler and leaks native memory, a shop that leaks sockets and external programs and fills a slow peer's socket, an orders service whose errors only its logs show, a node that runs out of memory and leaves a crash dump, two gen_servers that deadlock, report workers whose CPU goes to garbage collection, a fix deployed but never loaded, and a node flooding the link to another |
 | Gleam | [examples/gleam](examples/gleam) | a mailbox that never drains, a supervised actor whose `let assert` panics in a loop, and a job runner leaking processes |
 | LFE | [examples/lfe](examples/lfe) | a mailbox that never drains, an OTP application in a crash loop, and an index whose slices pin whole binaries |
+| Sockets | [examples/sockets](examples/sockets) | An Erlang quotes service in Docker, with a request written in two pieces with Nagle on (41 ms a quote), an `{active, true}` collector flooded by its agent, and an export blocked by a slow reader with no send timeout |
 | Container | [examples/container](examples/container) | An Erlang service in Docker limited to one CPU and 256 MB, with 8 schedulers and busy-waiting from the machine it used to run on: throttled by the kernel, and near its memory limit |
 | RabbitMQ | [examples/rabbitmq](examples/rabbitmq) | RabbitMQ in Docker, with an order worker that has no prefetch limit, a queue nobody consumes any more, and a memory alarm that blocks every publisher |
 | EMQX | [examples/emqx](examples/emqx) | EMQX in Docker, with a dashboard client that never acknowledges its messages and two devices sharing one client id |

@@ -1757,3 +1757,128 @@ defmodule OtpDebugMcp.Fixtures.Inventory do
     :exit, _ -> :ok
   end
 end
+
+defmodule OtpDebugMcp.Fixtures.SocketShop do
+  @moduledoc """
+  Sockets tuned badly, on 127.0.0.1, for socket_tuning:
+
+  - `chatty/0`: a request/response server, and a client writing each
+    request in two small writes with Nagle on (nodelay false);
+  - `flood/0`: a server whose owner takes `{active, true}` packets slower
+    than its peer sends them;
+  - `blocked/0`: a server sending bulk data, with send_timeout infinity,
+    to a client that never reads.
+
+  Each returns the server's port.
+  """
+
+  def chatty do
+    {:ok, l} =
+      :gen_tcp.listen(0, [
+        :binary,
+        ip: {127, 0, 0, 1},
+        active: false,
+        nodelay: false,
+        packet: :line
+      ])
+
+    {:ok, port} = :inet.port(l)
+
+    spawn(fn ->
+      {:ok, s} = :gen_tcp.accept(l)
+      echo(s)
+    end)
+
+    spawn(fn ->
+      {:ok, c} =
+        :gen_tcp.connect({127, 0, 0, 1}, port, [
+          :binary,
+          active: false,
+          nodelay: false,
+          packet: :line
+        ])
+
+      ask(c)
+    end)
+
+    Process.put(:listener, l)
+    keep(l)
+    port
+  end
+
+  defp echo(s) do
+    case :gen_tcp.recv(s, 0) do
+      {:ok, _} ->
+        :gen_tcp.send(s, "ok\n")
+        echo(s)
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp ask(c) do
+    :gen_tcp.send(c, "PRICE ")
+    :gen_tcp.send(c, "42\n")
+    {:ok, _} = :gen_tcp.recv(c, 0, 5_000)
+    Process.sleep(10)
+    ask(c)
+  end
+
+  def flood do
+    {:ok, l} = :gen_tcp.listen(0, [:binary, ip: {127, 0, 0, 1}, active: false])
+    {:ok, port} = :inet.port(l)
+
+    spawn(fn ->
+      {:ok, s} = :gen_tcp.accept(l)
+      :inet.setopts(s, active: true)
+      slow_owner()
+    end)
+
+    spawn(fn ->
+      {:ok, c} = :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, active: false, nodelay: true])
+      blast(c)
+    end)
+
+    keep(l)
+    port
+  end
+
+  defp slow_owner do
+    receive do
+      {:tcp, _, _} -> Process.sleep(5)
+    end
+
+    slow_owner()
+  end
+
+  defp blast(c) do
+    :gen_tcp.send(c, :binary.copy("x", 200))
+    blast(c)
+  end
+
+  def blocked do
+    {:ok, l} = :gen_tcp.listen(0, [:binary, ip: {127, 0, 0, 1}, active: false])
+    {:ok, port} = :inet.port(l)
+
+    spawn(fn ->
+      {:ok, s} = :gen_tcp.accept(l)
+      chunk = :binary.copy("y", 65_536)
+      Stream.repeatedly(fn -> :gen_tcp.send(s, chunk) end) |> Stream.run()
+    end)
+
+    spawn(fn ->
+      {:ok, _c} = :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, active: false, recbuf: 4096])
+      Process.sleep(:infinity)
+    end)
+
+    keep(l)
+    port
+  end
+
+  # The listening socket lives as long as a process that owns it.
+  defp keep(l) do
+    owner = spawn(fn -> Process.sleep(:infinity) end)
+    :gen_tcp.controlling_process(l, owner)
+  end
+end

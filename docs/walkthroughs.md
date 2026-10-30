@@ -1,6 +1,6 @@
 # Walkthroughs
 
-Thirty-four debugging sessions against the demo nodes in `examples/`, start to
+Thirty-five debugging sessions against the demo nodes in `examples/`, start to
 finish, for following along on your own machine. Each one gives the
 command that starts the demo, the prompt, every tool call the agent made
 with the part of its result that mattered, and the conclusion. The
@@ -52,7 +52,8 @@ Contents:
 32. [A container's CPU quota, and its memory limit](#32-a-containers-cpu-quota-and-its-memory-limit)
 33. [Callers waiting behind one slow request](#33-callers-waiting-behind-one-slow-request)
 34. [RabbitMQ: a memory alarm, a consumer with no prefetch, a queue nobody reads](#34-rabbitmq-a-memory-alarm-a-consumer-with-no-prefetch-a-queue-nobody-reads)
-35. [Cleaning up](#cleaning-up)
+35. [Sockets: Nagle's delay, an active socket flooding its owner, a blocked export](#35-sockets-nagles-delay-an-active-socket-flooding-its-owner-a-blocked-export)
+36. [Cleaning up](#cleaning-up)
 
 ---
 
@@ -2972,6 +2973,76 @@ The agent changed nothing on the node.
 
 ---
 
+## 35. Sockets: Nagle's delay, an active socket flooding its owner, a blocked export
+
+```sh
+examples/sockets/run.sh start
+```
+
+An Erlang quotes service runs in Docker as `quotes@127.0.0.1` (cookie
+`socketsdemo`), on Linux, where Nagle's delay shows on loopback. Its
+quote frontend writes each request to the pricing backend in two
+pieces, with gen_tcp's default `nodelay` false; its metrics collector
+takes its agent's lines with `{active, true}` and a millisecond's work
+each; its nightly export streams to a loader that reads a kilobyte a
+second. The server was started with `ERL_FLAGS="-erl_epmd_port 9400"`.
+
+> Quotes from our quotes service, quotes@127.0.0.1 (in a container,
+> cookie socketsdemo), take 40 ms each, though the pricing backend
+> answers in microseconds; the node's memory keeps growing, and the
+> nightly price export never finishes. Find out why.
+
+Only the otp-debug tools were allowed. The session took 63 seconds
+(recorded with `scripts/blind_eval.py --cases sockets`).
+
+**`connect`**, then **`diagnose`**, then **`socket_tuning`**, for 5
+seconds:
+
+```json
+{"status": "critical",
+ "findings": [
+   "critical: quotes:collect/1 has 131045 messages waiting (9693 more than at the start) and 1 socket in {active, true}, which sends it every packet as it arrives, with nothing to slow the peer down: use {active, once} or {active, N} and ask for more as it handles them, so TCP holds the rest back",
+   "warning: 1 TCP socket owned by quotes:export/2 had more queued to send than their high_watermark (8192 bytes) through the window, up to 107968 bytes (127.0.0.1:7003, sending 0.0 bytes a second): every process sending to such a socket waits until it drains. A peer that reads slowly holds it up, and with send_timeout infinity (1 of them) for ever: set send_timeout and send_timeout_close; a bulk sender wants a higher high_watermark and sndbuf",
+   "warning: 4 TCP sockets owned by quotes:quote/3 make small writes (6 bytes on average, 169.2 a second) with Nagle's algorithm on (nodelay false), 2.0 writes for every read: each message written in pieces. Nagle holds a write back until the previous one is acknowledged, and the peer delays its acknowledgement, up to 40 ms on Linux, so every such message waits that long. {nodelay, true}, or the message in one write (an iolist)",
+   "info: 4 TCP sockets owned by quotes:pricing/1 make small writes (4 bytes on average, 84.8 a second) with Nagle's algorithm on (nodelay false), one per read: Nagle costs only when a write follows another before it's acknowledged, which a request/response exchange doesn't do; {nodelay, true} anyway if any message is written in pieces"],
+ "groups": [
+   {"owner": "quotes:collect/1", "sockets": 1, "bytes_per_s": {"in": 70544.7, "out": 0.0},
+    "options": {"active": true, "packet": "line", "nodelay": false}, "owner_mailbox_max": 131045},
+   {"owner": "quotes:quote/3", "sockets": 4, "sends_per_s": 169.2,
+    "options": {"active": false, "packet": "line", "nodelay": false}},
+   {"owner": "quotes:load/1", "sockets": 1, "bytes_per_s": {"in": 1022.0, "out": 0.0}},
+   "..."]}
+```
+
+Then **`module_code`** on `quote/3`, `collect/1`, `load/1` and
+`export/2`, **`process_info`** on the collector (26.8 MB, its mailbox
+growing), and **`ets_table`** on `quote_latency`: the first quote on
+each connection took 132 to 284 µs, every later one about 40,700 µs.
+
+**The answer.** Three socket bugs, one per symptom. `quote/3` writes
+`QUOTE ` and then the sku: with Nagle on, the second write waits for
+the first's acknowledgement, which the backend delays by 40 ms, so
+every quote but a connection's first takes 40 ms. The collector's
+`{active, true}` socket turns every line into a message, about 70 KB a
+second, faster than it stores them, so its mailbox and the node's
+memory grow; the `quote_latency` table, never trimmed, grows too. And
+the export is limited to the loader's kilobyte a second; with
+`send_timeout` infinity the exporter waits in `gen_tcp:send` for ever.
+
+**Fixes.**
+
+- **Quotes:** one write per request (`["QUOTE ", Sku, "\n"]`), and
+  `{nodelay, true}` on both ends.
+- **The collector:** `{active, once}` or `{active, N}`, re-armed as it
+  goes, so TCP slows the agent; and a cap on `quote_latency`.
+- **The export:** a loader that reads as fast as it can, and
+  `{send_timeout, 30000}` with `{send_timeout_close, true}` on the
+  exporter, so a stalled peer is an error, not a hang.
+
+The agent changed nothing on the node.
+
+---
+
 ## Cleaning up
 
 ```sh
@@ -2980,8 +3051,9 @@ examples/erlang/run.sh stop
 ```
 
 stops every Elixir and Erlang demo node, and `examples/emqx/run.sh stop`,
-`examples/ejabberd/run.sh stop`, `examples/rabbitmq/run.sh stop` and
-`examples/container/run.sh stop` remove the Docker ones. The other languages' demos
+`examples/ejabberd/run.sh stop`, `examples/rabbitmq/run.sh stop`,
+`examples/container/run.sh stop` and `examples/sockets/run.sh stop`
+remove the Docker ones. The other languages' demos
 (`examples/erlang`, `examples/gleam`, `examples/lfe`) have the same
 bugs and more, each with its own `run.sh`; see the
 [demo targets](../README.md#demo-targets) table.

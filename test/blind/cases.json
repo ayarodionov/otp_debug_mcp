@@ -101,5 +101,9 @@
   {"name": "rabbitmq", "walkthrough": 34, "needs": ["docker"], "start": "examples/rabbitmq/run.sh start", "stop": "examples/rabbitmq/run.sh stop", "wait_s": 150,
    "env": {"ERL_FLAGS": "-erl_epmd_port 25672", "OTP_DEBUG_MCP_COOKIE": "rabbitdemo"},
    "prompt": "Our order services hang when they publish to RabbitMQ, for minutes at a time, though the order worker is running. RabbitMQ is `rabbit@localhost`. Find out why.",
-   "expect": [["alarm", "watermark"], ["prefetch", "qos"], ["email"]]}
+   "expect": [["alarm", "watermark"], ["prefetch", "qos"], ["email"]]},
+  {"name": "sockets", "walkthrough": 35, "needs": ["docker"], "start": "examples/sockets/run.sh start", "stop": "examples/sockets/run.sh stop", "wait_s": 30,
+   "env": {"ERL_FLAGS": "-erl_epmd_port 9400", "OTP_DEBUG_MCP_COOKIE": "socketsdemo"},
+   "prompt": "Quotes from our quotes service, quotes@127.0.0.1 (in a container, cookie socketsdemo), take 40 ms each, though the pricing backend answers in microseconds; the node's memory keeps growing, and the nightly price export never finishes. Find out why.",
+   "expect": [["nodelay", "Nagle"], ["active"], ["send_timeout", "high_watermark"]]}
 ]

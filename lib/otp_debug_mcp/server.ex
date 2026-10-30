@@ -36,6 +36,7 @@ defmodule OtpDebugMcp.Server do
   component(Tools.Phoenix)
   component(Tools.CallLatency)
   component(Tools.Rabbitmq)
+  component(Tools.SocketTuning)
   component(Tools.RiakCore)
   component(Tools.ProcessInfo)
   component(Tools.PortInfo)
