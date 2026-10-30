@@ -1688,3 +1688,72 @@ defmodule OtpDebugMcp.Fixtures.LiveClient do
     :ok = :gen_tcp.send(socket, [<<0x81>>, len, mask, masked])
   end
 end
+
+defmodule OtpDebugMcp.Fixtures.Inventory do
+  @moduledoc """
+  A GenServer with calls of every speed: `:count` answers at once,
+  `{:export, ms}` takes `ms`, `{:later, ms}` answers from handle_info
+  `ms` later (`{:noreply, ...}`, then `GenServer.reply/2`); casts
+  `{:note, ms}` take `ms`, and `:tick` messages nothing. `start/1`
+  registers it; `callers/3` keeps callers calling it.
+  """
+  use GenServer
+
+  def start(name), do: GenServer.start(__MODULE__, %{}, name: name) |> elem(1)
+
+  @impl true
+  def init(state), do: {:ok, state}
+
+  @impl true
+  def handle_call(:count, _from, state), do: {:reply, map_size(state), state}
+
+  def handle_call({:export, ms}, _from, state) do
+    Process.sleep(ms)
+    {:reply, :ok, state}
+  end
+
+  def handle_call({:later, ms}, from, state) do
+    Process.send_after(self(), {:answer, from}, ms)
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_cast({:note, ms}, state) do
+    Process.sleep(ms)
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info({:answer, from}, state) do
+    GenServer.reply(from, :ok)
+    {:noreply, state}
+  end
+
+  def handle_info(:tick, state), do: {:noreply, state}
+
+  @doc "`n` processes calling `name` with `request` every `every_ms`, for ever."
+  def callers(name, n, request, every_ms) do
+    for _ <- 1..n do
+      spawn(fn -> call_loop(name, request, every_ms) end)
+    end
+
+    :ok
+  end
+
+  defp call_loop(name, request, every_ms) do
+    case request do
+      {:cast, msg} -> GenServer.cast(name, msg)
+      :tick -> send(name, :tick)
+      _ -> catch_exit(fn -> GenServer.call(name, request, 30_000) end)
+    end
+
+    Process.sleep(every_ms)
+    call_loop(name, request, every_ms)
+  end
+
+  defp catch_exit(fun) do
+    fun.()
+  catch
+    :exit, _ -> :ok
+  end
+end

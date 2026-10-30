@@ -2,10 +2,11 @@ defmodule OtpDebugMcp.OldOtpTest do
   @moduledoc """
   Against a node running an older OTP release than this one, which can't
   load our compiled recon and has no trace sessions. Start one in Docker,
-  calling queue:new/0 ten times a second:
+  limited to one CPU but with four schedulers, calling queue:new/0 ten
+  times a second:
 
-      docker run -d --rm --name otp26 -p 9100:9100 erlang:26-slim \\
-        erl -noinput -name old@127.0.0.1 -setcookie testcookie -erl_epmd_port 9100 \\
+      docker run -d --rm --name otp26 -p 9100:9100 --cpus=1 erlang:26-slim \\
+        erl +S 4:4 -noinput -name old@127.0.0.1 -setcookie testcookie -erl_epmd_port 9100 \\
         -eval 'spawn(fun() -> timer:apply_interval(100, queue, new, []), receive after infinity -> ok end end).'
 
   and run only these tests, connecting without epmd and without listening:
@@ -41,6 +42,27 @@ defmodule OtpDebugMcp.OldOtpTest do
     for %{check: check, status: status} <- Checks.run_all() do
       assert status != :error, "#{check} failed"
     end
+  end
+
+  test "vm_config sees the container's CPU quota, and more schedulers than it" do
+    assert {:ok, :warning, f, _} = OtpDebugMcp.VmConfig.run()
+    assert f.cpu.cpu_quota == 1.0
+    assert f.cpu.schedulers_online == 4
+
+    assert Enum.any?(
+             f.notes,
+             &(&1 =~ "4 schedulers online, but the container's CPU quota is 1.0 CPUs")
+           )
+
+    assert f.limits.open_files.limit > 0
+  end
+
+  test "call_latency traces a gen_server in the legacy session, and cleans up" do
+    # inet_db is a gen_server every node runs.
+    assert {:ok, r} = OtpDebugMcp.CallLatency.run("inet_db", 500, 1_000)
+    assert r.trace == "legacy trace session"
+    assert r.module == "inet_db"
+    assert Tracer.other_tracing() == {:ok, nil}
   end
 
   test "trace_calls uses recon_trace" do

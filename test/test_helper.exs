@@ -8,7 +8,9 @@
 # :tls_dist tests need the suite to run over TLS (see tls_dist_test.exs).
 # The :postgres tests need PostgreSQL's binaries (see PgServer), the :emqx
 # ones an EMQX node given by EMQX_NODE (see emqx_test.exs), the :ejabberd
-# ones an ejabberd node given by EJABBERD_NODE (see ejabberd_test.exs).
+# ones an ejabberd node given by EJABBERD_NODE (see ejabberd_test.exs), the
+# :rabbitmq ones a RabbitMQ node given by RABBITMQ_NODE (see
+# rabbitmq_test.exs).
 tls? = match?({:ok, [[~c"inet_tls" | _] | _]}, :init.get_argument(:proto_dist))
 
 exclude =
@@ -17,6 +19,7 @@ exclude =
     if(tls?, do: [], else: [:tls_dist]) ++
     if(OtpDebugMcp.PgServer.bindir(), do: [], else: [:postgres]) ++
     if(System.get_env("EMQX_NODE"), do: [], else: [:emqx]) ++
-    if(System.get_env("EJABBERD_NODE"), do: [], else: [:ejabberd])
+    if(System.get_env("EJABBERD_NODE"), do: [], else: [:ejabberd]) ++
+    if(System.get_env("RABBITMQ_NODE"), do: [], else: [:rabbitmq])
 
 ExUnit.start(exclude: exclude)

@@ -145,6 +145,19 @@ slowest first. A LiveView handles one message at a time, so a slow
 messages included. It also lists the routes that an earlier route for
 the same verb makes unreachable, as the Phoenix demo's search was.
 
+When it's one GenServer that's slow to answer, and nothing emits
+telemetry for it, `call_latency` measures it from the outside: for a
+window it traces that process alone, its incoming calls, the start and
+end of its callbacks and its replies, and gives each kind of request its
+time waiting in the mailbox and its time being handled (p50, p95, max),
+the share of the window the server was busy, and who waited longest.
+Wait much larger than handling means the server is the bottleneck, and
+the request that takes most of its busy time is the one to move off it.
+Against the inventory demo (`examples/erlang/run.sh inventory`), it
+showed reservations, a map update, waiting a third of a second behind a
+stock report the same server builds, though its mailbox never held more
+than the 20 callers waiting (walkthrough 33).
+
 On a Phoenix or Bandit node whose clients get connection resets or wait
 before the first byte, `bandit` shows whether the server is at its
 connection limit and what holds the connections (scenario 15).
@@ -399,6 +412,16 @@ examples/erlang/run.sh mnesia
 
 Walkthrough 25.
 
+```sh
+examples/erlang/run.sh inventory
+```
+
+> Reservations on our inventory service, `inventory_erl@yourhost`,
+> sometimes take a third of a second, though a reservation is a map
+> update; its mailbox never looks long. Find out why.
+
+Walkthrough 33.
+
 ### 5. Approaching a system limit
 
 **Situation.** You want to know whether a node is on its way to dying with
@@ -407,7 +430,15 @@ Walkthrough 25.
 > Check `chat@edge-5` for anything heading toward a system limit.
 
 **What the agent does.** `diagnose` covers processes, ports (scenario 12) and atoms
-against their limits. Repeated `snapshot` diffs show the direction of each.
+against their limits; its `vm_config` check lists every limit in one
+place (processes, ports, atoms, ETS tables, and the OS's open files,
+`ulimit -n`, which sockets run into first), and in a container the CPU
+quota and memory limit too: schedulers that outnumber the quota get the
+whole VM throttled by the kernel, and memory past the limit gets it
+killed with no crash dump. Against the container demo
+(`examples/container/run.sh start`), it found 8 schedulers on a quota
+of one CPU, throttled, busy-waiting, and the node at its memory limit
+(walkthrough 32). Repeated `snapshot` diffs show the direction of each.
 For a growing process count, `supervision_tree` finds the supervisor whose
 child count keeps climbing (it reports `child_count` even when there are too
 many children to list).
@@ -423,6 +454,15 @@ examples/erlang/run.sh ports       # ports opened and never closed
 ```
 
 > Check `sessions_erl@yourhost` for anything heading toward a system limit.
+
+```sh
+examples/container/run.sh start    # a service in Docker set up for another machine
+```
+
+> Our pricing service runs in a container, as svc@127.0.0.1 (cookie
+> containerdemo). Every few seconds it stalls for up to 100 ms, though
+> its CPU use looks moderate, and it was OOM-killed twice this week.
+> Find out why.
 
 ### 6. Crash loops and intermittent failures
 
@@ -1447,6 +1487,19 @@ in [production.md](production.md)). Against the EMQX demo
 acknowledges, its messages dropped, and two devices sharing one client id
 (walkthrough 28).
 
+For RabbitMQ, `rabbitmq` reads its alarms, queues, channels and
+connections through its own APIs, twice, a window apart: memory and disk
+alarms (while one is set, RabbitMQ stops reading from every publishing
+connection, so publishers hang and log nothing), memory against the high
+watermark, queues by messages ready and unacknowledged with their
+consumers and growth, the channels holding the most unacknowledged
+messages with their prefetch (0: everything is sent to the consumer at
+once), and connections in flow control or blocked through the window.
+Against the RabbitMQ demo (`examples/rabbitmq/run.sh start`), it found
+the memory alarm blocking every publisher, a worker with no prefetch
+limit holding the orders it hadn't handled, and a queue nobody consumes
+(walkthrough 34).
+
 For ejabberd, the XMPP server, `ejabberd` reads its sessions, the c2s
 process behind each client connection, mod_offline's queues and the
 message archive. A connection backs up in memory rather than in its
@@ -1474,6 +1527,7 @@ examples/gleam/run.sh shop        # needs Gleam
 examples/lfe/run.sh shop          # needs LFE
 examples/emqx/run.sh start        # EMQX in Docker, and misbehaving MQTT clients
 examples/ejabberd/run.sh start    # ejabberd in Docker, and XMPP clients
+examples/rabbitmq/run.sh start    # RabbitMQ in Docker, and AMQP clients
 ```
 
 > `shop_gleam@yourhost` is getting slower and using more memory; find out why.
@@ -1487,11 +1541,16 @@ examples/ejabberd/run.sh start    # ejabberd in Docker, and XMPP clients
 > support@localhost go missing too. ejabberd is `ejabberd@localhost`.
 > Find out why.
 
+> Our order services hang when they publish to RabbitMQ, for minutes at
+> a time, though the order worker is running. RabbitMQ is
+> `rabbit@localhost`. Find out why.
+
 The Gleam and LFE demos are BEAM code from other languages, debugged the
-same way; the EMQX and ejabberd demos are third-party products, in
-Docker (see [examples/emqx](../examples/emqx) and
-[examples/ejabberd](../examples/ejabberd) for registering a server for
-each). Walkthroughs 28 and 29.
+same way; the EMQX, ejabberd and RabbitMQ demos are third-party
+products, in Docker (see [examples/emqx](../examples/emqx),
+[examples/ejabberd](../examples/ejabberd) and
+[examples/rabbitmq](../examples/rabbitmq) for registering a server for
+each). Walkthroughs 28, 29 and 34.
 
 ### 27. Your own node during development
 

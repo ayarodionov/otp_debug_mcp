@@ -1,5 +1,43 @@
 # Changelog
 
+## Unreleased
+
+- `vm_config`, a check that `diagnose` runs first: the VM's setup
+  against what it runs on. Schedulers online against the container's
+  CPU quota (cgroup v1 or v2) and its CPU affinity, with how often the
+  kernel throttled it (`cpu.stat`, since it started and over a second);
+  busy-waiting schedulers in a container; memory against the
+  container's limit; processes, ports, atoms, ETS tables and open files
+  (`ulimit -n`) against their limits; debug logging, no JIT, a changed
+  `fullsweep_after`; the emulator flags given (`+S`, `+sbwt`...). The
+  OTP 26 target in CI now runs with `--cpus=1` and `+S 4:4`, and checks
+  that it's seen. A container demo (`examples/container`) and
+  walkthrough 32.
+- `call_latency`: how long one gen_server makes its callers wait, and
+  why, with no telemetry: calls by request, each split into the time it
+  waited in the mailbox and the time the server took (p50, p95, max),
+  casts and other messages by kind, the share of the window it was
+  busy, who waited longest, calls still unanswered. It traces that
+  process alone, in its own trace session on OTP 27+ (the legacy one
+  before, refused when something else traces there), with callbacks
+  traced by arity, so the server's state is never copied. An inventory
+  demo (`examples/erlang/run.sh inventory`) and walkthrough 33.
+- `rabbitmq`: RabbitMQ, from a node of its cluster, through its own
+  APIs, sampled a window apart: version, cluster members running and
+  down, partitions; resource alarms (memory, disk), with memory and disk
+  against their limits; queues by messages, ready and unacknowledged,
+  consumers, memory and growth; channels holding the most unacknowledged
+  messages, with their prefetch; connections by state, and those in flow
+  control or blocked through the window. A RabbitMQ demo
+  (`examples/rabbitmq`, RabbitMQ in Docker and AMQP clients), scenario
+  26, and walkthrough 34. Tests against a RabbitMQ node in Docker, in
+  CI's new RabbitMQ target job.
+- `scripts/blind_eval.py`: the walkthroughs as a regression suite. Each
+  case in `test/blind/cases.json` starts a demo, gives a headless
+  `claude -p` session only the symptom and the otp-debug tools, and
+  checks that its conclusion names the cause; a report and the
+  transcripts are kept.
+
 ## 0.12.0
 
 Six tools: a sampling profiler (`hot_spots`) and a benchmark

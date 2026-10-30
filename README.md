@@ -63,18 +63,20 @@ introspection primitives, but an encoded diagnostic playbook in the spirit of
 |---|---|
 | `connect` | Attach to a node (name + optional cookie) as a hidden node |
 | `diagnose` | Full health battery, findings ranked worst-first |
-| `run_check` | One check: `message_queues`, `call_chains`, `supervisor_restarts`, `binary_leak`, `memory_breakdown`, `allocator_fragmentation`, `process_count`, `atom_table`, `ets_tables`, `ports`, `native_memory`, `native_code`, `stale_code` (old code still running after a hot load, modules unlike their `.beam` on the code path), `logs` (where the node's logs go, and whether a file keeps them), `distribution` (connections to other nodes: traffic, and bytes waiting against the busy limit), `schedulers`, `scheduler_time` (where scheduler time goes: Erlang code, garbage collection, ports, I/O polling, busy-waiting), `long_schedules`, `socket_traffic`, `top_reductions` |
+| `run_check` | One check: `vm_config` (the VM's setup against what it runs on: schedulers against the container's CPU quota, and how often it's throttled; memory against the container's limit; limits in use; busy-waiting, debug logging), `message_queues`, `call_chains`, `supervisor_restarts`, `binary_leak`, `memory_breakdown`, `allocator_fragmentation`, `process_count`, `atom_table`, `ets_tables`, `ports`, `native_memory`, `native_code`, `stale_code` (old code still running after a hot load, modules unlike their `.beam` on the code path), `logs` (where the node's logs go, and whether a file keeps them), `distribution` (connections to other nodes: traffic, and bytes waiting against the busy limit), `schedulers`, `scheduler_time` (where scheduler time goes: Erlang code, garbage collection, ports, I/O polling, busy-waiting), `long_schedules`, `socket_traffic`, `top_reductions` |
 | `recent_errors` | The errors the node logs, grouped by who failed and why: crashes with their stack and the reports they caused, error and warning messages with where they were logged, and the errors in the node's log files from before, and processes that crashed calling each other (a deadlock a call timeout ended); listens for a window, or in the background |
 | `crash_dump` | Why a node died, from its `erl_crash.dump`: what the slogan means, the process that was running, the biggest processes and mailboxes with their stacks, the first messages of the longest mailbox, memory, ETS and ports; no connection needed |
 | `process_info` | Deep-inspect one process: recon:info, an age estimate, its supervisor's restart history, optional `sys:get_state` |
 | `supervision_tree` | Render an application's supervision tree, with each supervisor's strategy and restart history |
 | `ets_table` | What's in one ETS table: its type, protection, owner and heir, its first rows, and a bounded scan for the average and largest rows and, for a bag, the most repeated keys |
 | `port_info` | Deep-inspect one port: a socket's addresses, statistics and options, an external program's OS pid, its owner and queue |
+| `call_latency` | How long one gen_server makes its callers wait, and why, without telemetry: calls by request, split into time waiting in the mailbox and time handled (p50, p95, max), casts and other messages, how busy the server was, who waited longest |
 | `trace_calls` | Rate-limited call tracing (isolated trace session on OTP 27+, recon_trace before); with `exceptions: true`, only the calls that raise, with their arguments and caller; with `process`, one process's calls, and with no module, every function that raises in it |
 | `trace_port` | A port's traffic, or the ports opened and closed in a window with who opened them; rate-limited, in its own trace session on OTP 27+ |
 | `cowboy` | A Cowboy web server, through Ranch under it: its listeners and connection limits (per connection supervisor), acceptors blocked waiting for room, idle and WebSocket connections, the requests in flight grouped by where they wait and those running through the whole window, timeouts and routes, and over the window Ranch's accept rate and, with cowboy_telemetry, requests by status, the slowest routes and handler crashes |
 | `ranch` | Ranch listeners, any protocol (Cowboy's HTTP, RabbitMQ's AMQP, your own): limits per connection supervisor, acceptors waiting for room, connections by where they are in the protocol's code, connections idle through the window (held open with no timeout), stuck in a handshake or writing to a slow reader, and connection crashes by reason |
 | `yaws` | A Yaws web server: each listening server's virtual servers and appmods, its connections against `max_connections`, what its acceptor processes are doing (each connection is one, and runs `out/1`), the requests in flight grouped by where they wait and those running through the window, and its cookie sessions: how many, how fast they grow, how many were used only once |
+| `rabbitmq` | RabbitMQ: cluster and partitions, memory and disk alarms (which block every publisher), queues by messages ready and unacknowledged with their consumers and growth, channels holding unacked messages and their prefetch, connections in flow control or blocked |
 | `emqx` | EMQX, the MQTT broker: cluster, overload protection, its alarms, listeners, clients, and its counters over a window (messages dropped by reason, sessions taken over, auth failures), clients that can't keep up (in flight, queued, dropped), client ids reconnecting, rules and actions failing |
 | `ejabberd` | ejabberd, the XMPP server: cluster, users online, client connections backed up (by memory, as ejabberd queues on the heap) with their socket and what they're doing, offline queues full and bouncing, the message archive on Mnesia and how slow it is, busy MUC rooms and ejabberd processes |
 | `hot_spots` | Where the CPU goes, by function, without tracing: a sampling profiler over the busiest processes' stacks, with own time, time with callees, the first frame of your code, the hottest stacks and the share in garbage collection |
@@ -525,7 +527,9 @@ a Ranch server whose dead connections keep new clients out, a LiveView
 dashboard whose assigns keep every order,
 telemetry handlers piling up, Mnesia transactions waiting on one record, a Postgrex pool held up by
 a payment call, profiling and tuning a slow function, an EMQX broker with a slow
-consumer and a client-id clash, an ejabberd server with a bot that reads
+consumer and a client-id clash, a RabbitMQ broker whose memory alarm blocks
+its publishers, a service throttled by its container's CPU quota, a
+gen_server whose callers wait behind one slow request, an ejabberd server with a bot that reads
 slowly, its archive on Mnesia and an offline queue full, a
 riak_core cluster with a member down and a vnode swamped, and riak_dt
 sets whose actors pile up.
@@ -547,6 +551,8 @@ background, on this host with `-sname`, and `run.sh stop` stops them:
 | Erlang | [examples/erlang](examples/erlang) | a mailbox that never drains, an OTP application in a crash loop, a session store leaking atoms and ETS rows, a cluster with one bad node, a C NIF library that blocks a scheduler and leaks native memory, a shop that leaks sockets and external programs and fills a slow peer's socket, an orders service whose errors only its logs show, a node that runs out of memory and leaves a crash dump, two gen_servers that deadlock, report workers whose CPU goes to garbage collection, a fix deployed but never loaded, and a node flooding the link to another |
 | Gleam | [examples/gleam](examples/gleam) | a mailbox that never drains, a supervised actor whose `let assert` panics in a loop, and a job runner leaking processes |
 | LFE | [examples/lfe](examples/lfe) | a mailbox that never drains, an OTP application in a crash loop, and an index whose slices pin whole binaries |
+| Container | [examples/container](examples/container) | An Erlang service in Docker limited to one CPU and 256 MB, with 8 schedulers and busy-waiting from the machine it used to run on: throttled by the kernel, and near its memory limit |
+| RabbitMQ | [examples/rabbitmq](examples/rabbitmq) | RabbitMQ in Docker, with an order worker that has no prefetch limit, a queue nobody consumes any more, and a memory alarm that blocks every publisher |
 | EMQX | [examples/emqx](examples/emqx) | EMQX in Docker, with a dashboard client that never acknowledges its messages and two devices sharing one client id |
 | ejabberd | [examples/ejabberd](examples/ejabberd) | ejabberd in Docker, with a logger bot that reads slowly, its message archive on Mnesia, and a support account whose offline queue is full |
 
@@ -590,7 +596,9 @@ tests need an EMQX node, given by `EMQX_NODE` and `EMQX_COOKIE` (see
 `test/otp_debug_mcp/emqx_test.exs`; CI runs one in Docker), and the
 ejabberd tests an ejabberd node, given by `EJABBERD_NODE` and
 `EJABBERD_COOKIE` (see `test/otp_debug_mcp/ejabberd_test.exs`; CI runs
-one in Docker too).
+one in Docker too), and the RabbitMQ tests a RabbitMQ node, given by
+`RABBITMQ_NODE` and `RABBITMQ_COOKIE` (see
+`test/otp_debug_mcp/rabbitmq_test.exs`; CI runs one in Docker).
 
 The whole suite also runs over TLS distribution, peers included, which
 adds a test that the target sees the connection as TLS:
@@ -669,8 +677,8 @@ port works without epmd: the target listens on a fixed port, and the tool
 connects to that port without listening itself:
 
 ```sh
-docker run -d --rm --name otp26 -p 9100:9100 erlang:26-slim \
-  erl -noinput -name old@127.0.0.1 -setcookie testcookie -erl_epmd_port 9100 \
+docker run -d --rm --name otp26 -p 9100:9100 --cpus=1 erlang:26-slim \
+  erl +S 4:4 -noinput -name old@127.0.0.1 -setcookie testcookie -erl_epmd_port 9100 \
   -eval 'spawn(fun() -> timer:apply_interval(100, queue, new, []), receive after infinity -> ok end end).'
 ERL_FLAGS="-erl_epmd_port 9100" python3 scripts/mcp_call.py \
   _build/prod/rel/otp_debug_mcp/bin/otp_debug_mcp '[
@@ -679,6 +687,27 @@ ERL_FLAGS="-erl_epmd_port 9100" python3 scripts/mcp_call.py \
   ["trace_calls", {"module": "queue", "function": "new", "max_events": 4}]
 ]'
 ```
+
+### Blind sessions
+
+The walkthroughs are also a regression suite: `scripts/blind_eval.py`
+runs each one as it was recorded. It starts the demo, gives a headless
+`claude -p` session, in an empty directory, only the symptom and the
+otp-debug tools, stops the demo, and checks that the session's
+conclusion names the cause (the patterns in `test/blind/cases.json`).
+It needs the Claude Code CLI, logged in, and costs what the sessions do;
+it isn't part of CI.
+
+```sh
+python3 scripts/blind_eval.py --list                    # the cases
+python3 scripts/blind_eval.py --build --skip docker,postgres
+python3 scripts/blind_eval.py --cases inventory,ranch   # some of them
+```
+
+Transcripts, each session's answer and a report (`report.md`,
+`report.json`: pass or fail, time, tool calls, what was missing) go to
+`blind-results/<time>/`. A change to a tool that makes an agent's job
+harder shows there as a failure, or as more tool calls and time.
 
 ## Releasing
 

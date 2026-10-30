@@ -165,7 +165,9 @@ defmodule OtpDebugMcp.Tools do
     schema do
       field(:check, {:required, :string},
         description:
-          "One of: message_queues, call_chains (1s: deadlocks, chains of calls, processes " <>
+          "One of: vm_config (the VM's setup against what it runs on: schedulers against " <>
+            "the container's CPU quota, memory against its limit, limits in use, costly " <>
+            "settings), message_queues, call_chains (1s: deadlocks, chains of calls, processes " <>
             "many wait on), supervisor_restarts, binary_leak (force-GCs every " <>
             "process), memory_breakdown, " <>
             "allocator_fragmentation, process_count, atom_table, ets_tables, ports, " <>
@@ -948,6 +950,53 @@ defmodule OtpDebugMcp.Tools do
     end
   end
 
+  defmodule CallLatency do
+    @moduledoc """
+    How long one gen_server (or Elixir GenServer) makes its callers wait,
+    and why, with no telemetry needed: over a window, its calls by
+    request, each split into the time it waited in the mailbox and the
+    time the server took (p50, p95, max); its casts and other messages by
+    kind, with their handling time; the share of the window it was busy;
+    who waited longest; calls still unanswered at the end. It traces only
+    that process, in its own trace session on OTP 27+; the server's state
+    is never copied into a trace message.
+    """
+    use Anubis.Server.Component, type: :tool
+    use OtpDebugMcp.Approval
+
+    alias OtpDebugMcp.Tools
+
+    schema do
+      field(:process, {:required, :string},
+        description:
+          "The gen_server: a pid (<0.123.0>) or registered name (an Erlang atom, or an Elixir module such as MyApp.Cache)"
+      )
+
+      field(:duration_ms, :integer, description: "How long to trace (default 5000, max 30000)")
+
+      field(:max_events, :integer,
+        description: "Stop after this many trace messages (default 50000, max 200000)"
+      )
+
+      field(:force, :boolean,
+        description:
+          "Older nodes (before OTP 27) only: trace even though something else traces in the legacy session"
+      )
+    end
+
+    def perform(params, frame) do
+      duration = (params[:duration_ms] || 5_000) |> min(30_000) |> max(500)
+      max_events = (params[:max_events] || 50_000) |> min(200_000) |> max(100)
+
+      case OtpDebugMcp.CallLatency.run(params.process, duration, max_events,
+             force: params[:force]
+           ) do
+        {:ok, report} -> Tools.json_response(frame, report)
+        {:error, reason} -> Tools.error_response(frame, reason)
+      end
+    end
+  end
+
   defmodule TraceCalls do
     @moduledoc """
     Trace calls to a module/function on the target, safely: hard caps on
@@ -1143,6 +1192,38 @@ defmodule OtpDebugMcp.Tools do
       duration = (params[:duration_ms] || 5_000) |> min(30_000) |> max(500)
 
       case OtpDebugMcp.Ranch.report(duration) do
+        {:ok, report} -> Tools.json_response(frame, report)
+        {:error, reason} -> Tools.error_response(frame, reason)
+      end
+    end
+  end
+
+  defmodule Rabbitmq do
+    @moduledoc """
+    RabbitMQ, from a node of its cluster, sampled at the start and end of
+    a window: version, cluster members running and down, partitions; its
+    resource alarms (memory, disk; while one is set every publisher is
+    blocked), with memory and disk against their limits; queues by
+    messages (ready, unacknowledged), consumers, memory and growth;
+    channels holding the most unacknowledged messages, with their
+    prefetch; connections by state, and those in flow control or blocked
+    through the window. Findings come first, worst first. Read-only.
+    """
+    use Anubis.Server.Component, type: :tool
+    use OtpDebugMcp.Approval
+
+    alias OtpDebugMcp.Tools
+
+    schema do
+      field(:duration_ms, :integer,
+        description: "How long between the two samples (default 5000, max 30000)"
+      )
+    end
+
+    def perform(params, frame) do
+      duration = (params[:duration_ms] || 5_000) |> min(30_000) |> max(500)
+
+      case OtpDebugMcp.Rabbitmq.report(duration) do
         {:ok, report} -> Tools.json_response(frame, report)
         {:error, reason} -> Tools.error_response(frame, reason)
       end

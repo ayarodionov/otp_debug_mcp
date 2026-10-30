@@ -207,6 +207,10 @@ defmodule OtpDebugMcp.Approval do
       {:read,
        "Reads Ranch's listeners and connection processes twice, a window apart, with a log watch for connection crashes meanwhile."}
 
+  def step("rabbitmq", _),
+    do:
+      {:read, "Reads RabbitMQ's queues, channels, connections and alarms, twice, a window apart."}
+
   def step("ejabberd", _),
     do:
       {:read,
@@ -274,6 +278,11 @@ defmodule OtpDebugMcp.Approval do
 
   def step("snapshot", %{action: a}),
     do: {:read, "#{String.capitalize(to_string(a))}s a snapshot of the node's counts."}
+
+  def step("call_latency", p),
+    do:
+      {:changes,
+       "Traces #{p[:process]}'s messages, replies and callbacks for #{div(p[:duration_ms] || 5_000, 1000)} s: that process is a little slower meanwhile."}
 
   def step("trace_calls", p),
     do:

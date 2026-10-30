@@ -1,6 +1,6 @@
 # Walkthroughs
 
-Thirty-one debugging sessions against the demo nodes in `examples/`, start to
+Thirty-four debugging sessions against the demo nodes in `examples/`, start to
 finish, for following along on your own machine. Each one gives the
 command that starts the demo, the prompt, every tool call the agent made
 with the part of its result that mattered, and the conclusion. The
@@ -49,7 +49,10 @@ Contents:
 29. [ejabberd: a bot that reads slowly, an archive on Mnesia, a full offline queue](#29-ejabberd-a-bot-that-reads-slowly-an-archive-on-mnesia-a-full-offline-queue)
 30. [Ranch: dead connections keep new clients out](#30-ranch-dead-connections-keep-new-clients-out)
 31. [A LiveView whose assigns keep growing](#31-a-liveview-whose-assigns-keep-growing)
-32. [Cleaning up](#cleaning-up)
+32. [A container's CPU quota, and its memory limit](#32-a-containers-cpu-quota-and-its-memory-limit)
+33. [Callers waiting behind one slow request](#33-callers-waiting-behind-one-slow-request)
+34. [RabbitMQ: a memory alarm, a consumer with no prefetch, a queue nobody reads](#34-rabbitmq-a-memory-alarm-a-consumer-with-no-prefetch-a-queue-nobody-reads)
+35. [Cleaning up](#cleaning-up)
 
 ---
 
@@ -2755,6 +2758,220 @@ The agent changed nothing on the node.
 
 ---
 
+## 32. A container's CPU quota, and its memory limit
+
+```sh
+examples/container/run.sh start
+```
+
+An Erlang pricing service runs in Docker as `svc@127.0.0.1` (cookie
+`containerdemo`), limited to one CPU and 256 MB (`--cpus=1
+--memory=256m`), but started with `+S 8:8 +sbwt very_long`, the
+`vm.args` of the 8-core machine it came from. Baskets arrive in bursts,
+80 every quarter of a second, for 8 workers; a price cache of about
+120 MB sits in ETS, and a latency table nothing trims grows beside it.
+The server was started with `ERL_FLAGS="-erl_epmd_port 9300"`. The
+session started 90 seconds after the demo.
+
+> Our pricing service runs in a container, as svc@127.0.0.1 (cookie
+> containerdemo). Every few seconds it stalls for up to 100 ms, though
+> its CPU use looks moderate, and it was OOM-killed twice this week.
+> Find out why.
+
+Only the otp-debug tools were allowed. The session took 93 seconds
+(recorded with `scripts/blind_eval.py --cases container`).
+
+**`connect`**, then **`diagnose`**, whose first check is `vm_config`:
+
+```json
+{"check": "vm_config", "status": "critical",
+ "findings": {
+   "notes": [
+     "critical: the node uses 262 MB of the container's 268 MB memory limit (98%): past it the kernel's OOM killer kills the VM outright, with no crash dump and nothing in its logs",
+     "warning: 8 schedulers online, but the container's CPU quota is 1.0 CPUs per 100 ms, and the kernel has throttled it in 10% of its periods since it started; in the last second, 4 of 10 (672 ms of throttled time, summed over its CPUs): the schedulers compete for that time, and once the VM has used its quota in a period the kernel stops all of it until the next, so latency jumps by up to the period. Run as many schedulers as the quota: +S 1:1 (the command line sets +S 8:8); without a +S, OTP 23 and later follow the quota themselves",
+     "warning: the logger's primary level is debug: every debug message is built, formatted and handled, which costs in production; :info or :notice",
+     "info: the schedulers busy-wait before sleeping (+sbwt very_long), which spends the container's CPU quota spinning: with a CPU limit, +sbwt none +sbwtdcpu none +sbwtdio none give it back to work"],
+   "cpu": {"schedulers_online": 8, "cpu_quota": 1.0, "cpu_quota_period_ms": 100, "cpu_quota_from": "cgroup_v2",
+           "throttled": {"throttled_share_since_start": 0.099,
+                         "last_second": {"periods": 10, "throttled": 4, "throttled_ms": 672}},
+           "busy_wait": {"sbwt": "very_long"}},
+   "memory": {"container_limit_bytes": 268435456, "vm_total_bytes": 228995250,
+              "os_resident_bytes": 262000640, "limit_from": "cgroup_v2"},
+   "emulator_flags": {"+S": "8:8", "+sbwt": "very_long"}}}
+```
+
+Then **`module_code`** on `pricing`'s functions, **`ets_table`** on
+`price_cache` (12,000 rows of 10 KB binaries, about 120 MB, held
+outside the table) and `latency` (58,000 rows), two **`snapshot`**
+diffs (ETS growing about 40 KB a second, nothing else), and
+**`long_schedules`**: processes in plain Erlang code holding a scheduler
+for up to 72 ms, which Erlang code doesn't do by itself: the kernel had
+stopped the VM.
+
+**The answer.** The stalls are the kernel throttling the container. Eight
+schedulers work through a burst of baskets in parallel and use the
+period's 100 ms of CPU in about 12 ms, and then the whole VM waits for
+the next period; the service's own health check ran 40 ms late. CPU
+looks moderate because the load comes in bursts, and busy-waiting
+schedulers spend part of the quota spinning. The OOM kills: the price
+cache alone is half the container, worker heaps add 60 MB, and the
+latency table grows without bound, so the node starts near the limit
+and drifts over it.
+
+**Fixes.**
+
+- **vm.args:** `+S 1:1`, or no `+S` at all (OTP follows the quota), and
+  `+sbwt none +sbwtdcpu none +sbwtdio none`; or a CPU limit to match
+  eight schedulers.
+- **The latency table:** delete rows older than a window, or keep a
+  histogram.
+- **The cache:** cap it, or give the container room for it.
+- **Logging:** drop the `logger:set_primary_config(level, debug)` at
+  start.
+
+The agent changed nothing on the node.
+
+---
+
+## 33. Callers waiting behind one slow request
+
+```sh
+examples/erlang/run.sh inventory
+```
+
+`inventory_erl` runs the shop's inventory, one gen_server holding every
+product's stock. 20 shop processes reserve items with `gen_server:call`,
+each every 50 ms; the warehouse dashboard asks the same server for a
+stock report every 700 ms. Nothing on the node emits telemetry.
+
+> Reservations on our inventory service, `inventory_erl@yourhost`,
+> sometimes take a third of a second, though a reservation is a map
+> update; its mailbox never looks long. Find out why.
+
+Only the otp-debug tools were allowed. The session took 46 seconds.
+
+**`connect`**, then **`diagnose`**: nothing over its thresholds, but
+`inventory` is the busiest process by far. **`call_latency`** on
+`inventory`, for 5 seconds:
+
+```json
+{"status": "warning", "module": "inventory", "busy_share": 0.327,
+ "trace": "isolated trace session",
+ "findings": [
+   "warning: stock_report takes 330.11 ms at p95 to handle and is 99% of the server's busy time: while one runs, everything else sent to the server waits. Make it faster, or move it off this process (a Task, a pool of workers, or reading the data directly, e.g. from ETS)",
+   "warning: {reserve, ...} (3-tuple) calls waited 308.1 ms at p95 in the mailbox before the server even started on them, and took 0.0 ms to handle: the time is spent behind other messages, not on the request"],
+ "calls": [
+   {"request": "stock_report", "calls": 5, "per_s": 1.0, "share_of_busy_time": 0.988,
+    "wait_ms": {"p50": 0.01, "p95": 0.01, "max": 0.01},
+    "handling_ms": {"p50": 321.9, "p95": 330.1, "max": 330.1}},
+   {"request": "{reserve, ...} (3-tuple)", "calls": 1360, "share_of_busy_time": 0.001,
+    "wait_ms": {"p50": 0.03, "p95": 308.1, "max": 317.1},
+    "handling_ms": {"p50": 0.0, "p95": 0.0, "max": 0.02}}],
+ "callers": [{"is": "in inventory:dashboard/0", "calls": 5, "waited_ms_max": 330.1},
+             {"is": "in inventory:shop/1", "calls": 68, "waited_ms_max": 317.1}]}
+```
+
+**`module_code`** on `handle_call/3`, `report/1` and `value/2`:
+`report/1` values every SKU with `value/2`, which builds a 4,000-element
+list and folds over it.
+
+**The answer.** A reservation takes no time to handle; it waits up to
+317 ms in the mailbox for a `stock_report` the same server is building,
+about a third of a second, once a second. The mailbox never looks long
+because only the 20 shop processes call, each blocked on its own call:
+at most 20 messages wait, each for a long time. `diagnose`'s mailbox
+check couldn't see that; the time is only visible per call.
+
+**Fixes.**
+
+- Build the report outside the server: keep the stock in an ETS table
+  (`read_concurrency`) the dashboard reads, or have `handle_call` spawn
+  the report and answer with `gen_server:reply/2`, returning `{noreply,
+  State}`.
+- Make the report cheaper too: `value/2` gives the same result for the
+  same stock every time.
+- Then run `call_latency` again: a reservation's wait should be its
+  handling time, under 0.03 ms.
+
+The agent changed nothing on the node.
+
+---
+
+## 34. RabbitMQ: a memory alarm, a consumer with no prefetch, a queue nobody reads
+
+```sh
+examples/rabbitmq/run.sh start
+```
+
+RabbitMQ 4.1 runs in Docker as `rabbit@localhost` (cookie
+`rabbitdemo`), with a memory high watermark of 300 MiB, and
+`examples/rabbitmq/clients.py`: four order services publishing orders
+(8 KB) to `orders` and a notification (1 KB) per order to `email`; an
+order worker consuming `orders` with no prefetch limit and acking each
+order it handles, about 50 a second; and nothing consuming `email` since
+the email service was retired. The server was started with
+`ERL_FLAGS="-erl_epmd_port 25672"`. The session started 150 seconds
+after the demo.
+
+> Our order services hang when they publish to RabbitMQ, for minutes at
+> a time, though the order worker is running. RabbitMQ is
+> `rabbit@localhost`. Find out why.
+
+Only the otp-debug tools were allowed. The session took 43 seconds
+(recorded with `scripts/blind_eval.py --cases rabbitmq`).
+
+**`connect`** (RabbitMQ ships recon, which is used as it is), then
+**`diagnose`**: one queue process holds about 258 MB of binaries, 65% of
+the node's memory. **`rabbitmq`**, for 10 seconds:
+
+```json
+{"status": "warning", "version": "RabbitMQ 4.1.8",
+ "memory": {"used_bytes": 312295424, "limit_bytes": 314572800, "share": 0.993},
+ "findings": [
+   "warning: the node uses 99% of its memory high watermark (314 MB): at the watermark a memory alarm blocks every publisher",
+   "warning: channel 192.168.65.1:55660 -> 172.17.0.2:5672 (1) (demo) holds 20696 unacknowledged messages, with no prefetch limit, acking 49.9 a second: RabbitMQ sends a consumer without basic.qos everything as it arrives, and keeps each until it's acked, in its memory; set a prefetch (e.g. 50) so the rest wait in the queue, cheaply, or for another consumer",
+   "warning: queue orders grew 267.9 messages a second with 1 consumer, which acked 49.9 a second (317.7 delivered): they take less than is published; most of it (20696) is delivered but unacknowledged",
+   "warning: queue email has 29912 messages and no consumers, 317.7 more a second: they're kept, in memory or on disk, until something consumes or removes them. A queue nobody reads any more wants deleting (or a max-length or TTL policy), and its publishers stopping"],
+ "published_per_s": 635.4,
+ "busiest_queues": [
+   {"queue": "email", "messages": 29912, "ready": 29912, "consumers": 0, "growth_per_s": 317.7},
+   {"queue": "orders", "messages": 20696, "ready": 0, "unacknowledged": 20696, "consumers": 1,
+    "delivered_per_s": 317.7, "acked_per_s": 49.9, "message_bytes": 169769288}],
+ "channels_holding_unacked": [{"channel": "192.168.65.1:55660 -> 172.17.0.2:5672 (1)", "prefetch": 0,
+                               "unacknowledged": 20696, "acked_per_s": 49.9}],
+ "connections": {"total": 5, "by_state": {"running": 5}}}
+```
+
+At that moment the alarm wasn't set. On an earlier run of the demo,
+the same call at the alarm showed `"alarms": [{"resource": "memory"}]`,
+memory at 335 MB of the 314 MB watermark, and all five connections
+`blocked` or `blocking` through the window: the alarm sets and clears
+as the worker's acks free a little memory and the publishers fill it
+again.
+
+**The answer.** RabbitMQ sits at its memory high watermark, and each
+time it crosses it, it raises a memory alarm and stops reading from
+every publishing connection: the order services hang inside
+`basic.publish`. The memory is the order worker's backlog. With no
+prefetch, RabbitMQ delivers every order to it as it arrives, about 318
+a second, while it acks 50, and keeps the 20,000 delivered but
+unacknowledged orders, 170 MB of them, in memory. The `email` queue,
+which nobody consumes, adds 30,000 more messages.
+
+**Fixes.**
+
+- **The worker:** `basic.qos` with a prefetch (50, say), so the backlog
+  waits in the queue, where it can be paged to disk; and more workers,
+  or a faster one, as it handles a sixth of what's published.
+- **`email`:** delete it and stop publishing to it, or a `max-length`
+  or TTL policy.
+- **The publishers:** handle `connection.blocked`, so an alarm shows as
+  an error, not a hang. A higher watermark only delays it.
+
+The agent changed nothing on the node.
+
+---
+
 ## Cleaning up
 
 ```sh
@@ -2762,8 +2979,9 @@ examples/elixir/run.sh stop
 examples/erlang/run.sh stop
 ```
 
-stops every Elixir and Erlang demo node, and `examples/emqx/run.sh stop`
-and `examples/ejabberd/run.sh stop` remove the Docker ones. The other languages' demos
+stops every Elixir and Erlang demo node, and `examples/emqx/run.sh stop`,
+`examples/ejabberd/run.sh stop`, `examples/rabbitmq/run.sh stop` and
+`examples/container/run.sh stop` remove the Docker ones. The other languages' demos
 (`examples/erlang`, `examples/gleam`, `examples/lfe`) have the same
 bugs and more, each with its own `run.sh`; see the
 [demo targets](../README.md#demo-targets) table.

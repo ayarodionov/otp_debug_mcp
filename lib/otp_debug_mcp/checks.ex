@@ -13,6 +13,7 @@ defmodule OtpDebugMcp.Checks do
   alias OtpDebugMcp.{Format, Target}
 
   @checks [
+    :vm_config,
     :message_queues,
     :call_chains,
     :supervisor_restarts,
@@ -50,6 +51,7 @@ defmodule OtpDebugMcp.Checks do
   # (The atom check also keeps clear of this tool's first calls by itself.)
   @phases [
     [
+      :vm_config,
       :message_queues,
       :call_chains,
       :supervisor_restarts,
@@ -111,6 +113,18 @@ defmodule OtpDebugMcp.Checks do
   defp status_rank(:ok), do: 3
 
   # -- Individual checks ---------------------------------------------------------
+
+  # The VM's setup against what it runs on: schedulers against the CPU
+  # quota, memory against the container's limit, limits in use.
+  def run(:vm_config) do
+    case OtpDebugMcp.VmConfig.run() do
+      {:ok, status, findings, interpretation} ->
+        result(:vm_config, status, findings, interpretation)
+
+      err ->
+        error_result(:vm_config, err)
+    end
+  end
 
   # Who waits on whom: deadlocks, chains of calls, bottlenecks.
   def run(:call_chains) do

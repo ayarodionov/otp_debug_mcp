@@ -86,8 +86,8 @@ jobs:
       # container; the tests connect to it without epmd and without listening.
       - name: Start an OTP 26 target
         run: |
-          docker run -d --name otp26 -p 9100:9100 erlang:26-slim \
-            erl -noinput -name old@127.0.0.1 -setcookie testcookie -erl_epmd_port 9100 \
+          docker run -d --name otp26 -p 9100:9100 --cpus=1 erlang:26-slim \
+            erl +S 4:4 -noinput -name old@127.0.0.1 -setcookie testcookie -erl_epmd_port 9100 \
             -eval 'spawn(fun() -> timer:apply_interval(100, queue, new, []), receive after infinity -> ok end end).'
           sleep 5
       - run: mix test --only old_otp
@@ -180,6 +180,48 @@ jobs:
       - name: ejabberd log
         if: always()
         run: docker logs ejabberd | tail -100
+
+  rabbitmq:
+    name: RabbitMQ target
+    runs-on: ubuntu-24.04
+    env:
+      MIX_ENV: test
+    steps:
+      - uses: actions/checkout@v7
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28"
+          elixir-version: "1.19"
+      - uses: actions/cache@v6
+        with:
+          path: |
+            deps
+            _build
+          key: mix-test-28-${{ hashFiles('mix.lock') }}
+      # Yaws, a test dependency, compiles a PAM driver.
+      - run: sudo apt-get update && sudo apt-get install -y libpam0g-dev
+      - run: mix deps.get
+      - run: mix compile
+      # RabbitMQ listens for distribution on 25672: the tests connect
+      # there directly, without epmd and without listening themselves.
+      - name: Start RabbitMQ
+        run: |
+          docker run -d --name rabbitmq -e RABBITMQ_NODENAME=rabbit@localhost \
+            -e RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS="-setcookie testcookie" \
+            -e RABBITMQ_DEFAULT_USER=test -e RABBITMQ_DEFAULT_PASS=test \
+            -p 5672:5672 -p 25672:25672 rabbitmq:4.1
+          for i in $(seq 1 60); do
+            docker logs rabbitmq 2>&1 | grep -q "Server startup complete" && break
+            sleep 2
+          done
+      - run: mix test --only rabbitmq
+        env:
+          RABBITMQ_NODE: rabbit@localhost
+          RABBITMQ_COOKIE: testcookie
+          ERL_FLAGS: -erl_epmd_port 25672 -dist_listen false
+      - name: RabbitMQ log
+        if: always()
+        run: docker logs rabbitmq | tail -100
 
   new-otp:
     name: OTP 29 target

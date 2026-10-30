@@ -80,6 +80,14 @@ raw introspection when a purpose-built tool exists.
      pages, a route that never runs → `phoenix`: LiveViews by view
      (memory, growth, the assigns holding it), slow LiveView callbacks
      and channel messages, shadowed routes, PubSub fan-out.
+   - In a container (Docker, Kubernetes): latency spikes with moderate CPU,
+     OOM kills → `diagnose`'s `vm_config` first: schedulers against the
+     CPU quota and how often the kernel throttles it, memory against the
+     container's limit, busy-waiting. Fixes go in vm.args or the limits.
+   - One gen_server slow to answer, callers timing out, with no telemetry
+     → `call_latency` on it: per request, time waiting in its mailbox vs
+     time handling, and which request takes the server's time. Wait much
+     larger than handling means it's the bottleneck, behind other work.
    - A web service whose clients get connection resets, or wait before
      the first byte, while request times look fine → `bandit` (Phoenix,
      Bandit), `cowboy` (Cowboy, including Phoenix on plug_cowboy) or `yaws`: the
@@ -103,6 +111,13 @@ raw introspection when a purpose-built tool exists.
      unacknowledged, queues full, drops), client ids kicking each other
      off, its alarms, auth failures, rules and actions failing. EMQX 5
      needs the server started with ERL_FLAGS="-erl_epmd_port 4370".
+   - RabbitMQ problems: publishers hanging, queues growing, consumers
+     falling behind → `rabbitmq`: memory and disk alarms (while one is
+     set every publisher is blocked), queues with no consumers, channels
+     holding unacknowledged messages with no prefetch limit, connections
+     in flow control. RabbitMQ listens for distribution on 25672: start
+     the server with ERL_FLAGS="-erl_epmd_port 25672" when there's no
+     epmd to ask (Docker).
    - ejabberd (XMPP server) problems: messages late or lost, memory
      growing, users not getting messages → `ejabberd`: client
      connections backed up (by memory: ejabberd queues on the heap, not

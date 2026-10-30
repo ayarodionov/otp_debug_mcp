@@ -156,6 +156,14 @@ inside Docker. There are two ways to reach it:
 Both were tested on Docker Desktop for Mac, against a plain Erlang node and
 a Mix release, each in its own container.
 
+Once connected, `diagnose` starts with the `vm_config` check, which reads
+the container's limits from inside it (the cgroup's CPU quota and memory
+limit, how often the kernel throttled it) and compares them with the
+VM's setup: schedulers online, busy-waiting, memory in use. A `vm.args`
+written for a bigger machine (`+S 16`, say) on a pod with a two-CPU
+limit gets the whole VM stopped by the kernel for part of every period
+it overruns, which shows as latency spikes rather than high CPU.
+
 ### Run the server next to the container
 
 Run the server's Docker image in a throwaway container that joins the

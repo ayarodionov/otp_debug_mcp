@@ -44,6 +44,7 @@ defmodule OtpDebugMcp.TestTarget do
     OtpDebugMcp.Fixtures.PhxShop.Endpoint,
     OtpDebugMcp.Fixtures.PhxShop.FeedLive,
     OtpDebugMcp.Fixtures.LiveClient,
+    OtpDebugMcp.Fixtures.Inventory,
     OtpDebugMcp.Fixtures.HttpClients,
     OtpDebugMcp.Fixtures.YawsShop,
     OtpDebugMcp.Fixtures.ShackleShop,
