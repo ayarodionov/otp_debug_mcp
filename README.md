@@ -13,6 +13,15 @@ connect to a **running** Erlang/Elixir/OTP node and debug it: not just raw
 introspection primitives, but an encoded diagnostic playbook in the spirit of
 [recon](https://ferd.github.io/recon/) and *Erlang in Anger*.
 
+![Claude Code is told that a node keeps getting slower and using more memory, calls the otp-debug tools five times, and 28 seconds later names the process that can't keep up, the line it is stuck on, and the process flooding it](docs/demo/shop.gif)
+
+A real session at the speed it ran, but for pauses cut to two seconds: the
+[shop demo](examples/elixir) node, Claude Code with only these tools, and
+one sentence about the symptom. (The recording is
+[docs/demo/shop.cast](docs/demo/shop.cast), for `asciinema play`; notices
+about the account it ran under are blanked out. `scripts/record_demo.py`
+makes it again.)
+
 ## Design
 
 - **Hidden-node attach.** The server joins the target over Erlang distribution
