@@ -281,7 +281,10 @@ defmodule OtpDebugMcp.Mailboxes do
     Elixir's own code: the place in your code it spends its time.
     senders, for the longest mailbox, are the processes that sent to it
     during senders_watched_ms, by share of the messages, with the shape of
-    what they send (the tag and size, not the content). Next step:
+    what they send (the tag and size, not the content). Their
+    messages_per_s is extrapolated from that short window, which a burst
+    can fill: growth_per_s, over a full second, is the rate to rely on, and
+    the two can't be subtracted to get what the process handles. Next step:
     process_info on the offender, call_latency for its time per message,
     module_code for the code at called_from. Fixes: make the sender wait
     (a call instead of a cast, or acknowledged batches), take the slow

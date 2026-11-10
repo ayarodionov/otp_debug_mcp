@@ -158,8 +158,10 @@ defmodule OtpDebugMcp.Conclusions do
   defp senders_sentence(%{senders: [top | _]} = o) do
     others = (o[:sending_processes] || 1) - 1
 
+    # Not the sender's rate: it comes from a window too short to set beside
+    # the mailbox's growth, which is measured over a second.
     "#{percent(top.share)} of the messages sent to it come from #{sender(top)}, as " <>
-      "#{top.sends}, about #{count(approx(top.messages_per_s))} a second" <>
+      "#{top.sends}" <>
       case others do
         0 -> "."
         1 -> "; one other process sends to it."
@@ -659,14 +661,6 @@ defmodule OtpDebugMcp.Conclusions do
   end
 
   defp count(n), do: to_string(n)
-
-  # To two significant digits, for a rate measured over a short window.
-  defp approx(n) when is_integer(n) and n >= 100 do
-    unit = Integer.pow(10, length(Integer.digits(n)) - 2)
-    round(n / unit) * unit
-  end
-
-  defp approx(n), do: n
 
   defp percent(share), do: "#{round(share * 100)}%"
 

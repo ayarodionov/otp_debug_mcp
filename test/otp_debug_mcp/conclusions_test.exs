@@ -56,7 +56,7 @@ defmodule OtpDebugMcp.ConclusionsTest do
 
     assert text =~
              "98% of the messages sent to it come from <0.108.0>, started as " <>
-               "{:erlang, :apply, 2}, as casts {:update, _, _}, about 61,000 a second; " <>
+               "{:erlang, :apply, 2}, as casts {:update, _, _}; " <>
                "one other process sends to it."
 
     assert text =~ "It holds 600 MB, about 80% of the node's memory."
