@@ -147,13 +147,20 @@ defmodule OtpDebugMcp.Approval do
       {:changes,
        "Runs every check: reads the node's processes, memory, ports, ETS, logs and code; " <>
          "forces a garbage collection in every process (binary_leak); turns on microstate " <>
-         "accounting for 2 s (scheduler_time); watches for long schedules in a trace session for 2 s."}
+         "accounting for 2 s (scheduler_time); watches for long schedules in a trace session for 2 s, " <>
+         "and for who sends to the longest mailbox, if one is long, for under a second."}
 
   def step("run_check", %{check: "binary_leak"}),
     do: {:changes, "Forces a garbage collection in every process, and reads what it frees."}
 
   def step("run_check", %{check: "scheduler_time"}),
     do: {:changes, "Turns on microstate accounting for 2 s, and reads where scheduler time goes."}
+
+  def step("run_check", %{check: "message_queues"}),
+    do:
+      {:changes,
+       "Reads the longest mailboxes twice, a second apart; if one is long, watches who " <>
+         "sends to it in a trace session, for under a second."}
 
   def step("run_check", %{check: "long_schedules"}),
     do:

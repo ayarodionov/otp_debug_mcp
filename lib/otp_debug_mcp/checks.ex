@@ -141,30 +141,12 @@ defmodule OtpDebugMcp.Checks do
   # problem: a bottleneck process that can't keep up, usually visible long
   # before the node dies of memory exhaustion.
   def run(:message_queues) do
-    with {:ok, top} <- Target.rpc(:recon, :proc_count, [:message_queue_len, 10]) do
-      offenders =
-        for {pid, qlen, info} <- top, qlen > 1_000 do
-          %{pid: Format.inspect(pid), queue_len: qlen, info: format_proc_info(pid, info)}
-        end
+    case OtpDebugMcp.Mailboxes.run() do
+      {:ok, status, findings, interpretation} ->
+        result(:message_queues, status, findings, interpretation)
 
-      status =
-        cond do
-          Enum.any?(offenders, &(&1.queue_len > 100_000)) -> :critical
-          offenders != [] -> :warning
-          true -> :ok
-        end
-
-      result(:message_queues, status, offenders, """
-      Processes with message_queue_len > 1000. A growing queue means the
-      process can't keep up with its callers. Next step: inspect the worst
-      offender's current_function and backtrace (process_info tool). To find
-      who sends to it, trace the sending side, not the receiver (which only
-      shows it handling messages): e.g. trace_calls on GenServer cast or call,
-      whose events name the sending pid and the destination; top_reductions
-      often names a flooding producer too.
-      """)
-    else
-      err -> error_result(:message_queues, err)
+      err ->
+        error_result(:message_queues, err)
     end
   end
 
@@ -2043,7 +2025,8 @@ defmodule OtpDebugMcp.Checks do
   # name atom as the first element. Its initial_call for a proc_lib process
   # (every gen_server, supervisor, Task, Gleam actor...) is proc_lib's own
   # wrapper, so it's replaced by the real one.
-  defp format_proc_info(pid, info) when is_list(info) do
+  @doc false
+  def format_proc_info(pid, info) when is_list(info) do
     info =
       case List.keyfind(info, :initial_call, 0) do
         {:initial_call, {:proc_lib, _, _}} ->
@@ -2063,7 +2046,7 @@ defmodule OtpDebugMcp.Checks do
     end)
   end
 
-  defp format_proc_info(_pid, other), do: Format.inspect(other)
+  def format_proc_info(_pid, other), do: Format.inspect(other)
 
   # Per thread type: its thread count, and each state's counter growth
   # over the window, summed over its threads.

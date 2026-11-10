@@ -28,6 +28,36 @@ defmodule OtpDebugMcp.Fixtures.Mailbox do
   end
 end
 
+defmodule OtpDebugMcp.Fixtures.Flooded do
+  @moduledoc """
+  A GenServer that takes `ms` for each cast, and a producer that casts to
+  it far faster: a mailbox that grows, with one known sender.
+  """
+  use GenServer
+
+  @doc "Starts both; returns the producer's pid."
+  def start(name, ms) do
+    {:ok, _} = GenServer.start(__MODULE__, ms, name: name)
+
+    spawn(fn ->
+      Stream.iterate(1, &(&1 + 1))
+      |> Enum.each(fn i ->
+        GenServer.cast(name, {:update, rem(i, 100), i})
+        if rem(i, 20) == 0, do: Process.sleep(1)
+      end)
+    end)
+  end
+
+  @impl true
+  def init(ms), do: {:ok, ms}
+
+  @impl true
+  def handle_cast({:update, _key, _value}, ms) do
+    Process.sleep(ms)
+    {:noreply, ms}
+  end
+end
+
 defmodule OtpDebugMcp.Fixtures.Operator do
   @moduledoc """
   An operator's recon_trace session, as someone debugging the node by hand

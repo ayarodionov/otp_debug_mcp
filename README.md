@@ -26,6 +26,15 @@ introspection primitives, but an encoded diagnostic playbook in the spirit of
   runs a whole battery of checks and returns ranked findings with
   interpretations — instead of making the AI reconstruct BEAM operational
   knowledge from twenty `process_info` round-trips.
+- **Conclusions, not data.** A problem shows in several checks at once: a
+  process that can't keep up is a long mailbox in one, most of the node's
+  memory in another, callers waiting in a third. `diagnose` puts them
+  together and states each problem once ("`Shop.PriceCache` can't keep up:
+  its mailbox grows by 24,739 a second; it is in `handle_cast/2` at
+  `shop.exs:12`; all of it comes from `<0.108.0>`, as casts"), with the
+  checks it came from and the next step. Checks that aren't ok follow in
+  full, and those that are ok only by name, so the answer is a fifth of
+  the size it would be with every check spelled out.
 - **recon injected at connect time, only where missing.** recon's object
   code is loaded into the target over rpc, so recon-quality introspection
   works even on nodes that never shipped it. A target on an older OTP
@@ -62,7 +71,7 @@ introspection primitives, but an encoded diagnostic playbook in the spirit of
 | Tool | Purpose |
 |---|---|
 | `connect` | Attach to a node (name + optional cookie) as a hidden node |
-| `diagnose` | Full health battery, findings ranked worst-first |
+| `diagnose` | Full health battery: conclusions drawn from the checks together (what is wrong, how fast it grows, where in the code, who causes it), the checks that aren't ok in full, worst first, and the names of the rest; `verbose: true` for every check in full |
 | `run_check` | One check: `vm_config` (the VM's setup against what it runs on: schedulers against the container's CPU quota, and how often it's throttled; memory against the container's limit; limits in use; busy-waiting, debug logging), `message_queues`, `call_chains`, `supervisor_restarts`, `binary_leak`, `memory_breakdown`, `allocator_fragmentation`, `process_count`, `atom_table`, `ets_tables`, `ports`, `native_memory`, `native_code`, `stale_code` (old code still running after a hot load, modules unlike their `.beam` on the code path), `logs` (where the node's logs go, and whether a file keeps them), `distribution` (connections to other nodes: traffic, and bytes waiting against the busy limit), `schedulers`, `scheduler_time` (where scheduler time goes: Erlang code, garbage collection, ports, I/O polling, busy-waiting), `long_schedules`, `socket_traffic`, `top_reductions` |
 | `recent_errors` | The errors the node logs, grouped by who failed and why: crashes with their stack and the reports they caused, error and warning messages with where they were logged, and the errors in the node's log files from before, and processes that crashed calling each other (a deadlock a call timeout ended); listens for a window, or in the background |
 | `crash_dump` | Why a node died, from its `erl_crash.dump`: what the slogan means, the process that was running, the biggest processes and mailboxes with their stacks, the first messages of the longest mailbox, memory, ETS and ports; no connection needed |
@@ -474,7 +483,7 @@ already running, so it uses the new release.
 
 1. `connect(node: "myapp@127.0.0.1")`; if the node is in a cluster, it says
    so, and `cluster()` compares every node to find the one that differs
-2. `diagnose()` → ranked findings
+2. `diagnose()` → conclusions, then the checks that aren't ok
 3. Drill in: `process_info` on offenders, `supervision_tree` for context,
    `trace_calls` to see live traffic
 4. `snapshot(take)` → wait → `snapshot(diff)` to confirm leaks/trends

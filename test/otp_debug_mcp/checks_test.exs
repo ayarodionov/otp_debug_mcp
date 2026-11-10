@@ -1,8 +1,8 @@
 defmodule OtpDebugMcp.ChecksTest do
   use ExUnit.Case, async: false
 
-  alias OtpDebugMcp.{Checks, Snapshotter, TestTarget}
-  alias OtpDebugMcp.Fixtures.{AtomLeak, Fussy, Mailbox, OldLoop, ProcLeak, SliceKeeper}
+  alias OtpDebugMcp.{Checks, Conclusions, Snapshotter, TestTarget}
+  alias OtpDebugMcp.Fixtures.{AtomLeak, Flooded, Fussy, Mailbox, OldLoop, ProcLeak, SliceKeeper}
 
   setup_all do
     target = TestTarget.start()
@@ -27,6 +27,50 @@ defmodule OtpDebugMcp.ChecksTest do
              Enum.sort(Checks.all_checks() -- Checks.on_request())
 
     refute Enum.any?(results, &(&1.status == :error))
+  end
+
+  test "message_queues tells a mailbox nobody reads from one that grows" do
+    assert %{findings: [offender]} = Checks.run(:message_queues)
+
+    # The fixture sleeps forever: nothing arrives, and it never runs.
+    assert %{growth_per_s: 0, senders: []} = offender
+    assert offender.in =~ "Process.sleep/1"
+    assert offender.memory_bytes > 0
+
+    assert [%{severity: :warning, conclusion: text, from: [:message_queues]}] =
+             Conclusions.from([Checks.run(:message_queues)])
+
+    assert text =~ "stuck_mailbox"
+    assert text =~ "isn't reading its mailbox"
+    assert text =~ "Nothing was sent to it"
+  end
+
+  test "message_queues measures a mailbox's growth and names who fills it" do
+    target = TestTarget.start()
+    on_exit(fn -> TestTarget.stop(target) end)
+    {:ok, _} = TestTarget.connect(target)
+    producer = TestTarget.call(target, Flooded, :start, [:flooded, 5])
+    Process.sleep(500)
+
+    assert %{findings: [offender]} = result = Checks.run(:message_queues)
+    assert offender.info.registered_name =~ "flooded"
+    assert offender.growth_per_s > 1_000
+    assert offender.in =~ "Process.sleep/1"
+    assert offender.called_from =~ "OtpDebugMcp.Fixtures.Flooded.handle_cast/2"
+
+    assert [%{pid: pid, share: share, sends: "casts {:update, _, _}"} = sender] =
+             offender.senders
+
+    assert pid == OtpDebugMcp.Format.inspect(producer)
+    assert share == 1.0
+    assert sender.messages_per_s > 1_000
+    assert offender.sending_processes == 1
+
+    assert [%{conclusion: text, next: next}] = Conclusions.from([result])
+    assert text =~ "can't keep up"
+    assert text =~ "100% of the messages sent to it come from #{pid}"
+    assert text =~ "called from OtpDebugMcp.Fixtures.Flooded.handle_cast/2"
+    assert next =~ "call_latency"
   end
 
   test "atom_table is ok when no atoms are being created" do

@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased
+
+Conclusions, not data: `diagnose` says what its checks found together,
+and leaves out what the healthy ones measured.
+
+- `diagnose` returns `conclusions`: each problem stated once, from what
+  several checks measured, with the checks it came from and the next
+  step. A mailbox that grows is one conclusion with its rate, where the
+  process is in its code, who fills it, the memory it holds and the
+  callers waiting on it; there are conclusions too for deadlocks, chains
+  of calls and processes many wait on, crash loops and supervisors that
+  don't answer, CPU saturation with the busiest process, and leaks of
+  atoms and processes with the time left. A conclusion says only what a
+  check measured.
+- `diagnose`'s answer is now an object: `conclusions`, `findings` (the
+  checks that aren't ok, in full, worst first), `ok` (the names of the
+  rest) and `vitals` (memory, processes, scheduler usage, the busiest
+  process). On the shop demo that's 5 KB where every check in full is
+  29 KB. `verbose: true` returns every check in full, as before, under
+  `checks`. **A client that read `diagnose`'s answer as a list must read
+  `findings` and `ok` instead.**
+- `message_queues` measures what a mailbox's length doesn't say:
+  `growth_per_s` over a second, where it is (`in`, and `called_from`, the first frame
+  outside OTP's and Elixir's code), its memory, and for the longest
+  mailbox its `senders`: on OTP 27 and later a trace session of its own
+  traces sends to that process alone, for at most 300 ms or 1000
+  messages, and counts them by sender and by the message's shape (its
+  tag and size, never its content). Not measured on older nodes.
+- `cluster` with `diagnose` gives each node's conclusions.
+
 ## 0.13.0
 
 Tuning and products: a check of the VM's setup against its container

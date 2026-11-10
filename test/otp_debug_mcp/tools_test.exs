@@ -38,13 +38,33 @@ defmodule OtpDebugMcp.ToolsTest do
     end
   end
 
-  test "diagnose returns ranked findings as JSON" do
-    assert {:ok, [%{"check" => "message_queues", "status" => "warning"} | _]} =
-             call_tool_json(Tools.Diagnose, %{})
+  test "diagnose returns conclusions, the checks that aren't ok, and the names of the rest" do
+    assert {:ok, report} = call_tool_json(Tools.Diagnose, %{})
+
+    assert [%{"severity" => "warning", "conclusion" => text, "from" => ["message_queues"]} | _] =
+             report["conclusions"]
+
+    assert text =~ "stuck_mailbox"
+    assert text =~ "isn't reading its mailbox"
+
+    assert [%{"check" => "message_queues", "status" => "warning", "interpretation" => _} | _] =
+             report["findings"]
+
+    refute Enum.any?(report["findings"], &(&1["status"] == "ok"))
+    assert "atom_table" in report["ok"]
+    assert %{"memory" => _, "processes" => _} = report["vitals"]
+  end
+
+  test "diagnose with verbose returns every check in full" do
+    assert {:ok, %{"conclusions" => [_ | _], "checks" => checks}} =
+             call_tool_json(Tools.Diagnose, %{verbose: true})
+
+    assert [%{"check" => "message_queues", "status" => "warning"} | _] = checks
+    assert Enum.any?(checks, &(&1["status"] == "ok" and is_binary(&1["interpretation"])))
   end
 
   test "pids are printed as the target prints them, and are accepted as input" do
-    {:ok, [%{"check" => "message_queues", "findings" => [%{"pid" => pid}]} | _]} =
+    {:ok, %{"findings" => [%{"check" => "message_queues", "findings" => [%{"pid" => pid}]} | _]}} =
       call_tool_json(Tools.Diagnose, %{})
 
     assert pid =~ ~r/^<0\.\d+\.\d+>$/

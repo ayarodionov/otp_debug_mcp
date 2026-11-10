@@ -264,6 +264,7 @@ defmodule OtpDebugMcp.Cluster do
           %{
             node: node,
             worst: worst(problems),
+            conclusions: checks |> OtpDebugMcp.Conclusions.from() |> Enum.map(& &1.conclusion),
             problems: Enum.map(problems, &Map.delete(&1, :interpretation))
           }
         end

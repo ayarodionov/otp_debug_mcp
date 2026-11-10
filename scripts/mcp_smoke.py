@@ -83,7 +83,11 @@ err, text = call(4, "diagnose", {})
 if err:
     print("diagnose -> ERROR", text[:500])
 else:
-    results = json.loads(text)
+    report = json.loads(text)
+    for c in report["conclusions"]:
+        print(f"  {c['severity']}: {c['conclusion']}")
+    # The checks that aren't ok come in full; the rest by name.
+    results = report["findings"] + [{"check": c, "status": "ok", "findings": []} for c in report["ok"]]
     for r in results:
         print(f"  {r['check']}: {r['status']}")
     # A demo with a known problem: SMOKE_EXPECT_CRITICAL names the check.

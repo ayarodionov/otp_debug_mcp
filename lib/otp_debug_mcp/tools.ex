@@ -140,19 +140,36 @@ defmodule OtpDebugMcp.Tools do
     @moduledoc """
     Run the full diagnostic battery (message queues, supervisor restarts and
     crash loops, binary leaks, memory and allocator fragmentation,
-    process/atom/port limits, ETS, schedulers, CPU hogs). Findings come back
-    ranked worst-first, each with an interpretation and suggested next step.
-    This should be the FIRST tool called after connect.
+    process/atom/port limits, ETS, schedulers, CPU hogs) and say what it
+    found: conclusions state each problem once, from what several checks
+    measured together (a process that can't keep up, how fast its mailbox
+    grows, where it is in its code, who fills it, the memory it holds),
+    with the next step; findings are the checks that aren't ok, in full,
+    worst first; ok names the rest. This should be the FIRST tool called
+    after connect.
     """
     use Anubis.Server.Component, type: :tool
     use OtpDebugMcp.Approval
 
-    alias OtpDebugMcp.{Checks, Tools}
+    alias OtpDebugMcp.{Checks, Conclusions, Tools}
 
     schema do
+      field(:verbose, :boolean,
+        description:
+          "Every check in full, the ok ones too, each with its interpretation " <>
+            "(much longer; run_check returns one check that way)"
+      )
     end
 
-    def perform(_params, frame), do: Tools.json_response(frame, Checks.run_all())
+    def perform(params, frame) do
+      results = Checks.run_all()
+
+      if params[:verbose] do
+        Tools.json_response(frame, %{conclusions: Conclusions.from(results), checks: results})
+      else
+        Tools.json_response(frame, Conclusions.report(results))
+      end
+    end
   end
 
   defmodule RunCheck do

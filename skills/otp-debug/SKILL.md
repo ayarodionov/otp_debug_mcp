@@ -21,15 +21,26 @@ raw introspection when a purpose-built tool exists.
    name, ask for it (and check `epmd -names` on the target host for candidates).
    If connection fails, relay the hint in the error — it's usually the cookie
    or shortname/longname mismatch.
-2. **Always start with `diagnose`.** Findings come ranked worst-first with
-   interpretations. Report the top findings to the user before drilling in.
+2. **Always start with `diagnose`.** Its `conclusions` state each problem
+   once, from what several checks measured together, worst first, each
+   with the checks it came from and a next step; `findings` are the checks
+   that aren't ok, in full, and `ok` names the rest (`run_check` returns
+   one of those; `verbose: true` returns them all, and is rarely needed).
+   Report the conclusions to the user before drilling in. A conclusion
+   says only what was measured: confirm it in the code before proposing a
+   fix.
    If `connect` reports a `cluster`, run `cluster` (compare) first instead:
    the node that stands out from the others is usually where the problem
    is. `connect` to it, then `diagnose` there.
 3. **Drill into offenders**, don't re-scan:
-   - Big message queue → `process_info` on that pid (with `include_state` for
-     gen_servers); its `current_function` shows what it's stuck on. Then
-     `trace_calls` on the module it's blocked calling.
+   - Big message queue → `diagnose` already says whether it grows
+     (`growth_per_s`), where the process is (`in`, `called_from`: the frame
+     in the user's code) and who fills it (`senders`, with the shape of
+     what they send). Then `process_info` on that pid (with `include_state`
+     for gen_servers) and `module_code` or the source at `called_from`;
+     `call_latency` for its time per message. `growth_per_s` 0 with no
+     senders means it reads nothing: it's blocked where `in` says. On a node before OTP 27
+     the senders aren't measured: `trace_calls` on the sending function.
    - `process_info` also gives the process's age, estimated from pid order
      (`younger_than_seconds` is a hard bound), and its supervisor's restart
      history. A young process under a supervisor with recent restarts is a
