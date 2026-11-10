@@ -119,7 +119,11 @@ defmodule OtpDebugMcp.ChecksTest do
     {:ok, _} = TestTarget.connect(target)
     :ok = TestTarget.call(target, SliceKeeper, :start, [:slice_keeper, 4_000, :slices])
 
-    assert %{status: :warning, findings: f} = Checks.run(:binary_leak)
+    assert %{status: :warning, findings: f} = result = Checks.run(:binary_leak)
+    assert [%{conclusion: text, from: [:binary_leak]}] = Conclusions.from([result])
+    assert text =~ ~r/:slice_keeper \(<0\.\d+\.0>\) holds \d+ MB of binaries/
+    assert text =~ "of slices, which pin"
+
     assert [top | _] = f.largest_holders
     assert top.binary_bytes > 60 * 1_048_576
     assert top.share_of_binary_memory > 0.9

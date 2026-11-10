@@ -29,6 +29,22 @@ and leaves out what the healthy ones measured.
   messages, and counts them by sender and by the message's shape (its
   tag and size, never its content). Not measured on older nodes.
 - `cluster` with `diagnose` gives each node's conclusions.
+- More conclusions: native code that holds a scheduler (which process,
+  for how long, how often) and long garbage collections, from
+  `long_schedules`; a process holding most of the node's binary memory,
+  and whether through slices that pin larger binaries, and processes
+  that free many binaries only when collected, from `binary_leak`;
+  memory outside the VM (`native_memory`); and memory unused in the
+  allocators' carriers, with the allocator holding most of it
+  (`allocator_fragmentation`).
+- The server sends MCP `instructions` when a session starts: the
+  workflow (connect, diagnose, drill in, confirm), which tool to use by
+  symptom, and the safety rules. Until now a client other than Claude
+  Code had the playbook only if its user installed the skill's text by
+  hand (docs/clients.md), which still gives the long form.
+- `connect` says how long the node has run (`uptime`,
+  `uptime_seconds`), and notes when it started less than ten minutes
+  ago: what was seen before then was on a previous run.
 
 ## 0.13.0
 

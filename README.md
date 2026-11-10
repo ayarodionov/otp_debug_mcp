@@ -70,7 +70,7 @@ introspection primitives, but an encoded diagnostic playbook in the spirit of
 
 | Tool | Purpose |
 |---|---|
-| `connect` | Attach to a node (name + optional cookie) as a hidden node |
+| `connect` | Attach to a node (name + optional cookie) as a hidden node; says how long the node has run, and whether it's in a cluster |
 | `diagnose` | Full health battery: conclusions drawn from the checks together (what is wrong, how fast it grows, where in the code, who causes it), the checks that aren't ok in full, worst first, and the names of the rest; `verbose: true` for every check in full |
 | `run_check` | One check: `vm_config` (the VM's setup against what it runs on: schedulers against the container's CPU quota, and how often it's throttled; memory against the container's limit; limits in use; busy-waiting, debug logging), `message_queues`, `call_chains`, `supervisor_restarts`, `binary_leak`, `memory_breakdown`, `allocator_fragmentation`, `process_count`, `atom_table`, `ets_tables`, `ports`, `native_memory`, `native_code`, `stale_code` (old code still running after a hot load, modules unlike their `.beam` on the code path), `logs` (where the node's logs go, and whether a file keeps them), `distribution` (connections to other nodes: traffic, and bytes waiting against the busy limit), `schedulers`, `scheduler_time` (where scheduler time goes: Erlang code, garbage collection, ports, I/O polling, busy-waiting), `long_schedules`, `socket_traffic`, `top_reductions` |
 | `recent_errors` | The errors the node logs, grouped by who failed and why: crashes with their stack and the reports they caused, error and warning messages with where they were logged, and the errors in the node's log files from before, and processes that crashed calling each other (a deadlock a call timeout ended); listens for a window, or in the background |
@@ -490,7 +490,9 @@ already running, so it uses the new release.
 
 The Claude Code skill installed in [Setup](#register-it-with-claude-code),
 `skills/otp-debug/SKILL.md`, encodes this workflow, so Claude follows it
-automatically.
+automatically. Every other client gets a short form of it from the server
+itself, as the MCP `instructions` it sends when a session starts: the
+workflow, which tool to reach for by symptom, and the safety rules.
 
 ## Usage scenarios
 

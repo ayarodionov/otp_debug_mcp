@@ -19,6 +19,8 @@ raw introspection when a purpose-built tool exists.
    to it.
 1. **Connect first.** `connect(node, cookie?)`. If the user didn't give a node
    name, ask for it (and check `epmd -names` on the target host for candidates).
+   Its `uptime` is how long the node has run: if the user describes a
+   problem older than that, the node restarted since, so say so.
    If connection fails, relay the hint in the error — it's usually the cookie
    or shortname/longname mismatch.
 2. **Always start with `diagnose`.** Its `conclusions` state each problem

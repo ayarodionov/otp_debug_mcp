@@ -53,6 +53,10 @@ defmodule OtpDebugMcp.Conclusions do
       &waited_on/1,
       &crash_loops/1,
       &cpu/1,
+      &long_schedules/1,
+      &binaries/1,
+      &native_memory/1,
+      &fragmentation/1,
       &atoms/1,
       &processes/1
     ]
@@ -379,6 +383,164 @@ defmodule OtpDebugMcp.Conclusions do
   end
 
   defp busiest_sentence(_), do: nil
+
+  # Native code that holds a scheduler, and garbage collections that long.
+  defp long_schedules(checks) do
+    found = findings(checks, :long_schedules) || %{}
+
+    held =
+      for %{max_ms: ms} = p <- found[:long_schedules] || [] do
+        conclusion(
+          if(ms >= 100, do: :critical, else: :warning),
+          [
+            "#{named(p)} held a scheduler for #{count(ms)} ms without yielding" <>
+              case p[:times] do
+                n when is_integer(n) and n > 1 ->
+                  ", the longest of #{count(n)} times in #{seconds(found[:watched_ms])}" <>
+                    " (#{count(p[:total_ms] || ms)} ms in all)."
+
+                _ ->
+                  "."
+              end,
+            "Erlang code yields within a millisecond, so this is native code, a NIF or a " <>
+              "BIF, and every process on that scheduler waited for it.",
+            p[:scheduled_in] not in [nil, "nil", ":undefined", "undefined"] &&
+              "It was in #{p.scheduled_in} when it started."
+          ],
+          [:long_schedules],
+          "module_code on the modules it runs marks which functions are NIFs; " <>
+            "trace_calls or profile on those shows which call takes that long."
+        )
+      end
+
+    gcs =
+      for %{ms: ms} = p <- found[:long_gcs] || [] do
+        conclusion(
+          :warning,
+          [
+            "A garbage collection of #{named(p)} took #{count(ms)} ms" <>
+              case p[:heap_words] do
+                words when is_integer(words) -> ", on a heap of #{mb(words * 8)}."
+                _ -> "."
+              end
+          ],
+          [:long_schedules],
+          "process_info #{p.pid} for what it holds: a long mailbox, or a large state."
+        )
+      end
+
+    held ++ gcs
+  end
+
+  defp named(%{name: name, pid: pid}), do: "#{name} (#{pid})"
+  defp named(%{initial_call: initial, pid: pid}), do: "#{pid}, started as #{initial},"
+  defp named(%{pid: pid}), do: pid
+
+  defp seconds(ms) when is_integer(ms), do: "#{div(ms, 1000)} s"
+  defp seconds(_), do: "the window"
+
+  # -- Memory --------------------------------------------------------------------
+
+  @holder_bytes 50 * @mib
+  @released 100_000
+
+  defp binaries(checks) do
+    with %{status: status, findings: f} when status not in [:ok, :error] <- checks[:binary_leak] do
+      holders =
+        for %{binary_bytes: bytes, share_of_binary_memory: share} = h <-
+              f[:largest_holders] || [],
+            bytes >= @holder_bytes and share >= 0.5 do
+          conclusion(
+            :warning,
+            [
+              "#{who(h)} holds #{mb(bytes)} of binaries, #{percent(share)} of the node's " <>
+                "binary memory.",
+              held_sentence(h[:held_binaries])
+            ],
+            [:binary_leak],
+            "process_info #{h.pid} with include_state for what it keeps; snapshot (take, " <>
+              "wait, diff) to see whether it grows."
+          )
+        end
+
+      rare =
+        for %{binaries_freed: freed} = p <- f[:released_by_gc] || [], freed > @released do
+          conclusion(
+            :warning,
+            [
+              "#{who(p)} let go of #{count(freed)} binaries when it was garbage-collected: " <>
+                "it handles large binaries and rarely collects by itself, so they stay " <>
+                "in memory after it is done with them."
+            ],
+            [:binary_leak],
+            "Hibernate it when idle, or collect after large work; process_info #{p.pid} for what it is."
+          )
+        end
+
+      holders ++ rare
+    else
+      _ -> []
+    end
+  end
+
+  defp held_sentence(%{bytes_kept: kept, bytes_pinned: pinned}) when pinned > 4 * kept,
+    do:
+      "What it keeps is #{mb(kept)} of slices, which pin #{mb(pinned)} of the binaries " <>
+        "they were cut from: copying a slice (binary:copy/1) before keeping it frees the rest."
+
+  defp held_sentence(%{bytes_kept: _}),
+    do: "It keeps whole binaries, and nothing bounds how many."
+
+  defp held_sentence(_), do: nil
+
+  defp native_memory(checks) do
+    with %{status: status, findings: %{outside_vm_bytes: outside} = f}
+         when status not in [:ok, :error] <- checks[:native_memory] do
+      [
+        conclusion(
+          :warning,
+          [
+            "The OS charges the node #{mb(f.os_memory_bytes)}, and the VM's allocators hold " <>
+              "#{mb(f.vm_allocated_bytes)} of it: #{mb(outside)} is memory the VM doesn't " <>
+              "manage, which NIFs and drivers allocate themselves and erlang:memory() never shows."
+          ],
+          [:native_memory],
+          "native_code for the native libraries loaded; snapshot (take, wait, diff): " <>
+            "native memory that grows while the VM's stays flat is a leak in one of them."
+        )
+      ]
+    else
+      _ -> []
+    end
+  end
+
+  defp fragmentation(checks) do
+    with %{status: status, findings: %{unused_bytes: unused} = f}
+         when status not in [:ok, :error] <- checks[:allocator_fragmentation] do
+      worst =
+        (f[:allocators] || [])
+        |> Enum.reject(&(&1[:allocator] in ["ll_alloc", :ll_alloc]))
+        |> Enum.max_by(&(&1[:unused_bytes] || 0), fn -> nil end)
+
+      [
+        conclusion(
+          severity(status),
+          [
+            "The VM holds #{mb(f.allocated_bytes)} from the OS and uses " <>
+              "#{percent(f.usage)} of it: #{mb(unused)} sits unused in partly empty " <>
+              "carriers, which the OS still counts as the node's memory.",
+            worst &&
+              "Most of it is in #{worst.allocator} (#{mb(worst.unused_bytes)} unused)."
+          ],
+          [:allocator_fragmentation],
+          "run_check allocator_fragmentation for each allocator; the fix is allocator " <>
+            "flags (see its interpretation), after finding what caused the spike."
+        )
+      ]
+    else
+      _ -> []
+    end
+  end
 
   # -- Limits --------------------------------------------------------------------
 

@@ -185,6 +185,96 @@ defmodule OtpDebugMcp.ConclusionsTest do
     assert Conclusions.from(idle) == []
   end
 
+  test "native code holding a scheduler, and a long garbage collection" do
+    results = [
+      check(:long_schedules, :critical, %{
+        watched_ms: 2000,
+        long_schedules: [
+          %{
+            pid: "<0.70.0>",
+            name: ":thumbnailer",
+            times: 4,
+            max_ms: 180,
+            total_ms: 610,
+            scheduled_in: "{Thumbs, :resize, 2}"
+          }
+        ],
+        long_gcs: [%{pid: "<0.71.0>", ms: 90, heap_words: 131_072_000}],
+        busy_ports: []
+      })
+    ]
+
+    assert [held, gc] = Conclusions.from(results)
+    assert held.severity == :critical
+
+    assert held.conclusion =~
+             ":thumbnailer (<0.70.0>) held a scheduler for 180 ms without yielding, the " <>
+               "longest of 4 times in 2 s (610 ms in all)."
+
+    assert held.conclusion =~ "a NIF or a BIF"
+    assert held.conclusion =~ "It was in {Thumbs, :resize, 2} when it started."
+    assert gc.conclusion == "A garbage collection of <0.71.0> took 90 ms, on a heap of 1000 MB."
+  end
+
+  test "memory: binaries held or left uncollected, native memory, fragmentation" do
+    mib = 1_048_576
+
+    results = [
+      check(:binary_leak, :warning, %{
+        binary_memory_bytes: 400 * mib,
+        largest_holders: [
+          %{
+            pid: "<0.80.0>",
+            binary_bytes: 380 * mib,
+            share_of_binary_memory: 0.95,
+            info: %{registered_name: ":slice_keeper"},
+            held_binaries: %{sampled: 2000, bytes_kept: 2 * mib, bytes_pinned: 380 * mib}
+          },
+          %{pid: "<0.81.0>", binary_bytes: mib, share_of_binary_memory: 0.0, info: %{}}
+        ],
+        released_by_gc: [
+          %{pid: "<0.82.0>", binaries_freed: 250_000, info: %{registered_name: ":uploader"}},
+          %{pid: "<0.83.0>", binaries_freed: 12, info: %{}}
+        ]
+      }),
+      check(:native_memory, :warning, %{
+        os_memory_bytes: 3_000 * mib,
+        vm_allocated_bytes: 900 * mib,
+        outside_vm_bytes: 2_100 * mib
+      }),
+      check(:allocator_fragmentation, :critical, %{
+        allocated_bytes: 6_000 * mib,
+        used_bytes: 1_800 * mib,
+        unused_bytes: 4_200 * mib,
+        usage: 0.3,
+        allocators: [
+          %{allocator: "ll_alloc", unused_bytes: 5_000 * mib},
+          %{allocator: "binary_alloc", unused_bytes: 3_900 * mib}
+        ]
+      })
+    ]
+
+    assert [fragmented, holder, rare, native] = Conclusions.from(results)
+
+    assert fragmented.severity == :critical
+
+    assert fragmented.conclusion =~
+             "holds 5.9 GB from the OS and uses 30% of it: 4.1 GB sits unused"
+
+    assert fragmented.conclusion =~ "Most of it is in binary_alloc (3.8 GB unused)."
+
+    assert holder.conclusion =~
+             ":slice_keeper (<0.80.0>) holds 380 MB of binaries, 95% of the node's binary memory."
+
+    assert holder.conclusion =~ "2 MB of slices, which pin 380 MB"
+    assert rare.conclusion =~ ":uploader (<0.82.0>) let go of 250,000 binaries"
+    assert native.conclusion =~ "charges the node 2.9 GB"
+    assert native.conclusion =~ "2.1 GB is memory the VM doesn't manage"
+
+    # An ok check says nothing, whatever it measured.
+    assert Conclusions.from(Enum.map(results, &%{&1 | status: :ok})) == []
+  end
+
   test "leaks of atoms and processes say when the node dies" do
     results = [
       check(:atom_table, :critical, %{growth_per_second: 500.0, seconds_until_full: 1_800}),

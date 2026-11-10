@@ -83,7 +83,12 @@ defmodule OtpDebugMcp.NativeTest do
     start_spinner()
 
     assert %{status: status, findings: %{via: via, long_schedules: long}} =
-             Checks.run(:long_schedules)
+             result = Checks.run(:long_schedules)
+
+    assert Enum.any?(
+             OtpDebugMcp.Conclusions.from([result]),
+             &(&1.conclusion =~ ~r/:native_spinner \(<0\.\d+\.0>\) held a scheduler for \d+ ms/)
+           )
 
     assert via == if(sessions?(), do: "its own trace session", else: "the node's system_monitor")
     assert status in [:warning, :critical]

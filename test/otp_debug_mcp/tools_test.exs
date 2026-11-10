@@ -20,6 +20,27 @@ defmodule OtpDebugMcp.ToolsTest do
     :ok
   end
 
+  test "the server's instructions name only tools and checks it has" do
+    text = OtpDebugMcp.Server.server_instructions()
+    tools = MapSet.new(OtpDebugMcp.Server.__components__(:tool), & &1.name)
+    checks = MapSet.new(OtpDebugMcp.Checks.all_checks(), &Atom.to_string/1)
+
+    assert text =~ "Then diagnose, always"
+
+    # Every word with an underscore is the name of a tool or of a check.
+    for [name] <- Regex.scan(~r/\b[a-z]+(?:_[a-z]+)+\b/, text),
+        name not in ["include_state", "gen_server"] do
+      assert name in tools or name in checks, "#{name} is neither a tool nor a check"
+    end
+
+    for [check] <- Regex.scan(~r/run_check ([a-z_]+)/, text, capture: :all_but_first),
+        do: assert(check in checks, "#{check} isn't a check")
+
+    for tool <-
+          ~w(phoenix bandit cowboy ranch yaws postgrex mnesia shackle rabbitmq emqx ejabberd),
+        do: assert(tool in tools)
+  end
+
   describe "connect" do
     test "reports the connection and recon", %{target: target} do
       params = %{node: Atom.to_string(target.node), cookie: target.cookie}
@@ -28,6 +49,21 @@ defmodule OtpDebugMcp.ToolsTest do
                call_tool_json(Tools.Connect, params)
 
       assert node == Atom.to_string(target.node)
+    end
+
+    test "says how long the node has run", %{target: target} do
+      params = %{node: Atom.to_string(target.node), cookie: target.cookie}
+
+      assert {:ok, %{"uptime_seconds" => seconds, "uptime" => text, "uptime_note" => note}} =
+               call_tool_json(Tools.Connect, params)
+
+      assert seconds < 600
+      assert text =~ ~r/^\d+ (s|min \d+ s)$/
+      assert note =~ "previous run"
+
+      assert Tools.duration(45) == "45 s"
+      assert Tools.duration(3_725) == "1 h 2 min"
+      assert Tools.duration(200_000) == "2 d 7 h"
     end
 
     test "explains a failure", %{target: target} do

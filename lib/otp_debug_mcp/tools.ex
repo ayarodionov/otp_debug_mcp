@@ -20,6 +20,15 @@ defmodule OtpDebugMcp.Tools do
     {:reply, Response.text(Response.tool(), text), frame}
   end
 
+  @doc "A number of seconds in words, in its two largest units."
+  def duration(seconds) when seconds < 60, do: "#{seconds} s"
+  def duration(seconds) when seconds < 3_600, do: "#{div(seconds, 60)} min #{rem(seconds, 60)} s"
+
+  def duration(seconds) when seconds < 86_400,
+    do: "#{div(seconds, 3_600)} h #{div(rem(seconds, 3_600), 60)} min"
+
+  def duration(seconds), do: "#{div(seconds, 86_400)} d #{div(rem(seconds, 86_400), 3_600)} h"
+
   def error_response(frame, reason) do
     message =
       cond do
@@ -97,12 +106,35 @@ defmodule OtpDebugMcp.Tools do
                 recon: recon,
                 hint: "Run the `diagnose` tool next for a full health check."
               },
-              cluster_hint()
+              Map.merge(uptime(), cluster_hint())
             )
           )
 
         {:error, reason} ->
           Tools.error_response(frame, "#{inspect(reason)}. " <> connect_hints())
+      end
+    end
+
+    # How long the node has run: what happened before it started isn't
+    # there to see, and a node that started minutes ago was restarted.
+    defp uptime do
+      case Target.rpc(:erlang, :statistics, [:wall_clock]) do
+        {:ok, {ms, _}} when is_integer(ms) ->
+          seconds = div(ms, 1000)
+
+          %{uptime_seconds: seconds, uptime: Tools.duration(seconds)}
+          |> Map.merge(
+            if seconds < 600,
+              do: %{
+                uptime_note:
+                  "The node started less than ten minutes ago: anything seen before that " <>
+                    "was on a previous run, and what grows has only just begun to."
+              },
+              else: %{}
+          )
+
+        _ ->
+          %{}
       end
     end
 
