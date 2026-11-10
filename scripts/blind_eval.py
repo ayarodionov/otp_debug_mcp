@@ -9,7 +9,9 @@ get into trouble, run a headless `claude -p` session that is given only
 the symptom (the walkthrough's prompt) and may use only the otp-debug
 tools, stop the demo, and check that the session's conclusion names the
 cause: every group in the case's `expect` must have one of its patterns
-(regular expressions, case-insensitive) in the final answer.
+(regular expressions, case-insensitive) in the final answer. A session
+none of whose otp-debug calls succeeded fails whatever its answer says:
+one that couldn't connect repeats the symptom, which can match.
 
 Each session runs in an empty directory, with its own MCP config for the
 server (`--server`, default the release in _build/prod), so it can't
@@ -80,8 +82,10 @@ def session(case, server, out_dir, timeout, model):
 
 
 def read_transcript(path):
-    """The final answer, the tools called, and the result's numbers."""
+    """The final answer, the tools called, how many otp-debug calls
+    succeeded, and the result's numbers."""
     answer, tools, result = "", [], {}
+    ours, succeeded = set(), 0
     with open(path) as f:
         for line in f:
             try:
@@ -92,10 +96,17 @@ def read_transcript(path):
                 for c in m["message"].get("content", []):
                     if c.get("type") == "tool_use":
                         tools.append(c["name"].replace("mcp__otp-debug__", ""))
+                        if c["name"].startswith("mcp__otp-debug__"):
+                            ours.add(c["id"])
+            elif m.get("type") == "user":
+                for c in m["message"].get("content", []):
+                    if (isinstance(c, dict) and c.get("type") == "tool_result"
+                            and c.get("tool_use_id") in ours and not c.get("is_error")):
+                        succeeded += 1
             elif m.get("type") == "result":
                 result = m
                 answer = m.get("result") or ""
-    return answer, tools, result
+    return answer, tools, succeeded, result
 
 
 def check(answer, expect):
@@ -163,16 +174,19 @@ def main():
             transcript, seconds, timed_out = session(case, args.server, out_dir, args.timeout, args.model)
         finally:
             sh(case["stop"])
-        answer, tools, result = read_transcript(transcript)
+        answer, tools, succeeded, result = read_transcript(transcript)
         with open(os.path.join(out_dir, f"{case['name']}.answer.md"), "w") as f:
             f.write(answer)
         missing = check(answer, case["expect"])
-        status = "timeout" if timed_out else ("pass" if answer and not missing else "fail")
+        status = "timeout" if timed_out else (
+            "pass" if answer and not missing and succeeded else "fail")
         results.append({
             "name": case["name"], "walkthrough": case["walkthrough"], "status": status,
             "missing": missing, "seconds": round(seconds), "turns": result.get("num_turns"),
             "cost_usd": result.get("total_cost_usd"), "tools": tools,
         })
+        if not succeeded:
+            results[-1]["why"] = "no otp-debug call succeeded: the session never reached the node"
         print(f" {status} ({round(seconds)} s, {len(tools)} tool calls)")
 
     with open(os.path.join(out_dir, "report.json"), "w") as f:
@@ -188,7 +202,7 @@ def main():
 def write_markdown(results, path):
     lines = ["| Case | Walkthrough | Result | Time | Tool calls | Missing |", "|---|---|---|---|---|---|"]
     for r in results:
-        missing = "; ".join(" or ".join(g) for g in r.get("missing") or []) or r.get("why", "")
+        missing = r.get("why") or "; ".join(" or ".join(g) for g in r.get("missing") or [])
         tools = len(r.get("tools") or [])
         seconds = f"{r['seconds']} s" if "seconds" in r else ""
         lines.append(f"| {r['name']} | {r['walkthrough']} | {r['status']} | {seconds} | {tools or ''} | {missing} |")

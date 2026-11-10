@@ -16,6 +16,23 @@ set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 host=$(hostname -s)
 
+# wait_gone NAME...: wait until no node of these names is registered with
+# epmd. init:stop returns before a node has exited, and a demo started
+# again under the same name meanwhile fails to start.
+wait_gone() {
+  for _ in $(seq 1 30); do
+    up=$(epmd -names 2>/dev/null | awk '$1 == "name" { print $2 }')
+    left=""
+    for n in "$@"; do
+      if echo "$up" | grep -qx "$n"; then left="$left $n"; fi
+    done
+    [ -z "$left" ] && return 0
+    sleep 1
+  done
+  echo "still running after 30 s:$left" >&2
+  return 1
+}
+
 build() {
   if [ -n "${LFE:-}" ]; then PATH="$LFE/bin:$PATH"; export PATH; fi
   mkdir -p "$here/ebin"
@@ -34,10 +51,12 @@ case "${1:-}" in
   payments) build; start payments_lfe "{ok, _} = application:ensure_all_started(payments)" ;;
   logs) build; start logs_lfe "'log-index':start()" ;;
   stop)
+    nodes="shop_lfe payments_lfe logs_lfe"
     erl -sname "stopper_$$" -noshell -eval "
       [rpc:call(list_to_atom(N ++ \"@$host\"), init, stop, [], 2000)
-       || N <- [\"shop_lfe\", \"payments_lfe\", \"logs_lfe\"]],
+       || N <- string:lexemes(\"$nodes\", \" \")],
       halt()."
+    wait_gone $nodes
     ;;
   *)
     echo "usage: $0 shop|payments|logs|stop" >&2

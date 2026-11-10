@@ -20,6 +20,23 @@
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 host=$(hostname -s)
+
+# wait_gone NAME...: wait until no node of these names is registered with
+# epmd. init:stop returns before a node has exited, and a demo started
+# again under the same name meanwhile fails to start.
+wait_gone() {
+  for _ in $(seq 1 30); do
+    up=$(epmd -names 2>/dev/null | awk '$1 == "name" { print $2 }')
+    left=""
+    for n in "$@"; do
+      if echo "$up" | grep -qx "$n"; then left="$left $n"; fi
+    done
+    [ -z "$left" ] && return 0
+    sleep 1
+  done
+  echo "still running after 30 s:$left" >&2
+  return 1
+}
 ebin="$here/ebin"
 
 build() {
@@ -61,10 +78,12 @@ case "${1:-}" in
   lock | slice | loop | conn | parse | telemetry) build; start "$1" ;;
   all) build; for d in lock slice loop conn parse telemetry; do start $d; done ;;
   stop)
+    nodes="book_lock book_slice book_loop book_conn book_parse book_telemetry"
     erl -sname "stopper_$$" -noshell -eval "
       [rpc:call(list_to_atom(N ++ \"@$host\"), init, stop, [], 2000)
-       || N <- [\"book_lock\", \"book_slice\", \"book_loop\", \"book_conn\", \"book_parse\", \"book_telemetry\"]],
+       || N <- string:lexemes(\"$nodes\", \" \")],
       halt()."
+    wait_gone $nodes
     ;;
   *)
     echo "usage: $0 lock|slice|loop|conn|parse|telemetry|all|stop" >&2

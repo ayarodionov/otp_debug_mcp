@@ -25,6 +25,23 @@ set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 host=$(hostname -s)
 
+# wait_gone NAME...: wait until no node of these names is registered with
+# epmd. init:stop returns before a node has exited, and a demo started
+# again under the same name meanwhile fails to start.
+wait_gone() {
+  for _ in $(seq 1 30); do
+    up=$(epmd -names 2>/dev/null | awk '$1 == "name" { print $2 }')
+    left=""
+    for n in "$@"; do
+      if echo "$up" | grep -qx "$n"; then left="$left $n"; fi
+    done
+    [ -z "$left" ] && return 0
+    sleep 1
+  done
+  echo "still running after 30 s:$left" >&2
+  return 1
+}
+
 build() {
   mkdir -p "$here/ebin"
   erlc +debug_info -o "$here/ebin" "$here"/src/*.erl
@@ -125,13 +142,12 @@ case "${1:-}" in
     start erl_b "price_cache:start(), pong = net_adm:ping('erl_a@$host'), pong = net_adm:ping('erl_c@$host')"
     ;;
   stop)
+    nodes="shop_erl payments_erl sessions_erl native_erl ports_erl orders_erl crash_erl locks_erl reports_erl deploy_erl dist_a dist_b erl_a erl_b erl_c mnesia_erl tuning_erl inventory_erl"
     erl -sname "stopper_$$" -noshell -eval "
       [rpc:call(list_to_atom(N ++ \"@$host\"), init, stop, [], 2000)
-       || N <- [\"shop_erl\", \"payments_erl\", \"sessions_erl\", \"native_erl\", \"ports_erl\",
-                \"orders_erl\", \"crash_erl\", \"locks_erl\", \"reports_erl\", \"deploy_erl\",
-                \"dist_a\", \"dist_b\", \"erl_a\", \"erl_b\", \"erl_c\", \"mnesia_erl\", \"tuning_erl\",
-                \"inventory_erl\"]],
+       || N <- string:lexemes(\"$nodes\", \" \")],
       halt()."
+    wait_gone $nodes
     ;;
   *)
     echo "usage: $0 shop|payments|sessions|cluster|native|ports|orders|locks|crash|reports|deploy|dist|mnesia|tuning|inventory|stop" >&2

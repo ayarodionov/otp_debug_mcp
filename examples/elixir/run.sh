@@ -26,6 +26,23 @@
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 host=$(hostname -s)
+
+# wait_gone NAME...: wait until no node of these names is registered with
+# epmd. init:stop returns before a node has exited, and a demo started
+# again under the same name meanwhile fails to start.
+wait_gone() {
+  for _ in $(seq 1 30); do
+    up=$(epmd -names 2>/dev/null | awk '$1 == "name" { print $2 }')
+    left=""
+    for n in "$@"; do
+      if echo "$up" | grep -qx "$n"; then left="$left $n"; fi
+    done
+    [ -z "$left" ] && return 0
+    sleep 1
+  done
+  echo "still running after 30 s:$left" >&2
+  return 1
+}
 release="$here/demo_shop/_build/prod/rel/demo_shop"
 pgdata="$here/postgrex_shop/pgdata"
 
@@ -159,9 +176,11 @@ case "${1:-}" in
     echo "started demo_shop@$host, cookie: $(cat "$release/releases/COOKIE")"
     ;;
   stop)
+    nodes="shop_ex payments_ex billing_ex phoenix_ex live_ex bandit_ex cowboy_ex yaws_ex shackle_ex ranch_ex telemetry_ex postgrex_ex riak_a riak_b riak_c ex_a ex_b ex_c"
     elixir --sname "stopper_$$" -e "
-      for n <- ~w(shop_ex payments_ex billing_ex phoenix_ex live_ex bandit_ex cowboy_ex yaws_ex shackle_ex ranch_ex telemetry_ex postgrex_ex riak_a riak_b riak_c ex_a ex_b ex_c),
+      for n <- ~w($nodes),
           do: :rpc.call(:\"#{n}@$host\", :init, :stop, [], 2000)"
+    wait_gone $nodes
     if [ -x "$release/bin/demo_shop" ]; then "$release/bin/demo_shop" stop 2>/dev/null || true; fi
     if [ -d "$pgdata" ]; then pg pg_ctl -D "$pgdata" -m fast stop >/dev/null 2>&1 || true; fi
     ;;

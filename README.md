@@ -708,7 +708,10 @@ The walkthroughs are also a regression suite: `scripts/blind_eval.py`
 runs each one as it was recorded. It starts the demo, gives a headless
 `claude -p` session, in an empty directory, only the symptom and the
 otp-debug tools, stops the demo, and checks that the session's
-conclusion names the cause (the patterns in `test/blind/cases.json`).
+conclusion names the cause (the patterns in `test/blind/cases.json`). A
+session none of whose otp-debug calls succeeded fails whatever it
+answered, since one that couldn't connect tends to repeat the symptom's
+words.
 It needs the Claude Code CLI, logged in, and costs what the sessions do;
 it isn't part of CI.
 

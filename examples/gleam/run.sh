@@ -15,6 +15,23 @@ set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 host=$(hostname -s)
 
+# wait_gone NAME...: wait until no node of these names is registered with
+# epmd. init:stop returns before a node has exited, and a demo started
+# again under the same name meanwhile fails to start.
+wait_gone() {
+  for _ in $(seq 1 30); do
+    up=$(epmd -names 2>/dev/null | awk '$1 == "name" { print $2 }')
+    left=""
+    for n in "$@"; do
+      if echo "$up" | grep -qx "$n"; then left="$left $n"; fi
+    done
+    [ -z "$left" ] && return 0
+    sleep 1
+  done
+  echo "still running after 30 s:$left" >&2
+  return 1
+}
+
 build() {
   (cd "$here" && "${GLEAM:-gleam}" build)
 }
@@ -32,10 +49,12 @@ case "${1:-}" in
   payments) build; start payments_gleam payments ;;
   jobs) build; start jobs_gleam jobs ;;
   stop)
+    nodes="shop_gleam payments_gleam jobs_gleam"
     erl -sname "stopper_$$" -noshell -eval "
       [rpc:call(list_to_atom(N ++ \"@$host\"), init, stop, [], 2000)
-       || N <- [\"shop_gleam\", \"payments_gleam\", \"jobs_gleam\"]],
+       || N <- string:lexemes(\"$nodes\", \" \")],
       halt()."
+    wait_gone $nodes
     ;;
   *)
     echo "usage: $0 shop|payments|jobs|stop" >&2
