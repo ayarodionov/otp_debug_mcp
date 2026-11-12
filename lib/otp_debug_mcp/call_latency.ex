@@ -24,7 +24,7 @@ defmodule OtpDebugMcp.CallLatency do
   trace messages, or if they come faster than the holder can take them.
   """
 
-  alias OtpDebugMcp.{Checks, Format, Tracer}
+  alias OtpDebugMcp.{Checks, Format, Target, Tracer}
 
   @name :otp_debug_mcp_latency
   # Durations kept per request kind, at most, for the percentiles.
@@ -298,13 +298,15 @@ defmodule OtpDebugMcp.CallLatency do
     end
   end
 
-  defp target("Elixir." <> _ = name), do: {:ok, String.to_atom(name)}
-
+  # A registered name: an Elixir module name as written in Elixir, or an
+  # Erlang atom. One that isn't an atom on the target names no process.
   defp target(name) when is_binary(name) do
-    # An Elixir module name as written in Elixir, or an Erlang atom.
-    if name =~ ~r/^[A-Z]/,
-      do: {:ok, String.to_atom("Elixir." <> name)},
-      else: {:ok, String.to_atom(name)}
+    full = if OtpDebugMcp.Tools.elixir_name?(name), do: "Elixir." <> name, else: name
+
+    case Target.existing_atom(full) do
+      {:ok, atom} -> {:ok, atom}
+      :error -> {:error, "no process #{name} on this node"}
+    end
   end
 
   defp sessions? do

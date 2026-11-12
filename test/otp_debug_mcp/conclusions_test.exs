@@ -275,7 +275,7 @@ defmodule OtpDebugMcp.ConclusionsTest do
     assert Conclusions.from(Enum.map(results, &%{&1 | status: :ok})) == []
   end
 
-  test "leaks of atoms and processes say when the node dies" do
+  test "leaks of atoms and processes say when a limit is reached, if the rate goes on" do
     results = [
       check(:atom_table, :critical, %{growth_per_second: 500.0, seconds_until_full: 1_800}),
       check(:process_count, :warning, %{
@@ -293,9 +293,10 @@ defmodule OtpDebugMcp.ConclusionsTest do
     ]
 
     assert [atoms, processes] = Conclusions.from(results)
-    assert atoms.conclusion =~ "created at 500 a second"
-    assert atoms.conclusion =~ "in 30 minutes"
-    assert processes.conclusion =~ "grows by 250 a second (40,000 now)"
+    assert atoms.conclusion =~ "created at 500 a second while it was measured"
+    assert atoms.conclusion =~ "at that rate, if it goes on, the atom table is full in 30 minutes"
+    assert processes.conclusion =~ "grew by 250 a second while it was measured (40,000 now)"
+    assert processes.conclusion =~ "at that rate, if it goes on"
     assert processes.conclusion =~ "39,000 processes started as {Task, :start, 1}"
   end
 

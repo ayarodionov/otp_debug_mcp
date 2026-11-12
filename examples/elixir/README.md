@@ -23,6 +23,7 @@ alongside the demos in the other languages.
 | Command | Node | The bug | What finds it |
 |---|---|---|---|
 | `shop` | `shop_ex` | `Shop.PriceCache`, a GenServer that takes 5 ms per update, gets casts far faster than that: its mailbox never drains | `diagnose` (`message_queues`), `process_info`, `trace_calls` |
+| `catalog` | `catalog_ex` | None: a price catalog under steady, modest load. It checks that an agent asked about a healthy node says nothing is wrong, instead of inventing a cause | `diagnose` |
 | `payments` | `payments_ex` | An application whose `Payments.Gateway` parses a malformed URL a second after each start and raises, just under `Payments.Supervisor`'s restart limit: payments fail now and then | `diagnose` (`supervisor_restarts`, with the exit reason, file and line) |
 | `cluster` | `ex_a`, `ex_b`, `ex_c` | Three connected nodes, only `ex_b` running the shop bug | `cluster`, pointed at a healthy node |
 | `billing` | `billing_ex` | Routes defined with a macro DSL, `Billing.Router`. Its `timed` macro runs the block it wraps twice, so every charge is recorded twice in the ledger. No route's source shows the bug: it exists only after macro expansion | `module_code` (which functions the macro generated, and their code after expansion), `trace_calls` on `Billing.Ledger.record/2` |

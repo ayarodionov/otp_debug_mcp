@@ -22,6 +22,32 @@ one sentence about the symptom. (The recording is
 about the account it ran under are blanked out. `scripts/record_demo.py`
 makes it again.)
 
+## Quick start
+
+1. **Install it.** One command has Claude Code download, verify, register
+   it and install its skill: see [Install with Claude Code](#install-with-claude-code).
+   Then restart Claude Code; `/mcp` lists `otp-debug`.
+2. **Start a node with a problem**, from a checkout of this repository
+   (it needs Elixir):
+
+   ```sh
+   examples/elixir/run.sh shop
+   ```
+
+3. **Describe the symptom** to Claude Code, as you would to a colleague:
+
+   > `shop_ex@yourhost` keeps getting slower and using more memory. Find out why.
+
+   It connects, runs `diagnose`, which says what is wrong and where to look
+   next, checks that in the code, and answers with the cause and a fix.
+   On your own node, give its name, and its cookie if it isn't the one in
+   `~/.erlang.cookie`.
+4. **Stop the demo:** `examples/elixir/run.sh stop`.
+
+The rest of this README is reference: [the tools](#tools), [setup for
+other clients](docs/clients.md) and [for production](docs/production.md),
+[what to ask in which situation](#usage-scenarios), and [more demos](#demo-targets).
+
 ## Design
 
 - **Hidden-node attach.** The server joins the target over Erlang distribution
@@ -80,7 +106,7 @@ makes it again.)
 | Tool | Purpose |
 |---|---|
 | `connect` | Attach to a node (name + optional cookie) as a hidden node; says how long the node has run, and whether it's in a cluster |
-| `diagnose` | Full health battery: conclusions drawn from the checks together (what is wrong, how fast it grows, where in the code, who causes it), the checks that aren't ok in full, worst first, and the names of the rest; `verbose: true` for every check in full |
+| `diagnose` | Full health battery: conclusions drawn from the checks together (what is wrong, how fast it grows, where in the code, who causes it), the checks that aren't ok in full, worst first, and the names of the rest; `verbose: true` for every check in full, `quick: true` for only the checks that read the node (no forced garbage collection, no tracing) |
 | `run_check` | One check: `vm_config` (the VM's setup against what it runs on: schedulers against the container's CPU quota, and how often it's throttled; memory against the container's limit; limits in use; busy-waiting, debug logging), `message_queues`, `call_chains`, `supervisor_restarts`, `binary_leak`, `memory_breakdown`, `allocator_fragmentation`, `process_count`, `atom_table`, `ets_tables`, `ports`, `native_memory`, `native_code`, `stale_code` (old code still running after a hot load, modules unlike their `.beam` on the code path), `logs` (where the node's logs go, and whether a file keeps them), `distribution` (connections to other nodes: traffic, and bytes waiting against the busy limit), `schedulers`, `scheduler_time` (where scheduler time goes: Erlang code, garbage collection, ports, I/O polling, busy-waiting), `long_schedules`, `socket_traffic`, `top_reductions` |
 | `recent_errors` | The errors the node logs, grouped by who failed and why: crashes with their stack and the reports they caused, error and warning messages with where they were logged, and the errors in the node's log files from before, and processes that crashed calling each other (a deadlock a call timeout ended); listens for a window, or in the background |
 | `crash_dump` | Why a node died, from its `erl_crash.dump`: what the slogan means, the process that was running, the biggest processes and mailboxes with their stacks, the first messages of the longest mailbox, memory, ETS and ports; no connection needed |
@@ -569,7 +595,7 @@ background, on this host with `-sname`, and `run.sh stop` stops them:
 
 | Language | Directory | Demos |
 |---|---|---|
-| Elixir | [examples/elixir](examples/elixir) | a mailbox that never drains, a crash loop, a cluster with one bad node, a billing service whose macro DSL records every charge twice, a Phoenix API whose search route is shadowed by one `resources` generates, a LiveView dashboard whose assigns keep every order and whose Refresh blocks it, a Bandit API out of connections, a Cowboy API whose slow route leaves no room for the fast ones, a Yaws API whose cookie sessions pile up, a shackle pool where one slow request holds up a connection, a point-of-sale server on Ranch whose dead connections leave no room for new tills, a checkout slowed by telemetry handlers it never detaches, product pages waiting for Postgrex connections held through a payment call, a riak_core cluster with a member down and a hot partition, riak_dt wishlists whose actors pile up, and a Mix release with its own cookie |
+| Elixir | [examples/elixir](examples/elixir) | a healthy node, for checking that an agent says so, a mailbox that never drains, a crash loop, a cluster with one bad node, a billing service whose macro DSL records every charge twice, a Phoenix API whose search route is shadowed by one `resources` generates, a LiveView dashboard whose assigns keep every order and whose Refresh blocks it, a Bandit API out of connections, a Cowboy API whose slow route leaves no room for the fast ones, a Yaws API whose cookie sessions pile up, a shackle pool where one slow request holds up a connection, a point-of-sale server on Ranch whose dead connections leave no room for new tills, a checkout slowed by telemetry handlers it never detaches, product pages waiting for Postgrex connections held through a payment call, a riak_core cluster with a member down and a hot partition, riak_dt wishlists whose actors pile up, and a Mix release with its own cookie |
 | Erlang | [examples/erlang](examples/erlang) | a mailbox that never drains, an OTP application in a crash loop, a session store leaking atoms and ETS rows, a cluster with one bad node, a C NIF library that blocks a scheduler and leaks native memory, a shop that leaks sockets and external programs and fills a slow peer's socket, an orders service whose errors only its logs show, a node that runs out of memory and leaves a crash dump, two gen_servers that deadlock, report workers whose CPU goes to garbage collection, a fix deployed but never loaded, and a node flooding the link to another |
 | Gleam | [examples/gleam](examples/gleam) | a mailbox that never drains, a supervised actor whose `let assert` panics in a loop, and a job runner leaking processes |
 | LFE | [examples/lfe](examples/lfe) | a mailbox that never drains, an OTP application in a crash loop, and an index whose slices pin whole binaries |
@@ -720,7 +746,8 @@ otp-debug tools, stops the demo, and checks that the session's
 conclusion names the cause (the patterns in `test/blind/cases.json`). A
 session none of whose otp-debug calls succeeded fails whatever it
 answered, since one that couldn't connect tends to repeat the symptom's
-words.
+words. The `healthy` case runs a node with nothing wrong: it passes when
+the session says so, and fails when it claims a cause.
 It needs the Claude Code CLI, logged in, and costs what the sessions do;
 it isn't part of CI.
 

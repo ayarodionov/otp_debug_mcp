@@ -29,6 +29,30 @@ and leaves out what the healthy ones measured.
   messages, and counts them by sender and by the message's shape (its
   tag and size, never its content). Not measured on older nodes.
 - `cluster` with `diagnose` gives each node's conclusions.
+- `diagnose` with `quick: true` runs only the checks that read the node:
+  no garbage collection of every process (`binary_leak`), no microstate
+  accounting (`scheduler_time`), no trace sessions (`long_schedules`, and
+  who sends to a long mailbox). It's approved as a read-only step. Every
+  `diagnose` now runs its first phase's scans four at a time instead of
+  all fourteen together, which cost about 50 ms on the shop demo, and
+  says how long it took (`elapsed_ms`).
+- Conclusions say no more than was measured: a rate is "at that rate, if
+  it goes on", a node isn't said to die of a full process table, and
+  native memory that grows points at the native libraries without
+  calling it a leak.
+- `connect` waits up to 60 s, not 5: giving up on a host that doesn't
+  answer takes 7 s, and compiling recon on an older node can take
+  longer. Before, such a connect crashed instead of explaining what to
+  check.
+- Process names given to the tools (`process_info`, `trace_calls`,
+  `call_latency` and others) and application names
+  (`supervision_tree`) are looked up on the node as existing atoms. A
+  mistyped name used to be created there as an atom, and atoms are
+  never freed.
+- A healthy demo node (`examples/elixir/run.sh catalog`) and a blind case
+  for it, `healthy`: the agent passes by saying nothing is wrong, and
+  fails if it claims a cause. Blind cases can now `forbid` claims and
+  replace the prompt's ending (`suffix`).
 - More conclusions: native code that holds a scheduler (which process,
   for how long, how often) and long garbage collections, from
   `long_schedules`; a process holding most of the node's binary memory,

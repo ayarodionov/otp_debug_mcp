@@ -41,6 +41,26 @@ defmodule OtpDebugMcp.ToolsTest do
         do: assert(tool in tools)
   end
 
+  test "a process name that doesn't exist on the target isn't created there", %{target: target} do
+    name = "no_such_process_#{System.unique_integer([:positive])}"
+
+    assert {:error, {:no_such_process, ^name}} = Tools.resolve_process(name)
+    assert {:error, {:no_such_process, "Nope.Missing"}} = Tools.resolve_process("Nope.Missing")
+    assert :error = OtpDebugMcp.Target.existing_atom(name)
+    assert :error = OtpDebugMcp.Target.existing_atom("Elixir.Nope.Missing")
+
+    assert {:error, text} = call_tool(Tools.SupervisionTree, %{app: name})
+    assert text =~ "app_not_running"
+    assert :error = OtpDebugMcp.Target.existing_atom(name)
+
+    # Names that do exist still resolve, Elixir module names as written in Elixir too.
+    assert {:ok, pid} = Tools.resolve_process("stuck_mailbox")
+    assert is_pid(pid)
+    {:ok, named} = TestTarget.call(target, Ticker, :start, [OtpDebugMcp.Fixtures.Named, 1_000])
+    assert {:ok, ^named} = Tools.resolve_process("OtpDebugMcp.Fixtures.Named")
+    assert {:ok, ^named} = Tools.resolve_process("Elixir.OtpDebugMcp.Fixtures.Named")
+  end
+
   describe "connect" do
     test "reports the connection and recon", %{target: target} do
       params = %{node: Atom.to_string(target.node), cookie: target.cookie}
@@ -89,6 +109,24 @@ defmodule OtpDebugMcp.ToolsTest do
     refute Enum.any?(report["findings"], &(&1["status"] == "ok"))
     assert "atom_table" in report["ok"]
     assert %{"memory" => _, "processes" => _} = report["vitals"]
+  end
+
+  test "diagnose with quick runs only the checks that read the node" do
+    assert {:ok, report} = call_tool_json(Tools.Diagnose, %{quick: true})
+
+    assert report["skipped"] == ["binary_leak", "scheduler_time", "long_schedules"]
+    ran = Enum.map(report["findings"], & &1["check"]) ++ report["ok"]
+    assert "message_queues" in ran
+    for check <- report["skipped"], do: refute(check in ran)
+    assert is_integer(report["elapsed_ms"]) and report["elapsed_ms"] > 0
+
+    # No trace session to find who sends to the long mailbox.
+    assert %{"findings" => [%{"senders" => senders}]} =
+             Enum.find(report["findings"], &(&1["check"] == "message_queues"))
+
+    assert senders =~ "quick"
+    assert [%{"conclusion" => text} | _] = report["conclusions"]
+    assert text =~ "Who fills it wasn't measured, as diagnose ran with quick."
   end
 
   test "diagnose with verbose returns every check in full" do

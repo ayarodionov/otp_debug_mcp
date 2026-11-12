@@ -11,6 +11,12 @@ defmodule OtpDebugMcp.TargetTest do
   end
 
   describe "connect" do
+    test "a host that doesn't answer is an error, not a crash" do
+      # Unroutable: the connection attempt waits for net_setuptime (7 s),
+      # longer than a call's default timeout.
+      assert {:error, _} = Target.connect("ghost@10.255.255.1", "cookie")
+    end
+
     test "attaches as a hidden node" do
       target = start_target()
 

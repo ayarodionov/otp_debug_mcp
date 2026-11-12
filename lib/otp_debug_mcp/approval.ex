@@ -142,6 +142,11 @@ defmodule OtpDebugMcp.Approval do
       {:changes,
        "Connects to #{node} as a hidden node, and loads recon's modules there if it lacks them."}
 
+  def step("diagnose", %{quick: true}),
+    do:
+      {:read,
+       "Runs the checks that only read the node: its processes, memory, ports, ETS, logs and code."}
+
   def step("diagnose", _),
     do:
       {:changes,

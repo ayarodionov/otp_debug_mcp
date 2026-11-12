@@ -30,7 +30,10 @@ raw introspection when a purpose-built tool exists.
    one of those; `verbose: true` returns them all, and is rarely needed).
    Report the conclusions to the user before drilling in. A conclusion
    says only what was measured: confirm it in the code before proposing a
-   fix.
+   fix. With no conclusions and nothing not ok, say the node looks
+   healthy now: don't look for a cause the measurements don't show. On a
+   node already in trouble, `quick: true` reads it without the forced
+   garbage collection and the trace sessions (about 2 s instead of 3).
    If `connect` reports a `cluster`, run `cluster` (compare) first instead:
    the node that stands out from the others is usually where the problem
    is. `connect` to it, then `diagnose` there.

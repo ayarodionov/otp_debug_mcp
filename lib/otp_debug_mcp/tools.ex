@@ -65,16 +65,23 @@ defmodule OtpDebugMcp.Tools do
     end
   end
 
+  # A name that isn't an atom on the target can't be registered there, and
+  # is never sent as one (see Target.existing_atom/1).
   def resolve_process(name) do
-    candidates = [String.to_atom(name), Module.concat([name])]
+    candidates = Enum.uniq([name, if(elixir_name?(name), do: "Elixir." <> name, else: name)])
 
-    Enum.find_value(candidates, {:error, {:no_such_process, name}}, fn atom ->
-      case Target.rpc(:erlang, :whereis, [atom]) do
-        {:ok, pid} when is_pid(pid) -> {:ok, pid}
+    Enum.find_value(candidates, {:error, {:no_such_process, name}}, fn candidate ->
+      with {:ok, atom} <- Target.existing_atom(candidate),
+           {:ok, pid} when is_pid(pid) <- Target.rpc(:erlang, :whereis, [atom]) do
+        {:ok, pid}
+      else
         _ -> nil
       end
     end)
   end
+
+  @doc "Whether `name` reads as an Elixir module name: capitalized, without its Elixir. prefix."
+  def elixir_name?(name), do: name =~ ~r/^[A-Z]/ and not String.starts_with?(name, "Elixir.")
 
   defmodule Connect do
     @moduledoc "Connect to a running OTP node as a hidden node. Call this first."
@@ -191,15 +198,31 @@ defmodule OtpDebugMcp.Tools do
           "Every check in full, the ok ones too, each with its interpretation " <>
             "(much longer; run_check returns one check that way)"
       )
+
+      field(:quick, :boolean,
+        description:
+          "Only the checks that read the node: no garbage collection of every process " <>
+            "(binary_leak), no microstate accounting (scheduler_time), no trace sessions " <>
+            "(long_schedules, and who sends to a long mailbox). For a node in trouble"
+      )
     end
 
     def perform(params, frame) do
-      results = Checks.run_all()
+      started = System.monotonic_time(:millisecond)
+      results = Checks.run_all(quick: params[:quick] == true)
+
+      run = %{
+        elapsed_ms: System.monotonic_time(:millisecond) - started,
+        skipped: if(params[:quick], do: Checks.not_quick(), else: [])
+      }
 
       if params[:verbose] do
-        Tools.json_response(frame, %{conclusions: Conclusions.from(results), checks: results})
+        Tools.json_response(
+          frame,
+          Map.merge(run, %{conclusions: Conclusions.from(results), checks: results})
+        )
       else
-        Tools.json_response(frame, Conclusions.report(results))
+        Tools.json_response(frame, Map.merge(Conclusions.report(results), run))
       end
     end
   end
@@ -951,13 +974,21 @@ defmodule OtpDebugMcp.Tools do
     def perform(%{app: app} = params, frame) do
       depth = params[:depth] || 5
 
-      with {:ok, masters} <-
-             Target.rpc(:application_controller, :get_master, [String.to_atom(app)]),
+      with {:ok, app_atom} <- app_atom(app),
+           {:ok, masters} <- Target.rpc(:application_controller, :get_master, [app_atom]),
            true <- is_pid(masters) || {:error, {:app_not_running, app}},
            {:ok, {root, _app}} <- Target.rpc(:application_master, :get_child, [masters]) do
         Tools.json_response(frame, tree(root, depth))
       else
         err -> Tools.error_response(frame, err)
+      end
+    end
+
+    # A running application's name is an atom on the target already.
+    defp app_atom(app) do
+      case Target.existing_atom(app) do
+        {:ok, atom} -> {:ok, atom}
+        :error -> {:error, {:app_not_running, app}}
       end
     end
 

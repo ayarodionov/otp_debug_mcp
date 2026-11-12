@@ -2,6 +2,7 @@
 # Elixir demo targets for otp_debug_mcp.
 #
 #     examples/elixir/run.sh shop        # shop_ex: a mailbox that never drains
+#     examples/elixir/run.sh catalog     # catalog_ex: nothing wrong, for checking an agent says so
 #     examples/elixir/run.sh payments    # payments_ex: a crash loop
 #     examples/elixir/run.sh cluster     # ex_a, ex_b, ex_c: only ex_b has the shop bug
 #     examples/elixir/run.sh release     # demo_shop: a Mix release, with its own cookie
@@ -69,6 +70,7 @@ start() {
 
 case "${1:-}" in
   shop) start shop_ex "$here/src/shop.exs" ;;
+  catalog) start catalog_ex "$here/src/catalog.exs" ;;
   payments) start payments_ex "$here/src/payments.exs" ;;
   cluster)
     start ex_a -e "Process.sleep(:infinity)"
@@ -176,7 +178,7 @@ case "${1:-}" in
     echo "started demo_shop@$host, cookie: $(cat "$release/releases/COOKIE")"
     ;;
   stop)
-    nodes="shop_ex payments_ex billing_ex phoenix_ex live_ex bandit_ex cowboy_ex yaws_ex shackle_ex ranch_ex telemetry_ex postgrex_ex riak_a riak_b riak_c ex_a ex_b ex_c"
+    nodes="shop_ex catalog_ex payments_ex billing_ex phoenix_ex live_ex bandit_ex cowboy_ex yaws_ex shackle_ex ranch_ex telemetry_ex postgrex_ex riak_a riak_b riak_c ex_a ex_b ex_c"
     elixir --sname "stopper_$$" -e "
       for n <- ~w($nodes),
           do: :rpc.call(:\"#{n}@$host\", :init, :stop, [], 2000)"
@@ -185,7 +187,7 @@ case "${1:-}" in
     if [ -d "$pgdata" ]; then pg pg_ctl -D "$pgdata" -m fast stop >/dev/null 2>&1 || true; fi
     ;;
   *)
-    echo "usage: $0 shop|payments|cluster|release|billing|phoenix|live|bandit|cowboy|yaws|shackle|ranch|telemetry|postgrex|riak|wishlist|stop" >&2
+    echo "usage: $0 shop|catalog|payments|cluster|release|billing|phoenix|live|bandit|cowboy|yaws|shackle|ranch|telemetry|postgrex|riak|wishlist|stop" >&2
     exit 1
     ;;
 esac

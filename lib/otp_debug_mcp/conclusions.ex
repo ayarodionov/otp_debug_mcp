@@ -172,6 +172,9 @@ defmodule OtpDebugMcp.Conclusions do
   defp senders_sentence(%{senders: [], senders_watched_ms: ms}),
     do: "Nothing was sent to it during the #{ms} ms watched: the messages came earlier."
 
+  defp senders_sentence(%{senders: "not measured: diagnose ran with quick" <> _}),
+    do: "Who fills it wasn't measured, as diagnose ran with quick."
+
   defp senders_sentence(%{senders: text}) when is_binary(text),
     do: "Who fills it wasn't measured: the node predates OTP 27's trace sessions."
 
@@ -470,9 +473,9 @@ defmodule OtpDebugMcp.Conclusions do
           conclusion(
             :warning,
             [
-              "#{who(p)} let go of #{count(freed)} binaries when it was garbage-collected: " <>
-                "it handles large binaries and rarely collects by itself, so they stay " <>
-                "in memory after it is done with them."
+              "#{who(p)} let go of #{count(freed)} binaries when this check collected its " <>
+                "garbage: it held them after it was done with them, which a process that " <>
+                "rarely collects by itself does."
             ],
             [:binary_leak],
             "Hibernate it when idle, or collect after large work; process_info #{p.pid} for what it is."
@@ -491,7 +494,9 @@ defmodule OtpDebugMcp.Conclusions do
         "they were cut from: copying a slice (binary:copy/1) before keeping it frees the rest."
 
   defp held_sentence(%{bytes_kept: _}),
-    do: "It keeps whole binaries, and nothing bounds how many."
+    do:
+      "It keeps whole binaries: if nothing bounds how many it keeps, its memory grows " <>
+        "with them, which a snapshot diff shows."
 
   defp held_sentence(_), do: nil
 
@@ -508,7 +513,8 @@ defmodule OtpDebugMcp.Conclusions do
           ],
           [:native_memory],
           "native_code for the native libraries loaded; snapshot (take, wait, diff): " <>
-            "native memory that grows while the VM's stays flat is a leak in one of them."
+            "native memory that keeps growing while the VM's stays flat points at one of " <>
+            "them: a leak, or memory it keeps on purpose."
         )
       ]
     else
@@ -554,10 +560,12 @@ defmodule OtpDebugMcp.Conclusions do
         conclusion(
           severity(status),
           [
-            "Atoms are created at #{count(round(rate))} a second and are never freed" <>
+            "Atoms were created at #{count(round(rate))} a second while it was measured, and " <>
+              "atoms are never freed" <>
               case f[:seconds_until_full] do
                 s when is_number(s) ->
-                  ": the atom table is full, and the node dies, in #{duration(s)}."
+                  ": at that rate, if it goes on, the atom table is full in #{duration(s)}, " <>
+                    "and then the node crashes."
 
                 _ ->
                   "."
@@ -581,11 +589,12 @@ defmodule OtpDebugMcp.Conclusions do
         conclusion(
           severity(status),
           [
-            "The number of processes grows by #{count(round(rate))} a second " <>
-              "(#{count(f.count)} now)" <>
+            "The number of processes grew by #{count(round(rate))} a second while it was " <>
+              "measured (#{count(f.count)} now)" <>
               case f[:seconds_until_limit] do
                 s when is_number(s) ->
-                  ": the node reaches its limit, and dies, in #{duration(s)}."
+                  ": at that rate, if it goes on, the node reaches its process limit in " <>
+                    "#{duration(s)}, and then nothing can start a process."
 
                 _ ->
                   "."

@@ -105,5 +105,10 @@
   {"name": "sockets", "walkthrough": 35, "needs": ["docker"], "start": "examples/sockets/run.sh start", "stop": "examples/sockets/run.sh stop", "wait_s": 30,
    "env": {"ERL_FLAGS": "-erl_epmd_port 9400", "OTP_DEBUG_MCP_COOKIE": "socketsdemo"},
    "prompt": "Quotes from our quotes service, quotes@127.0.0.1 (in a container, cookie socketsdemo), take 40 ms each, though the pricing backend answers in microseconds; the node's memory keeps growing, and the nightly price export never finishes. Find out why.",
-   "expect": [["nodelay", "Nagle"], ["active"], ["send_timeout", "high_watermark"]]}
+   "expect": [["nodelay", "Nagle"], ["active"], ["send_timeout", "high_watermark"]]},
+  {"name": "healthy", "walkthrough": null, "start": "examples/elixir/run.sh catalog", "stop": "examples/elixir/run.sh stop", "wait_s": 15,
+   "prompt": "Users say `catalog_ex@{host}` felt slow earlier today. Check whether anything is wrong with it now.",
+   "suffix": " Use the otp-debug tools; the node is live. End with what you found and what you'd do next.",
+   "expect": [["nothing (is |was |looks )?(wrong|abnormal|unusual)", "no (sign|evidence|fault|problem|issue)s?\\b", "(is|looks|looked|seems|appears) healthy", "found no", "(didn't|did not|couldn't|could not) find (a|any)"]],
+   "forbid": ["can't keep up", "isn't reading its mailbox", "held a scheduler for", "memory leak in"]}
 ]

@@ -47,6 +47,7 @@ defmodule OtpDebugMcp.Mailboxes do
   Sessions = code:ensure_loaded(trace) =:= {module, trace}
              andalso erlang:function_exported(trace, session_create, 3),
   Senders = case {Sessions, Pids} of
+    _ when not Watch -> not_watched;
     {false, _} -> no_sessions;
     {true, []} -> none;
     {true, [Top | _]} ->
@@ -107,11 +108,15 @@ defmodule OtpDebugMcp.Mailboxes do
   {T1 - T0, First, Second, [{P, Where(P)} || P <- Pids], Senders}.
   """
 
-  @doc "The message_queues check: `{:ok, status, findings, interpretation}` or an error."
-  def run do
+  @doc """
+  The message_queues check: `{:ok, status, findings, interpretation}` or an
+  error. With `senders: false`, who sends to the longest mailbox isn't
+  traced.
+  """
+  def run(opts \\ []) do
     with {:ok, top} <- OtpDebugMcp.Target.rpc(:recon, :proc_count, [:message_queue_len, 10]),
          long = for({pid, qlen, info} <- top, qlen > @min_queue, do: {pid, qlen, info}),
-         {:ok, sampled} <- sample(Enum.map(long, &elem(&1, 0))) do
+         {:ok, sampled} <- sample(Enum.map(long, &elem(&1, 0)), Keyword.get(opts, :senders, true)) do
       offenders = Enum.map(long, &offender(&1, sampled))
 
       status =
@@ -125,13 +130,14 @@ defmodule OtpDebugMcp.Mailboxes do
     end
   end
 
-  defp sample([]), do: {:ok, nil}
+  defp sample([], _watch), do: {:ok, nil}
 
-  defp sample(pids) do
+  defp sample(pids, watch) do
     code = Checks.supervisor_funs() <> Checks.initial_call_fun() <> @sample
 
     bindings = [
       Pids: pids,
+      Watch: watch,
       Interval: @interval_ms,
       TraceMs: @trace_ms,
       MaxEvents: @trace_events
@@ -173,6 +179,9 @@ defmodule OtpDebugMcp.Mailboxes do
   end
 
   defp where(_), do: %{}
+
+  defp senders(:not_watched),
+    do: %{senders: "not measured: diagnose ran with quick, which traces nothing"}
 
   defp senders(:no_sessions),
     do: %{

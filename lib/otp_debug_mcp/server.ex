@@ -62,7 +62,7 @@ defmodule OtpDebugMcp.Server do
 
   Workflow:
   1. connect(node, cookie?) first. A failure's hint is usually right: the cookie, or short against long names. For a node that already died, crash_dump(path) needs no connection.
-  2. Then diagnose, always. Its conclusions state each problem once, worst first, from what several checks measured, with the next step; findings are the checks that aren't ok, in full. Report the conclusions before drilling in. If connect reported a cluster, run cluster first: the node that differs is where to look.
+  2. Then diagnose, always. Its conclusions state each problem once, worst first, from what several checks measured, with the next step; findings are the checks that aren't ok, in full. Report the conclusions before drilling in. On a node already in trouble, diagnose with quick: true reads it without collecting garbage or tracing. If connect reported a cluster, run cluster first: the node that differs is where to look. If nothing is wrong, say so: don't look for a cause the measurements don't show.
   3. Drill into what diagnose named with the purpose-built tool; don't re-scan:
      - a long mailbox, or a process others wait on: process_info, call_latency, then module_code for the code it is in
      - crashes and errors, also ones the numbers don't show: recent_errors; trace_calls with exceptions: true for the calls that raise and their arguments

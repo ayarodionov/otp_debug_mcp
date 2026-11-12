@@ -80,31 +80,68 @@ defmodule OtpDebugMcp.Checks do
   # A check that takes longer than this is reported as failed.
   @check_timeout 60_000
 
-  @doc "Run every check; findings ranked worst-first."
-  def run_all do
+  # The first phase's scans run this many at a time, so that diagnose
+  # doesn't add a burst of work to a node that is struggling already. The
+  # second phase's are mostly windows of watching, which run together so
+  # that they watch the same seconds.
+  @max_scans 4
+
+  # What quick leaves out: the checks that do more than read the node
+  # (a garbage collection in every process, microstate accounting, a trace
+  # session), and message_queues traces no senders.
+  @not_quick [:binary_leak, :scheduler_time, :long_schedules]
+
+  @doc "The checks `run_all(quick: true)` leaves out."
+  def not_quick, do: @not_quick
+
+  @doc """
+  Run every check; findings ranked worst-first. With `quick: true`, only
+  those that read the node, nothing that collects garbage or traces.
+  """
+  def run_all(opts \\ []) do
     # The tasks below are new processes: carry over the node Target.on/2
     # may have set for this one.
     node = Target.connected_node()
+    quick? = Keyword.get(opts, :quick, false)
+    leave_out = if quick?, do: @not_quick, else: []
 
     @phases
-    |> Enum.flat_map(&run_parallel(&1, node))
+    |> Enum.with_index()
+    |> Enum.flat_map(fn {checks, phase} ->
+      run_parallel(checks -- leave_out, node, if(phase == 0, do: @max_scans), quick?)
+    end)
     |> Enum.sort_by(fn %{status: s, check: c} ->
       {status_rank(s), Enum.find_index(@checks, &(&1 == c))}
     end)
   end
 
-  defp run_parallel(checks, node) do
+  defp run_parallel(checks, node, max, quick?) do
     checks
-    |> Task.async_stream(fn check -> Target.on(node, fn -> run(check) end) end,
+    |> Task.async_stream(
+      fn check -> Target.on(node, fn -> run_one(check, quick?) end) end,
       timeout: @check_timeout,
       on_timeout: :kill_task,
-      max_concurrency: length(checks)
+      max_concurrency: max || length(checks)
     )
     |> Enum.zip(checks)
     |> Enum.map(fn
       {{:ok, result}, _check} -> result
       {{:exit, reason}, check} -> error_result(check, {:did_not_finish, reason})
     end)
+  end
+
+  # One check as run_all runs it: quick, message_queues traces no senders.
+  defp run_one(:message_queues, quick?), do: message_queues(senders: not quick?)
+  defp run_one(check, _quick?), do: run(check)
+
+  defp message_queues(opts) do
+    case OtpDebugMcp.Mailboxes.run(opts) do
+      {:ok, status, findings, interpretation} ->
+        result(:message_queues, status, findings, interpretation)
+
+      err ->
+        error_result(:message_queues, err)
+    end
   end
 
   defp status_rank(:critical), do: 0
@@ -140,15 +177,7 @@ defmodule OtpDebugMcp.Checks do
   # Processes with large mailboxes. The single most common BEAM production
   # problem: a bottleneck process that can't keep up, usually visible long
   # before the node dies of memory exhaustion.
-  def run(:message_queues) do
-    case OtpDebugMcp.Mailboxes.run() do
-      {:ok, status, findings, interpretation} ->
-        result(:message_queues, status, findings, interpretation)
-
-      err ->
-        error_result(:message_queues, err)
-    end
-  end
+  def run(:message_queues), do: message_queues(senders: true)
 
   # Every supervisor's restart history, read from its own state. Erlang
   # supervisors (and Elixir's Supervisor) keep it in a #state{} record

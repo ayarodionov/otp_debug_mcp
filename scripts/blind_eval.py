@@ -9,7 +9,10 @@ get into trouble, run a headless `claude -p` session that is given only
 the symptom (the walkthrough's prompt) and may use only the otp-debug
 tools, stop the demo, and check that the session's conclusion names the
 cause: every group in the case's `expect` must have one of its patterns
-(regular expressions, case-insensitive) in the final answer. A session
+(regular expressions, case-insensitive) in the final answer, and none of
+its `forbid` patterns may be there: for a healthy node, the claims a
+session that invents a cause would make. A case's `suffix` replaces what
+is added to every prompt (which asks for the cause and the fix). A session
 none of whose otp-debug calls succeeded fails whatever its answer says:
 one that couldn't connect repeats the symptom, which can match.
 
@@ -55,7 +58,7 @@ def sh(command, timeout=600):
 
 def session(case, server, out_dir, timeout, model):
     host = socket.gethostname().split(".")[0]
-    prompt = case["prompt"].replace("{host}", host).replace("{repo}", REPO) + SUFFIX
+    prompt = case["prompt"].replace("{host}", host).replace("{repo}", REPO) + case.get("suffix", SUFFIX)
     config = {"mcpServers": {"otp-debug": {"command": server, "args": ["start"],
                                            "env": case.get("env", {})}}}
     work = tempfile.mkdtemp(prefix="otpdbg_blind_")
@@ -117,6 +120,10 @@ def check(answer, expect):
     return missing
 
 
+def forbidden(answer, patterns):
+    return [p for p in patterns if re.search(p, answer, re.IGNORECASE)]
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--cases", help="comma-separated case names (default: all)")
@@ -133,7 +140,8 @@ def main():
     if args.list:
         for c in cases:
             needs = f" (needs {', '.join(c['needs'])})" if c.get("needs") else ""
-            print(f"{c['name']:20} walkthrough {c['walkthrough']}{needs}")
+            where = f"walkthrough {c['walkthrough']}" if c.get("walkthrough") else "no walkthrough"
+            print(f"{c['name']:20} {where}{needs}")
         return 0
     if args.cases:
         wanted = args.cases.split(",")
@@ -156,7 +164,7 @@ def main():
     results = []
     for case in cases:
         if skip & set(case.get("needs", [])):
-            results.append({"name": case["name"], "walkthrough": case["walkthrough"], "status": "skipped",
+            results.append({"name": case["name"], "walkthrough": case.get("walkthrough"), "status": "skipped",
                             "why": f"needs {', '.join(case['needs'])}"})
             print(f"{case['name']:20} skipped")
             continue
@@ -164,7 +172,7 @@ def main():
         sh(case["stop"])
         started = sh(case["start"])
         if started.returncode != 0:
-            results.append({"name": case["name"], "walkthrough": case["walkthrough"], "status": "error",
+            results.append({"name": case["name"], "walkthrough": case.get("walkthrough"), "status": "error",
                             "why": "the demo didn't start: " + started.stdout[-500:]})
             print(" the demo didn't start")
             continue
@@ -178,13 +186,16 @@ def main():
         with open(os.path.join(out_dir, f"{case['name']}.answer.md"), "w") as f:
             f.write(answer)
         missing = check(answer, case["expect"])
+        claimed = forbidden(answer, case.get("forbid", []))
         status = "timeout" if timed_out else (
-            "pass" if answer and not missing and succeeded else "fail")
+            "pass" if answer and not missing and not claimed and succeeded else "fail")
         results.append({
-            "name": case["name"], "walkthrough": case["walkthrough"], "status": status,
+            "name": case["name"], "walkthrough": case.get("walkthrough"), "status": status,
             "missing": missing, "seconds": round(seconds), "turns": result.get("num_turns"),
             "cost_usd": result.get("total_cost_usd"), "tools": tools,
         })
+        if claimed:
+            results[-1]["forbidden"] = claimed
         if not succeeded:
             results[-1]["why"] = "no otp-debug call succeeded: the session never reached the node"
         print(f" {status} ({round(seconds)} s, {len(tools)} tool calls)")
@@ -202,10 +213,12 @@ def main():
 def write_markdown(results, path):
     lines = ["| Case | Walkthrough | Result | Time | Tool calls | Missing |", "|---|---|---|---|---|---|"]
     for r in results:
-        missing = r.get("why") or "; ".join(" or ".join(g) for g in r.get("missing") or [])
+        missing = r.get("why") or "; ".join(
+            [" or ".join(g) for g in r.get("missing") or []] +
+            [f"said {p}" for p in r.get("forbidden") or []])
         tools = len(r.get("tools") or [])
         seconds = f"{r['seconds']} s" if "seconds" in r else ""
-        lines.append(f"| {r['name']} | {r['walkthrough']} | {r['status']} | {seconds} | {tools or ''} | {missing} |")
+        lines.append(f"| {r['name']} | {r.get('walkthrough') or ''} | {r['status']} | {seconds} | {tools or ''} | {missing} |")
     with open(path, "w") as f:
         f.write("\n".join(lines) + "\n")
 

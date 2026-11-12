@@ -54,9 +54,22 @@ defmodule OtpDebugMcp.Target do
 
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
+  # Giving up on a host that doesn't answer takes net_setuptime (7 s by
+  # default), and loading recon onto a node of an older OTP release
+  # compiles it there: both can take longer than a call's default 5 s.
+  @connect_timeout 60_000
+
   @doc "Connect to `node` (e.g. `:\"myapp@127.0.0.1\"`), using `cookie` if given."
   @spec connect(String.t(), String.t() | nil) :: {:ok, %{recon: map()}} | {:error, term()}
-  def connect(node, cookie \\ nil), do: GenServer.call(__MODULE__, {:connect, node, cookie})
+  def connect(node, cookie \\ nil) do
+    GenServer.call(__MODULE__, {:connect, node, cookie}, @connect_timeout)
+  catch
+    :exit, {:timeout, _} ->
+      {:error,
+       {:connect_timed_out,
+        "connecting took more than #{div(@connect_timeout, 1000)} s and may still be " <>
+          "going on: try again in a moment"}}
+  end
 
   @doc """
   Connect `node` (an atom) alongside the current target, without changing
@@ -300,6 +313,19 @@ defmodule OtpDebugMcp.Target do
     |> Enum.reduce(%{atoms: 0, code_bytes: 0}, fn {atoms, code}, acc ->
       %{atoms: acc.atoms + atoms, code_bytes: acc.code_bytes + code}
     end)
+  end
+
+  @doc """
+  The atom named `name` on the target, if it exists there: for names that
+  come from tool arguments. Sending an atom creates it on the receiving
+  node, where atoms are never freed, so a mistyped name would stay in the
+  target's atom table; this sends a binary, and creates nothing.
+  """
+  def existing_atom(name) when is_binary(name) do
+    case rpc(:erlang, :binary_to_existing_atom, [name, :utf8]) do
+      {:ok, atom} when is_atom(atom) -> {:ok, atom}
+      _ -> :error
+    end
   end
 
   # Sends a binary, so the check itself creates nothing.
