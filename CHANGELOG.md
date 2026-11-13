@@ -1,9 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.14.0
 
 Conclusions, not data: `diagnose` says what its checks found together,
-and leaves out what the healthy ones measured.
+and leaves out what the healthy ones measured, which cut the cost of the
+blind sessions by 15%. Also: the playbook sent to every client as MCP
+instructions, the node's uptime in `connect`, a `quick` diagnose, a
+healthy demo node, and a recording of a real session in the README.
+
+**`diagnose`'s answer is now an object, not a list** (see below).
 
 - `diagnose` returns `conclusions`: each problem stated once, from what
   several checks measured, with the checks it came from and the next
