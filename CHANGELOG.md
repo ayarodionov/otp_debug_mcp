@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.14.1
+
+0.14.0 as it was meant to be released. Its macOS build never ran:
+GitHub no longer offers the macos-14 runner, so the release workflow
+stopped before publishing anything. The macOS release is now built on
+macos-15. Nothing else changed; what's new is under 0.14.0.
+
 ## 0.14.0
 
 Conclusions, not data: `diagnose` says what its checks found together,
