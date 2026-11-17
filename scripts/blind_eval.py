@@ -12,7 +12,13 @@ cause: every group in the case's `expect` must have one of its patterns
 (regular expressions, case-insensitive) in the final answer, and none of
 its `forbid` patterns may be there: for a healthy node, the claims a
 session that invents a cause would make. A case's `suffix` replaces what
-is added to every prompt (which asks for the cause and the fix). A session
+is added to every prompt (which asks for the cause and the fix). A case's
+`before` is tool calls made through the server once the demo has started
+and before the wait (scripts/mcp_call.py's steps): to start a flight
+recorder before the incident the session will be asked about. A case's
+`require` names tools the session must have called successfully (the
+recorder case requires `history`: the cause can also be inferred from
+counters, so naming it doesn't show the recording was used). A session
 none of whose otp-debug calls succeeded fails whatever its answer says:
 one that couldn't connect repeats the symptom, which can match.
 
@@ -56,6 +62,18 @@ def sh(command, timeout=600):
                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
 
+def before(case, server):
+    """Make the case's `before` tool calls; returns why they failed, or None."""
+    host = socket.gethostname().split(".")[0]
+    steps = json.loads(json.dumps(case["before"]).replace("{host}", host))
+    done = subprocess.run([sys.executable, os.path.join(REPO, "scripts", "mcp_call.py"), server,
+                           json.dumps(steps)], cwd=REPO, timeout=300,
+                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    if done.returncode != 0 or "-> ERROR" in done.stdout or "PROTOCOL ERROR" in done.stdout:
+        return done.stdout[-500:]
+    return None
+
+
 def session(case, server, out_dir, timeout, model):
     host = socket.gethostname().split(".")[0]
     prompt = case["prompt"].replace("{host}", host).replace("{repo}", REPO) + case.get("suffix", SUFFIX)
@@ -85,10 +103,10 @@ def session(case, server, out_dir, timeout, model):
 
 
 def read_transcript(path):
-    """The final answer, the tools called, how many otp-debug calls
-    succeeded, and the result's numbers."""
+    """The final answer, the tools called, the otp-debug tools that
+    succeeded (a name for each success), and the result's numbers."""
     answer, tools, result = "", [], {}
-    ours, succeeded = set(), 0
+    ours, succeeded = {}, []
     with open(path) as f:
         for line in f:
             try:
@@ -100,12 +118,12 @@ def read_transcript(path):
                     if c.get("type") == "tool_use":
                         tools.append(c["name"].replace("mcp__otp-debug__", ""))
                         if c["name"].startswith("mcp__otp-debug__"):
-                            ours.add(c["id"])
+                            ours[c["id"]] = c["name"].replace("mcp__otp-debug__", "")
             elif m.get("type") == "user":
                 for c in m["message"].get("content", []):
                     if (isinstance(c, dict) and c.get("type") == "tool_result"
                             and c.get("tool_use_id") in ours and not c.get("is_error")):
-                        succeeded += 1
+                        succeeded.append(ours[c["tool_use_id"]])
             elif m.get("type") == "result":
                 result = m
                 answer = m.get("result") or ""
@@ -177,6 +195,12 @@ def main():
             print(" the demo didn't start")
             continue
         try:
+            failed = before(case, args.server) if case.get("before") else None
+            if failed:
+                results.append({"name": case["name"], "walkthrough": case.get("walkthrough"),
+                                "status": "error", "why": "the before steps failed: " + failed})
+                print(" the before steps failed")
+                continue
             time.sleep(case.get("wait_s", 15))
             print(" the session...", end="", flush=True)
             transcript, seconds, timed_out = session(case, args.server, out_dir, args.timeout, args.model)
@@ -187,8 +211,10 @@ def main():
             f.write(answer)
         missing = check(answer, case["expect"])
         claimed = forbidden(answer, case.get("forbid", []))
+        unused = [t for t in case.get("require", []) if t not in succeeded]
         status = "timeout" if timed_out else (
-            "pass" if answer and not missing and not claimed and succeeded else "fail")
+            "pass" if answer and not missing and not claimed and not unused and succeeded
+            else "fail")
         results.append({
             "name": case["name"], "walkthrough": case.get("walkthrough"), "status": status,
             "missing": missing, "seconds": round(seconds), "turns": result.get("num_turns"),
@@ -198,6 +224,8 @@ def main():
             results[-1]["forbidden"] = claimed
         if not succeeded:
             results[-1]["why"] = "no otp-debug call succeeded: the session never reached the node"
+        elif unused:
+            results[-1]["why"] = "never used successfully: " + ", ".join(unused)
         print(f" {status} ({round(seconds)} s, {len(tools)} tool calls)")
 
     with open(os.path.join(out_dir, "report.json"), "w") as f:

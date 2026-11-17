@@ -110,5 +110,10 @@
    "prompt": "Users say `catalog_ex@{host}` felt slow earlier today. Check whether anything is wrong with it now.",
    "suffix": " Use the otp-debug tools; the node is live. End with what you found and what you'd do next.",
    "expect": [["nothing (is |was |looks )?(wrong|abnormal|unusual)", "no (sign|evidence|fault|problem|issue)s?\\b", "(is|looks|looked|seems|appears) healthy", "found no", "(didn't|did not|couldn't|could not) find (a|any)"]],
-   "forbid": ["can't keep up", "isn't reading its mailbox", "held a scheduler for", "memory leak in"]}
+   "forbid": ["can't keep up", "isn't reading its mailbox", "held a scheduler for", "memory leak in"]},
+  {"name": "spike", "walkthrough": null, "start": "examples/elixir/run.sh spike", "stop": "examples/elixir/run.sh stop", "wait_s": 140,
+   "before": [["sleep", 4], ["connect", {"node": "spike_ex@{host}"}], ["record", {"minutes": 30, "interval_s": 5}]],
+   "prompt": "For a couple of minutes, starting about two minutes ago, orders on `spike_ex@{host}` were recorded late; it's back to normal now. Find out what happened.",
+   "require": ["history"],
+   "expect": [["Ledger"], ["mailbox", "message queue", "backlog"]]}
 ]

@@ -774,7 +774,11 @@ conclusion names the cause (the patterns in `test/blind/cases.json`). A
 session none of whose otp-debug calls succeeded fails whatever it
 answered, since one that couldn't connect tends to repeat the symptom's
 words. The `healthy` case runs a node with nothing wrong: it passes when
-the session says so, and fails when it claims a cause.
+the session says so, and fails when it claims a cause. The `spike` case
+starts a flight recorder on a node before an incident that passes on its
+own, and asks the session about it afterwards: it passes only if the
+session read the recording with `history`, since the cause can also be
+inferred, less exactly, from the node's counters.
 It needs the Claude Code CLI, logged in, and costs what the sessions do;
 it isn't part of CI.
 

@@ -40,8 +40,12 @@ defmodule Catalog.Shoppers do
   end
 end
 
-{:ok, _} =
+{:ok, sup} =
   Supervisor.start_link([Catalog.Prices, {Task, &Catalog.Shoppers.run/0}],
     strategy: :one_for_one,
     name: Catalog.Supervisor
   )
+
+# The script's process exits when the script ends, and a supervisor exits
+# with its parent: it must not stay linked to it.
+Process.unlink(sup)

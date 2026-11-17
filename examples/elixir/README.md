@@ -23,6 +23,7 @@ alongside the demos in the other languages.
 | Command | Node | The bug | What finds it |
 |---|---|---|---|
 | `shop` | `shop_ex` | `Shop.PriceCache`, a GenServer that takes 5 ms per update, gets casts far faster than that: its mailbox never drains | `diagnose` (`message_queues`), `process_info`, `trace_calls` |
+| `spike` | `spike_ex` | `Orders.Ledger`, a GenServer at about 2 ms per entry, is sent 40,000 entries at once 20 s after the start: its mailbox climbs to about 35,000 and drains over the next minute and a half, then all looks well. Only a recording of those minutes shows it | `record` before it, `history` after |
 | `catalog` | `catalog_ex` | None: a price catalog under steady, modest load. It checks that an agent asked about a healthy node says nothing is wrong, instead of inventing a cause | `diagnose` |
 | `payments` | `payments_ex` | An application whose `Payments.Gateway` parses a malformed URL a second after each start and raises, just under `Payments.Supervisor`'s restart limit: payments fail now and then | `diagnose` (`supervisor_restarts`, with the exit reason, file and line) |
 | `cluster` | `ex_a`, `ex_b`, `ex_c` | Three connected nodes, only `ex_b` running the shop bug | `cluster`, pointed at a healthy node |

@@ -8,6 +8,17 @@
   `diagnose` runs as with `quick`, and the mailbox check without tracing
   who sends. `connect` still loads recon onto a node that lacks it, and
   says the server is read-only.
+- A blind case for the flight recorder, `spike`: a recorder is started on
+  a node before an incident that passes on its own (a ledger swamped by a
+  replay, drained a minute and a half later), and the session is asked
+  about it afterwards. Blind cases can make tool calls through the server
+  before the session (`before`) and require tools the session must have
+  used successfully (`require`): without a recorder, an agent inferred the
+  same cause from the ledger's counters, less exactly, so naming it isn't
+  enough to pass.
+- The `catalog` demo (the healthy node) ran no load: a supervisor
+  started from a script exits with the script's process. It's unlinked
+  now, in the new `spike` demo too.
 - An audit log: every tool call, one JSON line in
   `~/.local/state/otp_debug_mcp/audit.jsonl` (or `OTP_DEBUG_MCP_AUDIT_LOG`,
   or `off`), with the time, node, tool, arguments, whether it reads or
