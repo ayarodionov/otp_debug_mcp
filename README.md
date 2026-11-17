@@ -262,6 +262,30 @@ edit the `env` block of the server's config and restart or reconnect it.
 notes, that goes through one investigation (the crash loop of scenario 6)
 dialog by dialog with `OTP_DEBUG_MCP_CONFIRM=all`, declining one step.
 
+### Read-only mode and the audit log
+
+With `OTP_DEBUG_MCP_READ_ONLY=true` in the server's environment, every
+step that would change something on the node is refused, with no dialog:
+tracing, profiling, forcing garbage collections, attaching handlers,
+asking a process for its state, the flight recorder, `remote_eval` and
+`load_module`. Two steps run in their reading form instead: `diagnose`
+as with `quick`, and the mailbox check without tracing who sends.
+`connect` still loads recon onto a node that lacks it, since most checks
+need it; its code runs only when this tool calls it.
+
+Every tool call is also written to an audit log, one JSON line each:
+when, which node, which tool with which arguments, whether it reads the
+node or changes something there, and what came of it (ran, failed, asked
+the user, declined, refused in read-only mode). It's
+`~/.local/state/otp_debug_mcp/audit.jsonl` unless
+`OTP_DEBUG_MCP_AUDIT_LOG` names another file, or is `off`. A cookie
+given to `connect` is never written.
+
+```sh
+claude mcp add otp-debug --scope user -e OTP_DEBUG_MCP_READ_ONLY=true -- "$server" start
+tail -f ~/.local/state/otp_debug_mcp/audit.jsonl
+```
+
 ## Setup
 
 ### Install with Claude Code

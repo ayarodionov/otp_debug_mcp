@@ -126,7 +126,9 @@ defmodule OtpDebugMcp.ToolsTest do
 
     assert senders =~ "quick"
     assert [%{"conclusion" => text} | _] = report["conclusions"]
-    assert text =~ "Who fills it wasn't measured, as diagnose ran with quick."
+
+    assert text =~
+             "Who fills it wasn't measured: diagnose ran with quick, or the server is read-only."
   end
 
   test "diagnose with verbose returns every check in full" do

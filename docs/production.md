@@ -11,6 +11,7 @@ the AI provider.
 
 - [What a connection needs](#what-a-connection-needs)
 - [Keeping the cookie out of the conversation](#keeping-the-cookie-out-of-the-conversation)
+- [Reading without changing anything, and keeping a record](#reading-without-changing-anything-and-keeping-a-record)
 - [Targets listening on one interface](#targets-listening-on-one-interface)
 - [TLS distribution](#tls-distribution)
 - [Targets in Docker containers](#targets-in-docker-containers)
@@ -46,6 +47,21 @@ name:
 ```
 
 Without either, the server falls back to `~/.erlang.cookie`.
+
+## Reading without changing anything, and keeping a record
+
+For a first look at a production node, start the server with
+`OTP_DEBUG_MCP_READ_ONLY=true`: it refuses every step that would change
+something on the node (tracing, profiling, forced garbage collections,
+handlers, a process's state, the recorder, `remote_eval`, `load_module`),
+and runs `diagnose` as with `quick`. The one thing it still does is load
+recon onto a node without it, at `connect`, which says so.
+
+Every call is written to an audit log (`~/.local/state/otp_debug_mcp/audit.jsonl`,
+or the file `OTP_DEBUG_MCP_AUDIT_LOG` names; `off` turns it off), one JSON
+line per call with the node, tool, arguments and outcome, and never the
+cookie: the answer to "what did the agent do on the node?". See
+[Read-only mode and the audit log](../README.md#read-only-mode-and-the-audit-log).
 
 ## Targets listening on one interface
 

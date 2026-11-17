@@ -177,7 +177,8 @@ defmodule OtpDebugMcp.Checks do
   # Processes with large mailboxes. The single most common BEAM production
   # problem: a bottleneck process that can't keep up, usually visible long
   # before the node dies of memory exhaustion.
-  def run(:message_queues), do: message_queues(senders: true)
+  def run(:message_queues),
+    do: message_queues(senders: not OtpDebugMcp.Approval.read_only?())
 
   # Every supervisor's restart history, read from its own state. Erlang
   # supervisors (and Elixir's Supervisor) keep it in a #state{} record

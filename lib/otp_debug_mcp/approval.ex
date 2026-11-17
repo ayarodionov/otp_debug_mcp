@@ -17,13 +17,21 @@ defmodule OtpDebugMcp.Approval do
   nothing runs: the setting is the server's, so a client's "always allow"
   can't skip it.
 
+  With `OTP_DEBUG_MCP_READ_ONLY=true`, the steps that change something on
+  the node are refused outright, with no dialog, whatever
+  `OTP_DEBUG_MCP_CONFIRM` says; `load_module` and `remote_eval` too. Two
+  steps adapt instead: `diagnose` runs as with `quick`, and the
+  message_queues check doesn't trace who sends. `connect` still loads
+  recon onto a node that lacks it: library code that runs only when this
+  tool calls it, without which most checks can't run.
+
   A tool opts in with `use OtpDebugMcp.Approval` and defines `perform/2` in
   place of `execute/2`.
   """
 
   alias Anubis.Protocol.Registry
   alias Anubis.Server.{Frame, InputRequired}
-  alias OtpDebugMcp.Target
+  alias OtpDebugMcp.{Audit, Target}
 
   defmacro __using__(_opts) do
     quote do
@@ -41,23 +49,66 @@ defmodule OtpDebugMcp.Approval do
     end
   end
 
+  @doc "Whether the server refuses every step that changes something on the node."
+  def read_only?, do: System.get_env("OTP_DEBUG_MCP_READ_ONLY", "") |> String.downcase() == "true"
+
   @doc "Run the tool's step, once the user has approved it if they must."
   def gate(tool, params, frame) do
     name = tool_name(tool)
+    params = if read_only?(), do: read_only_params(name, params), else: params
     {effect, what} = step(name, params)
 
-    if asks?(mode(), effect) do
-      with :ok <- can_ask(frame) do
-        case answer(frame, name, params) do
-          :approved -> tool.perform(params, frame)
-          :ask -> ask(frame, name, params, what)
-          {:declined, how} -> OtpDebugMcp.Tools.error_response(frame, declined(name, how))
-        end
-      else
-        {:error, message} -> OtpDebugMcp.Tools.error_response(frame, message)
+    cond do
+      read_only?() and effect == :changes and name != "connect" ->
+        Audit.not_run(name, params, effect, "refused: read-only mode")
+        OtpDebugMcp.Tools.error_response(frame, refused(name, what))
+
+      asks?(mode(), effect) ->
+        ask_first(tool, name, params, effect, what, frame)
+
+      true ->
+        Audit.call(name, params, effect, fn -> tool.perform(params, frame) end)
+    end
+  end
+
+  # Steps that have a reading form run as that in read-only mode.
+  defp read_only_params("diagnose", params), do: Map.put(params, :quick, true)
+  defp read_only_params(_name, params), do: params
+
+  @doc "Why a step was refused in read-only mode."
+  def refused(name, what) do
+    "Read-only mode (OTP_DEBUG_MCP_READ_ONLY=true): this server refuses every step that " <>
+      "changes something on the node, and #{name} would: #{what} Nothing was run. What " <>
+      "only reads still works: diagnose (as with quick), run_check on the checks that read, " <>
+      "process_info without include_state, history, snapshot, crash_dump, module_code, " <>
+      "ets_table, supervision_tree, port_info. Don't retry this step; tell the user it's off " <>
+      "in read-only mode."
+  end
+
+  defp ask_first(tool, name, params, effect, what, frame) do
+    with :ok <- can_ask(frame) do
+      case answer(frame, name, params) do
+        :approved ->
+          Audit.call(name, params, effect, fn -> tool.perform(params, frame) end)
+
+        :ask ->
+          Audit.not_run(name, params, effect, "asked the user")
+          ask(frame, name, params, what)
+
+        {:declined, how} ->
+          Audit.not_run(
+            name,
+            params,
+            effect,
+            if(how == "cancel", do: "dismissed by the user", else: "declined by the user")
+          )
+
+          OtpDebugMcp.Tools.error_response(frame, declined(name, how))
       end
     else
-      tool.perform(params, frame)
+      {:error, message} ->
+        Audit.not_run(name, params, effect, "refused: the client can't ask the user")
+        OtpDebugMcp.Tools.error_response(frame, message)
     end
   end
 
@@ -161,11 +212,14 @@ defmodule OtpDebugMcp.Approval do
   def step("run_check", %{check: "scheduler_time"}),
     do: {:changes, "Turns on microstate accounting for 2 s, and reads where scheduler time goes."}
 
-  def step("run_check", %{check: "message_queues"}),
-    do:
-      {:changes,
-       "Reads the longest mailboxes twice, a second apart; if one is long, watches who " <>
-         "sends to it in a trace session, for under a second."}
+  def step("run_check", %{check: "message_queues"}) do
+    if read_only?(),
+      do: {:read, "Reads the longest mailboxes twice, a second apart."},
+      else:
+        {:changes,
+         "Reads the longest mailboxes twice, a second apart; if one is long, watches who " <>
+           "sends to it in a trace session, for under a second."}
+  end
 
   def step("run_check", %{check: "long_schedules"}),
     do:

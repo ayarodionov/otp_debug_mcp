@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Read-only mode: with `OTP_DEBUG_MCP_READ_ONLY=true`, the server refuses
+  every step that would change something on the node, with no dialog,
+  `load_module` and `remote_eval` included, and says what still works.
+  `diagnose` runs as with `quick`, and the mailbox check without tracing
+  who sends. `connect` still loads recon onto a node that lacks it, and
+  says the server is read-only.
+- An audit log: every tool call, one JSON line in
+  `~/.local/state/otp_debug_mcp/audit.jsonl` (or `OTP_DEBUG_MCP_AUDIT_LOG`,
+  or `off`), with the time, node, tool, arguments, whether it reads or
+  changes the node, and what came of it: ran, failed, asked the user,
+  declined, refused. A cookie given to `connect` is never written.
+
 - A flight recorder: `record` starts a process on the node that samples
   it every few seconds and keeps the newest samples, whether or not the
   tool is connected, and `history` reads it as conclusions with times.

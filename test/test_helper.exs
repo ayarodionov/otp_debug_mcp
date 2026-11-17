@@ -22,4 +22,8 @@ exclude =
     if(System.get_env("EJABBERD_NODE"), do: [], else: [:ejabberd]) ++
     if(System.get_env("RABBITMQ_NODE"), do: [], else: [:rabbitmq])
 
+# The tests' tool calls don't belong in the real audit log; its own tests
+# set a file of their own.
+System.put_env("OTP_DEBUG_MCP_AUDIT_LOG", "off")
+
 ExUnit.start(exclude: exclude)

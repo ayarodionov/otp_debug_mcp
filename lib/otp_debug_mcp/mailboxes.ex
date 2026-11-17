@@ -181,7 +181,10 @@ defmodule OtpDebugMcp.Mailboxes do
   defp where(_), do: %{}
 
   defp senders(:not_watched),
-    do: %{senders: "not measured: diagnose ran with quick, which traces nothing"}
+    do: %{
+      senders:
+        "not measured: diagnose ran with quick, or the server is read-only, which traces nothing"
+    }
 
   defp senders(:no_sessions),
     do: %{

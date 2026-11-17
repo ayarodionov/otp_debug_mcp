@@ -173,7 +173,7 @@ defmodule OtpDebugMcp.Conclusions do
     do: "Nothing was sent to it during the #{ms} ms watched: the messages came earlier."
 
   defp senders_sentence(%{senders: "not measured: diagnose ran with quick" <> _}),
-    do: "Who fills it wasn't measured, as diagnose ran with quick."
+    do: "Who fills it wasn't measured: diagnose ran with quick, or the server is read-only."
 
   defp senders_sentence(%{senders: text}) when is_binary(text),
     do: "Who fills it wasn't measured: the node predates OTP 27's trace sessions."

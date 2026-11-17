@@ -113,13 +113,24 @@ defmodule OtpDebugMcp.Tools do
                 recon: recon,
                 hint: "Run the `diagnose` tool next for a full health check."
               },
-              Map.merge(uptime(), cluster_hint())
+              uptime() |> Map.merge(cluster_hint()) |> Map.merge(read_only())
             )
           )
 
         {:error, reason} ->
           Tools.error_response(frame, "#{inspect(reason)}. " <> connect_hints())
       end
+    end
+
+    defp read_only do
+      if OtpDebugMcp.Approval.read_only?(),
+        do: %{
+          read_only:
+            "This server is read-only (OTP_DEBUG_MCP_READ_ONLY=true): steps that change " <>
+              "something on the node are refused, diagnose runs as with quick. Connecting " <>
+              "loaded recon if the node lacked it; recon's code runs only when this tool calls it."
+        },
+        else: %{}
     end
 
     # How long the node has run: what happened before it started isn't
@@ -2229,6 +2240,19 @@ defmodule OtpDebugMcp.Tools do
 
     @impl true
     def execute(params, frame) do
+      if OtpDebugMcp.Approval.read_only?() do
+        OtpDebugMcp.Audit.not_run("load_module", params, :changes, "refused: read-only mode")
+
+        Tools.error_response(
+          frame,
+          OtpDebugMcp.Approval.refused("load_module", "it loads new code onto the node.")
+        )
+      else
+        OtpDebugMcp.Audit.call("load_module", params, :changes, fn -> run(params, frame) end)
+      end
+    end
+
+    defp run(params, frame) do
       with :ok <- can_ask(frame),
            {:ok, target} <- Target.target(),
            {:ok, change} <- change(params),
