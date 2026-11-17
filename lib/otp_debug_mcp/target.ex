@@ -461,6 +461,11 @@ defmodule OtpDebugMcp.Target do
   def handle_call({:recon, node}, _from, state), do: {:reply, state.nodes[node], state}
   def handle_call(:connected_node, _from, state), do: {:reply, state.current, state}
 
+  # Before any connect there is no current node: calling this clause again
+  # with it would loop until the caller's timeout.
+  def handle_call({:target, nil}, _from, %{current: nil} = state),
+    do: {:reply, {:error, :not_connected}, state}
+
   def handle_call({:target, nil}, from, state),
     do: handle_call({:target, state.current}, from, state)
 

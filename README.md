@@ -336,6 +336,8 @@ The server is then `~/.local/otp_debug_mcp/bin/otp_debug_mcp`. The
 binaries aren't signed: on macOS, an archive downloaded with a browser
 rather than `curl` is quarantined, and the server won't start until you
 run `xattr -dr com.apple.quarantine ~/.local/otp_debug_mcp`.
+`~/.local/otp_debug_mcp/bin/otp_debug_mcp --help` prints the command to
+register it and every setting, and `--version` its version.
 
 ### Build from source
 

@@ -29,6 +29,10 @@ defmodule OtpDebugMcp.Tools do
 
   def duration(seconds), do: "#{div(seconds, 86_400)} d #{div(rem(seconds, 86_400), 3_600)} h"
 
+  def error_response(frame, {:error, :not_connected}),
+    do:
+      error_response(frame, "Not connected to a node: call connect first, with the node's name.")
+
   def error_response(frame, reason) do
     message =
       cond do

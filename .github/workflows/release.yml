@@ -37,6 +37,11 @@ jobs:
 
       - name: Smoke test the release
         run: |
+          bin=_build/prod/rel/otp_debug_mcp/bin
+          vsn=$(cut -d' ' -f2 _build/prod/rel/otp_debug_mcp/releases/start_erl.data)
+          test "$($bin/otp_debug_mcp --version)" = "otp_debug_mcp $vsn"
+          $bin/otp_debug_mcp --help | grep -q OTP_DEBUG_MCP_READ_ONLY
+          $bin/otp-debug-k8s --help | grep -q OTP_DEBUG_K8S_NAMESPACE
           examples/elixir/run.sh shop
           sleep 3
           python3 scripts/mcp_smoke.py _build/prod/rel/otp_debug_mcp/bin/otp_debug_mcp \

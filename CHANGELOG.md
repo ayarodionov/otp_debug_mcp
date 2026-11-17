@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- `otp_debug_mcp --help` says what the server is, how to register it
+  with Claude Code (with the path of the release it's run from), and every
+  setting with its default; `--version` prints the version. Both answer
+  without starting the VM. Before, `--help` printed the generic release
+  commands, most of which don't apply, and an error. `otp-debug-k8s
+  --help` prints its settings too.
+- A tool called before `connect` says to connect first, at once. Before,
+  the server's lookup of the current node called itself while there was
+  none, and the tool crashed after 5 s; `diagnose` returned every check
+  failed.
+
 - Read-only mode: with `OTP_DEBUG_MCP_READ_ONLY=true`, the server refuses
   every step that would change something on the node, with no dialog,
   `load_module` and `remote_eval` included, and says what still works.

@@ -11,6 +11,19 @@ defmodule OtpDebugMcp.TargetTest do
   end
 
   describe "connect" do
+    test "a tool called before any connect says to connect, at once" do
+      # A fresh Target, as when the server has just started.
+      :ok = Supervisor.terminate_child(OtpDebugMcp.Supervisor, Target)
+      {:ok, _} = Supervisor.restart_child(OtpDebugMcp.Supervisor, Target)
+
+      began = System.monotonic_time(:millisecond)
+      assert {:error, :not_connected} = Target.rpc(:erlang, :node, [])
+      assert System.monotonic_time(:millisecond) - began < 1_000
+
+      assert {:error, text} = OtpDebugMcp.ToolCase.call_tool(OtpDebugMcp.Tools.History, %{})
+      assert text =~ "Not connected to a node: call connect first"
+    end
+
     test "a host that doesn't answer is an error, not a crash" do
       # Unroutable: the connection attempt waits for net_setuptime (7 s),
       # longer than a call's default timeout.

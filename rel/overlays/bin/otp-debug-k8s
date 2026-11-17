@@ -9,7 +9,18 @@
 #   OTP_DEBUG_K8S_IMAGE       the server image (default: this release's,
 #                             ghcr.io/ayarodionov/otp_debug_mcp:<version>)
 #   OTP_DEBUG_K8S_CONTEXT     the kubectl context (default: the current one)
+#
+# Register it with Claude Code with those set, e.g.:
+#   claude mcp add otp-debug --scope user -e OTP_DEBUG_K8S_NAMESPACE=shop \
+#     -e OTP_DEBUG_K8S_SECRET=shop-erlang-cookie -- /path/to/bin/otp-debug-k8s
 set -eu
+case "${1:-}" in
+  --help | -h | help)
+    # This header, without the comment marks.
+    sed -n '2,/^set -eu/p' "$0" | sed '$d; s/^# \{0,1\}//'
+    exit 0
+    ;;
+esac
 ns=${OTP_DEBUG_K8S_NAMESPACE:?set OTP_DEBUG_K8S_NAMESPACE}
 secret=${OTP_DEBUG_K8S_SECRET:?set OTP_DEBUG_K8S_SECRET}
 key=${OTP_DEBUG_K8S_SECRET_KEY:-cookie}

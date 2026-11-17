@@ -52,6 +52,9 @@ defmodule OtpDebugMcp.Approval do
   @doc "Whether the server refuses every step that changes something on the node."
   def read_only?, do: System.get_env("OTP_DEBUG_MCP_READ_ONLY", "") |> String.downcase() == "true"
 
+  # The tools that need no node connected.
+  @no_node ["connect", "crash_dump"]
+
   @doc "Run the tool's step, once the user has approved it if they must."
   def gate(tool, params, frame) do
     name = tool_name(tool)
@@ -59,6 +62,14 @@ defmodule OtpDebugMcp.Approval do
     {effect, what} = step(name, params)
 
     cond do
+      name not in @no_node and Target.connected_node() == nil ->
+        Audit.not_run(name, params, effect, "refused: not connected")
+
+        OtpDebugMcp.Tools.error_response(
+          frame,
+          "Not connected to a node: call connect first, with the node's name."
+        )
+
       read_only?() and effect == :changes and name != "connect" ->
         Audit.not_run(name, params, effect, "refused: read-only mode")
         OtpDebugMcp.Tools.error_response(frame, refused(name, what))
