@@ -1,6 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.15.0
+
+Time and trust. A flight recorder that keeps what a node did while
+nobody looked, read back as conclusions with times (`record`, `history`),
+and a watch mode that waits for the next problem (`wait_for_problem`).
+For production: a read-only mode that refuses every step that would
+change the node, and an audit log of every call. For getting started:
+prompts in the client's menu (`help`, `investigate`, `watch`), and a
+real `--help` and `--version`.
 
 - MCP prompts, the client's starting points (in Claude Code, the /
   menu): `help` explains what the tools can do, by situation, with an
