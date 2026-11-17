@@ -44,6 +44,14 @@ makes it again.)
    `~/.erlang.cookie`.
 4. **Stop the demo:** `examples/elixir/run.sh stop`.
 
+Not sure what to ask? In Claude Code, type `/mcp__otp-debug__help`: it
+explains what the tools can do, by situation, with an example question
+for each. `/mcp__otp-debug__investigate NODE SYMPTOM` starts an
+investigation, and `/mcp__otp-debug__watch NODE MINUTES` starts a flight
+recorder and waits for a problem to show. Other clients list the same
+prompts in their own menus. `otp_debug_mcp --help` prints the same list
+of situations, and the settings.
+
 The rest of this README is reference: [the tools](#tools), [setup for
 other clients](docs/clients.md) and [for production](docs/production.md),
 [what to ask in which situation](#usage-scenarios), and [more demos](#demo-targets).

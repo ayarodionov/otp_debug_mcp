@@ -11,7 +11,7 @@ defmodule OtpDebugMcp.Server do
   use Anubis.Server,
     name: "otp-debug",
     version: Mix.Project.config()[:version],
-    capabilities: [:tools]
+    capabilities: [:tools, :prompts]
 
   alias OtpDebugMcp.Tools
 
@@ -53,6 +53,11 @@ defmodule OtpDebugMcp.Server do
   component(Tools.WaitForProblem)
   component(Tools.RemoteEval)
   component(Tools.LoadModule)
+
+  # Starting points for the user, in the client's menu.
+  component(OtpDebugMcp.Prompts.Investigate)
+  component(OtpDebugMcp.Prompts.Watch)
+  component(OtpDebugMcp.Prompts.Help)
 
   @impl true
   def init(_client_info, frame), do: {:ok, frame}

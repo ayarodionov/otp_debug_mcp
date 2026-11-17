@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- MCP prompts, the client's starting points (in Claude Code, the /
+  menu): `help` explains what the tools can do, by situation, with an
+  example question for each; `investigate NODE SYMPTOM` starts an
+  investigation; `watch NODE MINUTES` starts a flight recorder and waits
+  for a problem, then investigates it. In Claude Code they're
+  `/mcp__otp-debug__help` and so on.
+- `--help` lists what the server can do, by situation, with the tools for
+  each, the same list the `help` prompt uses, and the prompts.
+
 - `otp_debug_mcp --help` says what the server is, how to register it
   with Claude Code (with the path of the release it's run from), and every
   setting with its default; `--version` prints the version. Both answer
