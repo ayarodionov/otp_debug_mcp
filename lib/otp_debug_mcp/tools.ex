@@ -1804,6 +1804,179 @@ defmodule OtpDebugMcp.Tools do
       do: Tools.error_response(frame, {:unknown_action, other})
   end
 
+  defmodule Record do
+    @moduledoc """
+    Start a flight recorder on the node, so that what it does from now on
+    can be read later, by history, even by an agent that connects after an
+    incident. Every interval_s it samples memory by category, the process,
+    port and atom counts, the five processes with the most memory, the
+    longest mailboxes and the most CPU (with their names and where they
+    are), and the largest ETS tables; it keeps the last keep_minutes. It
+    is a process on the node (nothing is loaded there), runs whether or
+    not this tool is connected, stops recording after minutes, keeps what
+    it recorded readable for a day more, and is lost if the node restarts.
+    It records from when it starts, not before. Called while one runs, it
+    says what that one is doing.
+    """
+    use Anubis.Server.Component, type: :tool
+    use OtpDebugMcp.Approval
+
+    alias OtpDebugMcp.{Recorder, Tools}
+
+    schema do
+      field(:minutes, :integer, description: "How long to record (default 60, max 1440, a day)")
+
+      field(:interval_s, :integer, description: "Seconds between samples (default 10, 2 to 300)")
+
+      field(:keep_minutes, :integer,
+        description:
+          "How much of the recording to keep, the newest (default 60, max 240); " <>
+            "at most minutes"
+      )
+
+      field(:stop, :boolean, description: "End the recorder now, and discard what it recorded")
+    end
+
+    def perform(%{stop: true}, frame) do
+      case Recorder.read(true) do
+        {:ok, report} ->
+          Tools.json_response(frame, %{stopped: Recorder.status(report)})
+
+        :none ->
+          Tools.error_response(frame, "no recorder is running on this node")
+
+        err ->
+          Tools.error_response(frame, err)
+      end
+    end
+
+    def perform(params, frame) do
+      minutes = (params[:minutes] || 60) |> min(1440) |> max(1)
+      interval_s = (params[:interval_s] || 10) |> min(300) |> max(2)
+      keep_minutes = (params[:keep_minutes] || 60) |> min(240) |> max(1) |> min(minutes)
+      keep = max(2, div(keep_minutes * 60, interval_s))
+
+      with {:ok, started} <- Recorder.start(minutes * 60_000, interval_s * 1000, keep),
+           {:ok, report} <- Recorder.read(false) do
+        status = Recorder.status(report)
+
+        Tools.json_response(
+          frame,
+          case started do
+            :started ->
+              %{
+                started: status,
+                hint:
+                  "Call history to read it: now, or after an incident. It records from now " <>
+                    "on, not before; record with stop: true ends it."
+              }
+
+            :already_running ->
+              %{
+                already_running: status,
+                hint:
+                  "Only one recorder runs at a time: history reads this one; " <>
+                    "record with stop: true ends it, to start another."
+              }
+          end
+        )
+      else
+        :none -> Tools.error_response(frame, "the recorder stopped as soon as it started")
+        err -> Tools.error_response(frame, err)
+      end
+    end
+  end
+
+  defmodule History do
+    @moduledoc """
+    What the node did while the flight recorder (record) ran, as
+    conclusions: what rose or fell (memory by category, processes, ports,
+    atoms, run queue) from when to when, which processes' mailboxes and
+    memory grew and where they were in their code, which ETS tables grew,
+    and the busiest process. Times are the node's clock, in UTC, with how
+    long ago. For the hour before an incident, the recorder must have been
+    started before it.
+    """
+    use Anubis.Server.Component, type: :tool
+    use OtpDebugMcp.Approval
+
+    alias OtpDebugMcp.{Recorder, Tools}
+
+    schema do
+      field(:minutes, :integer,
+        description: "Only the last this many minutes (default: all kept)"
+      )
+
+      field(:raw, :boolean,
+        description: "Also the samples themselves, the last 60, summarized (much longer)"
+      )
+    end
+
+    def perform(params, frame) do
+      case Recorder.read(false) do
+        {:ok, report} ->
+          Tools.json_response(
+            frame,
+            Recorder.history(report, minutes: params[:minutes], raw: params[:raw] == true)
+          )
+
+        :none ->
+          Tools.error_response(
+            frame,
+            "No recorder on this node, so there is no history to read. record starts one: it " <>
+              "records from then on, not before. For what happened before, recent_errors reads " <>
+              "the node's log files, and crash_dump a dead node's dump."
+          )
+
+        err ->
+          Tools.error_response(frame, err)
+      end
+    end
+  end
+
+  defmodule WaitForProblem do
+    @moduledoc """
+    Wait until the flight recorder (record) sees a problem that wasn't there
+    when watching began: a series rising or falling past its threshold
+    (memory, processes, ports, atoms, run queue), a mailbox past 1,000, a
+    process's or an ETS table's memory growing, still so in the latest
+    sample. Returns as soon as one appears, or after wait_s with nothing;
+    call it again to keep watching. The first call lists what was already
+    wrong, which isn't reported as new; each problem is reported once. It
+    only reads the recorder's samples, so it needs one running (record).
+    """
+    use Anubis.Server.Component, type: :tool
+    use OtpDebugMcp.Approval
+
+    alias OtpDebugMcp.{Tools, Watch}
+
+    schema do
+      field(:wait_s, :integer, description: "How long this call waits (default 50, max 80)")
+
+      field(:restart, :boolean,
+        description: "Start watching afresh: what is wrong now becomes known, not new"
+      )
+    end
+
+    def perform(params, frame) do
+      wait_s = (params[:wait_s] || 50) |> min(80) |> max(1)
+
+      case Watch.wait(wait_s * 1000, params[:restart] == true) do
+        {:ok, result} ->
+          Tools.json_response(frame, result)
+
+        :none ->
+          Tools.error_response(
+            frame,
+            "No recorder on this node: wait_for_problem watches its samples. record starts one."
+          )
+
+        err ->
+          Tools.error_response(frame, err)
+      end
+    end
+  end
+
   defmodule RemoteEval do
     @moduledoc """
     Evaluate an Erlang expression on the target node. POWERFUL AND UNSAFE:

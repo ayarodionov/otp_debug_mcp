@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased
+
+- A flight recorder: `record` starts a process on the node that samples
+  it every few seconds and keeps the newest samples, whether or not the
+  tool is connected, and `history` reads it as conclusions with times.
+  Each sample holds memory by category, the process, port and atom counts
+  and the run queue, the five processes with the most memory, the longest
+  mailboxes and the most reductions over a second (with each one's name,
+  initial call and current function at the time), and the five largest
+  ETS tables. `history` says what rose or fell from when to when (and,
+  for memory, which category and which process held it at the peak),
+  which processes' mailboxes and memory grew and where they were in
+  their code, which tables grew, and which process was busiest; with
+  `raw: true`, the samples too. The recorder is evaluated code, nothing
+  is loaded; it records for up to a day, keeps its recording readable for
+  a day after, then exits, and is lost if the node restarts. It records
+  from when it starts, not before: start it before the next incident.
+  A sample reads every process a few times, about 3.5 s of work on a
+  node with 300,000 processes, so the recorder waits at least nine times
+  a sample's work before the next, staying under a tenth of one
+  scheduler, and the history says when it did. The memory it records
+  leaves out its own.
+- Watch mode: `wait_for_problem` waits on the recorder's samples until a
+  problem appears that wasn't there when watching began (the problems
+  `history` reports, still so in the latest sample) and says what it is,
+  or returns after `wait_s`, up to 80 s, for the agent to call it again.
+  Its first answer lists what was already wrong; each problem is reported
+  once; `restart: true` starts afresh. It reads only the samples newer
+  than the last it saw.
+
 ## 0.14.1
 
 0.14.0 as it was meant to be released. Its macOS build never ran:

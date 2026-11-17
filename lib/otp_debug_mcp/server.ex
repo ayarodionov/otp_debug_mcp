@@ -48,6 +48,9 @@ defmodule OtpDebugMcp.Server do
   component(Tools.ModuleCode)
   component(Tools.Cluster)
   component(Tools.Snapshot)
+  component(Tools.Record)
+  component(Tools.History)
+  component(Tools.WaitForProblem)
   component(Tools.RemoteEval)
   component(Tools.LoadModule)
 
@@ -70,6 +73,8 @@ defmodule OtpDebugMcp.Server do
      - CPU: run_check schedulers and scheduler_time (OS CPU% lies about the BEAM), then hot_spots or profile
      - memory: run_check binary_leak, ets_tables (ets_table for one table), allocator_fragmentation, native_memory
      - anything that grows: snapshot take, wait 30-60 s of real load, snapshot diff. One reading is a guess; a diff is evidence
+     - what happened before you connected: history, if a recorder runs there (record starts one, which records from then on); otherwise recent_errors reads the node's log files
+     - a problem that comes and goes: record, then wait_for_problem, called again until it reports one
      - slow requests where telemetry exists (Phoenix, Ecto, Oban): telemetry before any tracing
      - a library or server the node runs has its own tool: phoenix, bandit, cowboy, ranch, yaws, postgrex, mnesia, shackle, riak_core, rabbitmq, emqx, ejabberd
   4. A conclusion says only what was measured. Read the code (module_code) before proposing a fix, and say what you didn't verify.

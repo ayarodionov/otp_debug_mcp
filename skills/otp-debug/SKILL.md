@@ -200,6 +200,21 @@ raw introspection when a purpose-built tool exists.
      BEAM assembly, but where each function came from is still there.
 4. **Confirm trends before concluding.** One snapshot is a guess; a diff is
    evidence. Prefer two diffs 60s apart for leak claims.
+5. **What happened before you connected.** If a flight recorder runs on
+   the node (`history` says so, or that there is none), `history` gives
+   what rose and fell, when, and which processes and tables did it: read
+   it early, since it covers the time the user is asking about. A
+   recorder records from when it was started, never before. When the user
+   expects a problem to come back, or asks to watch a node, suggest
+   `record` (it asks the user first: it leaves a process on the node for
+   up to a day, plus a day to read it).
+6. **Waiting for a problem that comes and goes.** With a recorder
+   running, `wait_for_problem` returns when a new problem shows in its
+   samples, or after `wait_s` (up to 80) with nothing: call it again to
+   keep waiting, and tell the user every few calls that you are still
+   watching. Its first answer lists what was already wrong (not new).
+   When it reports one, diagnose and drill into it at once, while it is
+   happening, and use history for when it began.
 
 ## Safety rules (production nodes)
 

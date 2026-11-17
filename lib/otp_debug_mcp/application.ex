@@ -11,7 +11,7 @@ defmodule OtpDebugMcp.Application do
       do: Application.put_env(:anubis_mcp, :request_state_secret, :crypto.strong_rand_bytes(32))
 
     children =
-      [OtpDebugMcp.Target, OtpDebugMcp.Snapshotter] ++
+      [OtpDebugMcp.Target, OtpDebugMcp.Snapshotter, OtpDebugMcp.Watch] ++
         if Application.get_env(:otp_debug_mcp, :mcp_server, true) do
           # stdio transport: Claude Code launches this process and speaks MCP
           # over stdin/stdout. Everything else must log to stderr only.

@@ -321,5 +321,24 @@ defmodule OtpDebugMcp.Approval do
   def step("remote_eval", %{code: code}),
     do: {:changes, "Runs this Erlang code on the node:\n#{String.slice(code, 0, 400)}"}
 
+  def step("record", %{stop: true}),
+    do: {:changes, "Ends the recorder on the node and discards what it recorded."}
+
+  def step("record", p),
+    do:
+      {:changes,
+       "Starts a recorder process on the node, unless one runs: every #{p[:interval_s] || 10} s " <>
+         "for #{p[:minutes] || 60} min it reads memory, process counts and the busiest processes " <>
+         "and tables (a second of watching CPU each time). It keeps what it recorded for a day " <>
+         "after, then exits."}
+
+  def step("history", _), do: {:read, "Reads what the recorder on the node has recorded."}
+
+  def step("wait_for_problem", p),
+    do:
+      {:read,
+       "Waits up to #{min(p[:wait_s] || 50, 80)} s for a new problem in the recorder's samples, " <>
+         "reading them every 2 s."}
+
   def step(name, _), do: {:changes, "Runs #{name}."}
 end
