@@ -238,6 +238,33 @@ def main():
     return 1 if failed else 0
 
 
+COLUMNS = """\
+The columns:
+
+- **Case**: the case's name in `test/blind/cases.json`.
+- **Walkthrough**: the number of the walkthrough in `docs/walkthroughs.md`
+  the case replays, if any.
+- **Result**: `pass` (the answer matches one pattern of each group the
+  case expects, says nothing the case forbids, at least one otp-debug
+  call succeeded, and so did every tool the case requires); `fail` (one
+  of those didn't hold); `timeout` (the session ran longer than
+  `--timeout`); `error` (the demo node or the steps before the session
+  didn't start, so no session ran); `skipped` (the case needs something
+  left out with `--skip`).
+- **Time**: how long the session took, from starting Claude Code to its
+  answer; not the time to start the demo node or the steps before.
+- **Tool calls**: how many tools the session called, the otp-debug ones
+  and any others, failed calls included.
+- **Missing**: why the case didn't pass: the patterns the answer should
+  have matched and didn't (alternatives joined by "or"), what it said
+  that the case forbids ("said ..."), a required tool never used
+  successfully, or why it didn't run. Empty when it passed.
+
+Each session's answer is in `<case>.answer.md` next to this report, and
+its cost and turns in `report.json`.
+"""
+
+
 def write_markdown(results, path):
     lines = ["| Case | Walkthrough | Result | Time | Tool calls | Missing |", "|---|---|---|---|---|---|"]
     for r in results:
@@ -247,6 +274,7 @@ def write_markdown(results, path):
         tools = len(r.get("tools") or [])
         seconds = f"{r['seconds']} s" if "seconds" in r else ""
         lines.append(f"| {r['name']} | {r.get('walkthrough') or ''} | {r['status']} | {seconds} | {tools or ''} | {missing} |")
+    lines += ["", COLUMNS]
     with open(path, "w") as f:
         f.write("\n".join(lines) + "\n")
 
